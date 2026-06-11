@@ -1,0 +1,64 @@
+# Watchtower — 청람천문대 Observation OS 설정
+# 시뮬레이션이 기본값. 실제 하드웨어 연결 전에는 항상 sim으로 검증한다.
+
+[site]
+name = "청람천문대"
+name_ascii = "Cheongram Observatory"   # FITS 헤더용 (ASCII만 허용)
+latitude = 36.64        # TODO: 실제 좌표로 수정 (deg, 북위 +)
+longitude = 127.49      # TODO: 실제 좌표로 수정 (deg, 동경 +)
+elevation_m = 200
+focal_length_mm = 2939  # PlaneWave (TODO: 실제 값 확인)
+instrument = "Moravian C3-61000"
+
+[server]
+host = "127.0.0.1"
+port = 8520
+
+[drivers]
+# mode = "sim"  → 모든 장비 시뮬레이터 (마스터 스위치)
+# mode = "real" → 아래 장비별 설정을 따름 (장비별로 sim 혼용 가능: 예. mount만 pwi4, 카메라는 sim)
+mode = "sim"
+mount = "pwi4"          # real 모드에서: "pwi4" | "sim"
+camera = "ascom"        # real 모드에서: "ascom" | "sim"
+filterwheel = "ascom"   # real 모드에서: "ascom" | "sim"
+weather = "sim"         # 기상 장비 연결 전까지 sim
+
+[drivers.pwi4]
+base_url = "http://127.0.0.1:8220"
+
+[drivers.ascom]
+# scripts/choose_ascom.py 실행 → ASCOM Chooser에서 선택 → 출력된 ProgID를 여기에 입력
+camera_progid = ""        # 예: "ASCOM.C3_61000.Camera"
+filterwheel_progid = ""
+
+[filters]
+# 필터휠 슬롯 순서대로
+names = ["L", "B", "V", "R", "I", "Ha"]
+
+[autoflat]
+filters = ["B", "V", "R", "I"]   # 촬영할 필터 순서 (대역 순서)
+frames_per_filter = 7
+adu_min = 20000                  # 16bit 기준 목표 ADU 범위
+adu_max = 25000
+min_alt_deg = 40                 # 이 고도 미만이면 플랫 위치로 슬루
+flat_alt_deg = 75                # 플랫 촬영 목표 고도 (반태양 방위)
+dither_arcsec = 30               # 프레임 간 디더 크기
+settle_seconds = 4               # 슬루 종료 후 가대 안정화 대기
+initial_exposure = 1.0
+min_exposure = 0.1
+max_exposure = 60.0
+sun_alt_start = -0.5             # 태양 고도가 이 값 미만일 때만 시작 (일몰 후)
+
+[camera]
+saturation_adu = 65535
+image_width = 9576               # Moravian C3-61000 (IMX455)
+image_height = 6388
+
+[sim]
+image_width = 958                # 시뮬 프레임은 축소 생성 (속도)
+image_height = 639
+exposure_sleep_cap_s = 2.0       # 시뮬에서 노출 대기 상한 (데모 속도)
+twilight_efold_s = 240.0         # 황혼 시뮬: 하늘 밝기 e-folding 시간
+
+[paths]
+data_dir = "data"                # watchtower/ 기준 상대경로 (DB, FITS 저장)

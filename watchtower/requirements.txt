@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+numpy>=1.24
+astropy>=5.3
+httpx>=0.27
+
+# Real-hardware mode only (ASCOM camera/filterwheel COM):
+# pywin32>=306

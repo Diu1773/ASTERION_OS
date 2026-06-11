@@ -2,10 +2,10 @@
 @echo off
 setlocal EnableExtensions
 
-REM Watchtower launcher — venv 준비 후 서버 기동, 브라우저 자동 오픈.
+REM Earendel launcher — venv 준비 후 서버 기동, 브라우저 자동 오픈.
 
 for %%I in ("%~dp0..") do set "ROOT=%%~fI"
-set "VENV=%ROOT%\.venv-watchtower"
+set "VENV=%ROOT%\.venv"
 set "PY=%VENV%\Scripts\python.exe"
 
 if not exist "%PY%" (
@@ -27,5 +27,5 @@ if errorlevel 1 (
 
 start "" cmd /c "timeout /t 3 >nul & start http://127.0.0.1:8520"
 pushd "%ROOT%"
-"%PY%" -m watchtower
+"%PY%" -m earendel
 popd

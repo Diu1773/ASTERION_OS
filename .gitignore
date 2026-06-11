@@ -2,12 +2,12 @@
 *.pyc
 *.pyo
 .pytest_cache/
-.venv-watchtower/
 .venv/
+.venv-watchtower/
 .vscode/
 .claude/
 
 # Runtime data (DB, captured FITS) - regenerated on first run
-watchtower/data/
+earendel/data/
 *.log
 .DS_Store

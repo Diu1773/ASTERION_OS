@@ -24,14 +24,14 @@ from typing import Any
 
 import numpy as np
 
-from .actions import ActionBus, ActionError
-from .config import Config
-from .drivers.sim import TwilightSim
-from .events import EventHub
-from .ontology import (
+from ..config import Config
+from ..core.actions import ActionBus, ActionError
+from ..core.events import EventHub
+from ..core.ontology import (
     Db, Decision, Frame, ObservationSession, QualityMetric,
     TelescopeState, row_to_dict,
 )
+from ..drivers.sim import TwilightSim
 
 try:
     from astropy.io import fits as _fits
@@ -412,6 +412,6 @@ class AutoFlatRunner:
             h["RA"] = round(mount_st.ra_hours * 15.0, 6)
         if mount_st.dec_degs is not None:
             h["DEC"] = round(mount_st.dec_degs, 6)
-        h["SWCREATE"] = "Watchtower 0.1"
+        h["SWCREATE"] = "Earendel 0.1"
         hdu.writeto(path, overwrite=True)
         return path

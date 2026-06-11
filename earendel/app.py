@@ -1,4 +1,9 @@
-"""Watchtower FastAPI 앱 — REST + WebSocket + 정적 대시보드."""
+"""Earendel — 통합 관측 플랫폼 (FastAPI: REST + WebSocket + 대시보드).
+
+플랫폼 본체. core(데이터·액션 백본)와 drivers(하드웨어 브리지) 위에
+named system들(watchtower 환경·안전, skyflat 오토플랫)을 조립해 단일
+웹으로 노출한다.
+"""
 
 from __future__ import annotations
 
@@ -12,15 +17,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, ephemeris
-from .actions import ActionBus, ActionError
-from .autoflat import AutoFlatParams, AutoFlatRunner
+from . import __version__
 from .config import Config
+from .core import ephemeris
+from .core.actions import ActionBus, ActionError
+from .core.events import EventHub
+from .core.ontology import ActionLog, Db, Frame, ObservationSession, WeatherRecord
 from .drivers import build_drivers
 from .drivers.sim import TwilightSim
-from .events import EventHub
-from .ontology import ActionLog, Db, Frame, ObservationSession, WeatherRecord
-from .status import StatusSampler
+from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
+from .watchtower.status import StatusSampler
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -61,7 +67,7 @@ class TwilightReq(BaseModel):
 
 
 def create_app() -> FastAPI:
-    cfg = Config.load(os.environ.get("WATCHTOWER_CONFIG"))
+    cfg = Config.load(os.environ.get("EARENDEL_CONFIG"))
     lat = float(cfg.get("site.latitude", 36.6))
     lon = float(cfg.get("site.longitude", 127.5))
 
@@ -74,7 +80,7 @@ def create_app() -> FastAPI:
     twilight = TwilightSim(efold_s=float(cfg.get("sim.twilight_efold_s", 240.0)))
     drivers = build_drivers(cfg, twilight, sun_alt_now, lst_now)
     events = EventHub()
-    db = Db(cfg.data_dir / "watchtower.db")
+    db = Db(cfg.data_dir / "earendel.db")
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
     bus = ActionBus(db, events, lambda: sampler.snapshot)
     runner = AutoFlatRunner(cfg, drivers, bus, db, events, twilight,
@@ -94,7 +100,7 @@ def create_app() -> FastAPI:
                 events.log("system", f"{name} 연결 실패: {exc}", "error")
         sampler.start()
         events.log("system",
-                   f"Watchtower v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
+                   f"Earendel v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
         yield
         await sampler.stop()
         for name in ("mount", "camera", "filterwheel", "weather"):
@@ -103,7 +109,7 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
-    app = FastAPI(title="Watchtower", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Earendel", version=__version__, lifespan=lifespan)
 
     @app.exception_handler(ActionError)
     async def _action_error(_, exc: ActionError):

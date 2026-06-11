@@ -1,4 +1,4 @@
-# Watchtower — 청람천문대 Observation OS 설정
+# Earendel — 청람천문대 통합 관측 OS 설정
 # 시뮬레이션이 기본값. 실제 하드웨어 연결 전에는 항상 sim으로 검증한다.
 
 [site]
@@ -61,4 +61,4 @@ exposure_sleep_cap_s = 2.0       # 시뮬에서 노출 대기 상한 (데모 속
 twilight_efold_s = 240.0         # 황혼 시뮬: 하늘 밝기 e-folding 시간
 
 [paths]
-data_dir = "data"                # watchtower/ 기준 상대경로 (DB, FITS 저장)
+data_dir = "data"                # earendel/ 기준 상대경로 (DB, FITS 저장)

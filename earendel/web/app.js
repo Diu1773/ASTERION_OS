@@ -1,4 +1,4 @@
-/* Watchtower 대시보드 — WebSocket 실시간 + REST 액션 */
+/* Earendel 통합 관측 플랫폼 대시보드 — WebSocket 실시간 + REST 액션 */
 "use strict";
 
 const $ = (id) => document.getElementById(id);

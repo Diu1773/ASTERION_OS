@@ -66,7 +66,7 @@ class SimMount(MountDriver):
             self._slew_until = 0.0
 
     def status(self) -> MountStatus:
-        from .. import ephemeris
+        from ..core import ephemeris
         with self._lock:
             self._tick()
             slewing = self._slew_until > 0.0

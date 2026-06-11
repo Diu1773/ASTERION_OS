@@ -15,7 +15,7 @@ import numpy as np
 
 from .base import CameraDriver, CameraStatus, FilterStatus, FilterWheelDriver
 
-_HINT = "ASCOM ProgID 미설정 — watchtower/scripts/choose_ascom.py 실행 후 config.toml에 입력"
+_HINT = "ASCOM ProgID 미설정 — earendel/scripts/choose_ascom.py 실행 후 config.toml에 입력"
 
 
 def _com_executor() -> ThreadPoolExecutor:

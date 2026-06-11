@@ -5,37 +5,87 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EARENDEL — 청람천문대 통합 관측 OS</title>
 <link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<header>
+<header class="topbar">
   <div class="brand">
-    <div class="brand-dot"></div>
+    <div class="brand-mark"><span class="ring"></span><span class="star"></span></div>
     <div>
       <div class="brand-name">EARENDEL</div>
-      <div class="brand-sub" id="site-name">청람천문대 통합 관측 OS v0.1</div>
+      <div class="brand-sub" id="site-name">청람천문대 통합 관측 OS</div>
     </div>
   </div>
   <div class="clocks">
-    <div class="clock"><span class="clock-label">UTC</span><span class="clock-val" id="t-utc">--:--:--</span></div>
-    <div class="clock"><span class="clock-label">KST</span><span class="clock-val" id="t-kst">--:--:--</span></div>
-    <div class="clock"><span class="clock-label">LST</span><span class="clock-val" id="t-lst">--:--:--</span></div>
+    <div class="clock"><span class="lbl">UTC</span><span class="val" id="t-utc">--:--:--</span></div>
+    <div class="clock"><span class="lbl">KST</span><span class="val" id="t-kst">--:--:--</span></div>
+    <div class="clock"><span class="lbl">LST</span><span class="val" id="t-lst">--:--:--</span></div>
   </div>
+  <div class="spacer"></div>
   <div class="badges">
     <span class="badge" id="badge-mode">--</span>
-    <span class="badge" id="badge-safety">--</span>
-    <span class="ws-dot" id="ws-dot" title="WebSocket"></span>
+    <span class="badge safety" id="badge-safety">--</span>
+    <span class="ws-dot" id="ws-dot" title="WebSocket 연결"></span>
+    <button class="dev-btn" id="dev-btn"><span class="gear">⚙</span> DEV</button>
   </div>
 </header>
 
 <main class="grid">
 
+  <!-- 하늘 돔 -->
+  <section class="card span4">
+    <div class="card-head"><span class="card-title">하늘</span><span class="card-tag">ALL-SKY</span></div>
+    <div class="sky-wrap"><canvas id="sky-canvas"></canvas></div>
+    <div class="kv"><span>태양 고도</span><b class="accent" id="s-sunalt">—</b></div>
+    <div class="kv"><span>박명</span><b id="s-phase">—</b></div>
+    <div class="kv"><span>반태양 방위</span><b id="s-antisolar">—</b></div>
+    <div class="ctrl-row" id="twilight-row">
+      <button id="btn-twilight" class="btn">☼ 황혼 시뮬</button>
+    </div>
+  </section>
+
+  <!-- 오토플랫 콘솔 -->
+  <section class="card span8">
+    <div class="card-head"><span class="card-title">오토플랫</span><span class="card-tag sys">SKYFLAT SYSTEM</span></div>
+    <div class="af-grid">
+      <div>
+        <div class="af-form">
+          <label>필터 순서 <input id="af-filters" type="text" value="B,V,R,I"></label>
+          <label>장수 / 필터 <input id="af-frames" type="number" value="7" min="1" max="30"></label>
+          <label>ADU 최소 <input id="af-adumin" type="number" value="20000"></label>
+          <label>ADU 최대 <input id="af-adumax" type="number" value="25000"></label>
+          <label>디더 (″) <input id="af-dither" type="number" value="30"></label>
+          <label>안정화 (s) <input id="af-settle" type="number" value="4" step="0.5"></label>
+          <label>초기노출 (s) <input id="af-initexp" type="number" value="1.0" step="0.1"></label>
+          <label>최대노출 (s) <input id="af-maxexp" type="number" value="60"></label>
+        </div>
+        <div class="ctrl-row">
+          <button id="btn-af-start" class="btn btn-go">▶ 오토플랫 시작</button>
+          <button id="btn-af-stop" class="btn btn-danger" disabled>■ 정지</button>
+        </div>
+      </div>
+      <div class="af-gauge-col">
+        <canvas id="af-gauge"></canvas>
+        <div class="af-readout">
+          <div class="af-item"><span>필터</span><b id="af-filter">—</b></div>
+          <div class="af-item"><span>프레임</span><b id="af-frame">—</b></div>
+          <div class="af-item"><span>노출</span><b id="af-exp">—</b></div>
+          <div class="af-item"><span>직전 ADU</span><b id="af-adu">—</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="af-phase-line" id="af-phase">대기 중 (idle)</div>
+    <div class="progress"><div class="progress-bar" id="af-bar"></div></div>
+  </section>
+
   <!-- 망원경 -->
   <section class="card span3">
-    <h2>망원경 <small>MOUNT · PWI4</small></h2>
-    <div class="kv"><span>고도 ALT</span><b id="m-alt">—</b></div>
-    <div class="kv"><span>방위 AZ</span><b id="m-az">—</b></div>
+    <div class="card-head"><span class="card-title">망원경</span><span class="card-tag">MOUNT · PWI4</span></div>
+    <div class="kv"><span>고도 ALT</span><b class="accent" id="m-alt">—</b></div>
+    <div class="kv"><span>방위 AZ</span><b class="accent" id="m-az">—</b></div>
     <div class="kv"><span>적경 RA</span><b id="m-ra">—</b></div>
     <div class="kv"><span>적위 DEC</span><b id="m-dec">—</b></div>
     <div class="pills">
@@ -55,14 +105,14 @@
 
   <!-- 카메라 -->
   <section class="card span3">
-    <h2>카메라 <small>CAMERA · C3-61000</small></h2>
-    <div class="kv"><span>CCD 온도</span><b id="c-temp">—</b></div>
+    <div class="card-head"><span class="card-title">카메라</span><span class="card-tag">C3-61000</span></div>
+    <div class="kv"><span>CCD 온도</span><b class="accent" id="c-temp">—</b></div>
     <div class="kv"><span>쿨러</span><b id="c-cooler">—</b></div>
     <div class="kv"><span>상태</span><b id="c-state">—</b></div>
     <div class="kv"><span>현재 필터</span><b id="c-filter">—</b></div>
     <div class="ctrl-row">
       <select id="sel-filter"></select>
-      <button id="btn-filter" class="btn">필터 이동</button>
+      <button id="btn-filter" class="btn">이동</button>
     </div>
     <div class="ctrl-row">
       <button id="btn-cooler" class="btn">쿨러 ON/OFF</button>
@@ -71,84 +121,91 @@
 
   <!-- 기상 -->
   <section class="card span3">
-    <h2>기상 <small>WATCHTOWER · WEATHER</small></h2>
-    <div class="kv"><span>기온</span><b id="w-temp">—</b></div>
-    <div class="kv"><span>습도</span><b id="w-hum">—</b></div>
-    <div class="kv"><span>이슬점</span><b id="w-dew">—</b></div>
-    <div class="kv"><span>풍속</span><b id="w-wind">—</b></div>
-    <div class="spark-row"><span>기온</span><canvas id="spark-temp" width="170" height="26"></canvas></div>
-    <div class="spark-row"><span>습도</span><canvas id="spark-hum" width="170" height="26"></canvas></div>
-    <div class="spark-row"><span>풍속</span><canvas id="spark-wind" width="170" height="26"></canvas></div>
+    <div class="card-head"><span class="card-title">기상</span><span class="card-tag">WEATHER</span></div>
+    <div class="spark-row"><span class="sl">기온</span><canvas id="spark-temp"></canvas><span class="sv" id="w-temp">—</span></div>
+    <div class="spark-row"><span class="sl">습도</span><canvas id="spark-hum"></canvas><span class="sv" id="w-hum">—</span></div>
+    <div class="spark-row"><span class="sl">풍속</span><canvas id="spark-wind"></canvas><span class="sv" id="w-wind">—</span></div>
+    <div class="kv" style="margin-top:10px"><span>이슬점</span><b id="w-dew">—</b></div>
   </section>
 
-  <!-- 하늘 -->
+  <!-- 시스템 / 안전 -->
   <section class="card span3">
-    <h2>하늘 <small>WATCHTOWER · SKY</small></h2>
-    <div class="allsky-wrap">
-      <div class="allsky" id="allsky"><span id="allsky-label">SKY</span></div>
+    <div class="card-head"><span class="card-title">시스템</span><span class="card-tag">SYSTEMS</span></div>
+    <div class="safety-hero">
+      <div class="safety-state" id="sys-safety-state">—</div>
+      <div class="safety-reason" id="sys-safety-reason"></div>
     </div>
-    <div class="kv"><span>태양 고도</span><b id="s-sunalt">—</b></div>
-    <div class="kv"><span>박명</span><b id="s-phase">—</b></div>
-    <div class="kv"><span>반태양 방위</span><b id="s-antisolar">—</b></div>
-    <div class="ctrl-row" id="twilight-row">
-      <button id="btn-twilight" class="btn">황혼 시뮬 ON/OFF</button>
+    <div class="sys-row">
+      <div class="sys-name"><span class="sys-dot" id="sys-wt-dot"></span>Watchtower</div>
+      <span class="sys-state" id="sys-wt-state">—</span>
     </div>
-  </section>
-
-  <!-- 오토플랫 -->
-  <section class="card span8">
-    <h2>오토플랫 <small>SKYFLAT SYSTEM</small></h2>
-    <div class="af-form">
-      <label>필터 순서 <input id="af-filters" type="text" value="B,V,R,I"></label>
-      <label>장수/필터 <input id="af-frames" type="number" value="7" min="1" max="30"></label>
-      <label>ADU 최소 <input id="af-adumin" type="number" value="20000"></label>
-      <label>ADU 최대 <input id="af-adumax" type="number" value="25000"></label>
-      <label>디더(″) <input id="af-dither" type="number" value="30"></label>
-      <label>안정화(s) <input id="af-settle" type="number" value="4" step="0.5"></label>
-      <label>초기노출(s) <input id="af-initexp" type="number" value="1.0" step="0.1"></label>
-      <label>최대노출(s) <input id="af-maxexp" type="number" value="60"></label>
-    </div>
-    <div class="ctrl-row">
-      <button id="btn-af-start" class="btn btn-go">오토플랫 시작</button>
-      <button id="btn-af-stop" class="btn btn-danger" disabled>정지</button>
-    </div>
-    <div class="af-status">
-      <div class="af-readout">
-        <div class="af-item"><span>단계</span><b id="af-phase">idle</b></div>
-        <div class="af-item"><span>필터</span><b id="af-filter">—</b></div>
-        <div class="af-item"><span>프레임</span><b id="af-frame">—</b></div>
-        <div class="af-item"><span>노출</span><b id="af-exp">—</b></div>
-        <div class="af-item big"><span>직전 ADU</span><b id="af-adu">—</b></div>
-      </div>
-      <div class="progress"><div class="progress-bar" id="af-bar"></div></div>
+    <div class="sys-row">
+      <div class="sys-name"><span class="sys-dot idle" id="sys-sf-dot"></span>Skyflat</div>
+      <span class="sys-state" id="sys-sf-state">idle</span>
     </div>
   </section>
 
   <!-- 라이브 로그 -->
   <section class="card span4 tall">
-    <h2>라이브 로그 <small>LIVE LOG</small></h2>
+    <div class="card-head"><span class="card-title">라이브 로그</span><span class="card-tag">LIVE LOG</span></div>
     <div class="log" id="log"></div>
   </section>
 
   <!-- 최근 프레임 -->
-  <section class="card span6">
-    <h2>최근 프레임 <small>FRAMES</small></h2>
-    <table class="tbl" id="tbl-frames">
-      <thead><tr><th>시각(UTC)</th><th>종류</th><th>필터</th><th>노출</th><th>중앙값 ADU</th><th>플래그</th></tr></thead>
-      <tbody></tbody>
-    </table>
+  <section class="card span4">
+    <div class="card-head"><span class="card-title">최근 프레임</span><span class="card-tag">FRAMES</span></div>
+    <div class="tbl-scroll">
+      <table class="tbl" id="tbl-frames">
+        <thead><tr><th>UTC</th><th>종류</th><th>필터</th><th>노출</th><th>ADU</th><th>플래그</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
-  <!-- 액션 로그 -->
-  <section class="card span6">
-    <h2>액션 감사로그 <small>ACTION AUDIT</small></h2>
-    <table class="tbl" id="tbl-actions">
-      <thead><tr><th>시각(UTC)</th><th>액션</th><th>액터</th><th>결과</th><th>메시지</th></tr></thead>
-      <tbody></tbody>
-    </table>
+  <!-- 액션 감사로그 -->
+  <section class="card span4">
+    <div class="card-head"><span class="card-title">액션 감사로그</span><span class="card-tag">ACTION AUDIT</span></div>
+    <div class="tbl-scroll">
+      <table class="tbl" id="tbl-actions">
+        <thead><tr><th>UTC</th><th>액션</th><th>액터</th><th>결과</th><th>메시지</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
 </main>
+
+<!-- 개발자 드로어 -->
+<div class="drawer-overlay" id="dev-overlay"></div>
+<aside class="drawer" id="dev-drawer">
+  <div class="drawer-head"><span>개발자 · DEV</span><button class="x" id="dev-close">✕</button></div>
+
+  <div class="drawer-sec">
+    <div class="drawer-label">드라이버 모드</div>
+    <div class="seg" id="mode-seg">
+      <button class="seg-btn" data-mode="sim">SIM</button>
+      <button class="seg-btn" data-mode="real">REAL</button>
+    </div>
+    <div class="drawer-note" id="mode-note">
+      SIM = 모든 장비 시뮬레이터. REAL = config.toml의 장비별 설정(PWI4 / ASCOM)을 사용.
+      실제 하드웨어·PWI4가 꺼져 있거나 ASCOM ProgID 미설정이면 REAL 전환이 거부될 수 있습니다.
+    </div>
+  </div>
+
+  <div class="drawer-sec">
+    <div class="drawer-label">장비 연결 상태</div>
+    <div id="dev-devices"></div>
+  </div>
+
+  <div class="drawer-sec">
+    <div class="drawer-label">시뮬 도구</div>
+    <div class="dev-dev">
+      <div class="nm">황혼 시뮬레이션</div>
+      <button id="btn-twilight2" class="btn" style="flex:none;padding:6px 12px">토글</button>
+    </div>
+    <div class="drawer-note">낮에도 박명 하늘을 흉내내 오토플랫 노출 루프를 시험합니다.</div>
+  </div>
+</aside>
 
 <script src="/static/app.js"></script>
 </body>

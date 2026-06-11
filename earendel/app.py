@@ -66,6 +66,10 @@ class TwilightReq(BaseModel):
     enabled: bool
 
 
+class DevModeReq(BaseModel):
+    mode: str  # "sim" | "real"
+
+
 def create_app() -> FastAPI:
     cfg = Config.load(os.environ.get("EARENDEL_CONFIG"))
     lat = float(cfg.get("site.latitude", 36.6))
@@ -86,6 +90,28 @@ def create_app() -> FastAPI:
     runner = AutoFlatRunner(cfg, drivers, bus, db, events, twilight,
                             sun_alt_now, cfg.data_dir / "frames")
     sampler.autoflat_status = runner.status_dict
+
+    DEVICES = ("mount", "camera", "filterwheel", "weather")
+
+    async def rebuild_drivers(target_mode: str) -> None:
+        """런타임 SIM↔REAL 전환. 새 드라이버를 먼저 만들고(실패 시 기존 유지),
+        연결 후 원자적으로 교체한다. real인데 ASCOM ProgID 미설정 등은 여기서
+        예외가 나며 전환이 취소된다(기존 드라이버 그대로)."""
+        new = build_drivers(cfg, twilight, sun_alt_now, lst_now, mode=target_mode)
+        for name in DEVICES:
+            try:
+                await asyncio.to_thread(new[name].connect)
+            except Exception as exc:
+                events.log("system", f"{name} 연결 경고({target_mode}): {exc}", "warn")
+        old = {name: drivers[name] for name in DEVICES}
+        drivers.clear()
+        drivers.update(new)  # 같은 dict 객체를 in-place 교체 → sampler/runner 즉시 반영
+        for drv in old.values():
+            try:
+                drv.close()
+            except Exception:
+                pass
+        events.log("system", f"드라이버 모드 전환 → {drivers['mode'].upper()}")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -207,6 +233,17 @@ def create_app() -> FastAPI:
                       params={"on": req.on},
                       func=lambda: asyncio.to_thread(cam.set_cooler, req.on))
         return {"ok": True}
+
+    @app.post("/api/dev/mode")
+    async def dev_mode(req: DevModeReq):
+        if req.mode not in ("sim", "real"):
+            raise HTTPException(400, "mode는 sim 또는 real")
+        await bus.run("dev_set_mode", actor="developer",
+                      params={"mode": req.mode},
+                      func=lambda: rebuild_drivers(req.mode),
+                      preconditions=[("not_running", not runner.running(),
+                                      "자동 세션 실행 중에는 모드 전환 불가")])
+        return {"mode": drivers["mode"]}
 
     @app.post("/api/sim/twilight")
     async def sim_twilight(req: TwilightReq):

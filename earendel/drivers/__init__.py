@@ -16,8 +16,10 @@ from .sim import SimCamera, SimFilterWheel, SimMount, SimWeather, TwilightSim
 
 def build_drivers(cfg: Config, twilight: TwilightSim,
                   sun_alt_fn: Callable[[], float],
-                  lst_fn: Callable[[], float]) -> dict[str, Any]:
-    mode = cfg.get("drivers.mode", "sim")
+                  lst_fn: Callable[[], float],
+                  mode: str | None = None) -> dict[str, Any]:
+    # mode 인자가 오면 config의 drivers.mode를 덮어쓴다 (런타임 전환용).
+    mode = mode or cfg.get("drivers.mode", "sim")
     names = list(cfg.get("filters.names", ["B", "V", "R", "I"]))
     lat = float(cfg.get("site.latitude", 36.6))
 

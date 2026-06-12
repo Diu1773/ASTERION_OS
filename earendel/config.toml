@@ -47,7 +47,9 @@ settle_seconds = 4               # 슬루 종료 후 가대 안정화 대기
 initial_exposure = 1.0
 min_exposure = 0.1
 max_exposure = 60.0
-sun_alt_start = -0.5             # 태양 고도가 이 값 미만일 때만 시작 (일몰 후)
+# 스카이플랫 박명 창 — 일몰/일출 전후에만 촬영. 청람천문대는 박명 하늘에서 ~2초 노출.
+flat_sun_alt_high = -1.0         # 태양이 이보다 높으면 너무 밝음 (시작 전)
+flat_sun_alt_low = -12.0         # 태양이 이보다 낮으면 너무 어두움 (종료)
 
 [camera]
 saturation_adu = 65535

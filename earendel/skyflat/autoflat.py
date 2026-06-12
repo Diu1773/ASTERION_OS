@@ -52,11 +52,16 @@ class AutoFlatParams:
     initial_exposure: float = 1.0
     min_exposure: float = 0.1
     max_exposure: float = 60.0
-    sun_alt_start: float = -0.5
+    # 스카이플랫 박명 창: 태양 고도가 이 사이일 때만 (일몰/일출 전후).
+    flat_sun_alt_high: float = -1.0   # 이보다 높으면 너무 밝음 (아직 시작 전)
+    flat_sun_alt_low: float = -12.0   # 이보다 낮으면 하늘이 너무 어두움 (종료)
 
     @property
     def adu_target(self) -> float:
         return 0.5 * (self.adu_min + self.adu_max)
+
+    def in_twilight_window(self, sun_alt: float) -> bool:
+        return self.flat_sun_alt_low <= sun_alt <= self.flat_sun_alt_high
 
     @classmethod
     def from_config(cls, cfg: Config, override: dict | None = None) -> "AutoFlatParams":
@@ -102,7 +107,8 @@ class AutoFlatRunner:
         sun_alt = self.sun_alt_fn()
         mount_st = await asyncio.to_thread(self.drivers["mount"].status)
         cam_st = await asyncio.to_thread(self.drivers["camera"].status)
-        sun_ok = (sun_alt <= params.sun_alt_start) or self.twilight.enabled
+        # 스카이플랫은 박명 창(일몰/일출 전후)에서만. 시뮬 황혼이 켜져 있으면 우회.
+        sun_ok = params.in_twilight_window(sun_alt) or self.twilight.enabled
 
         async def _launch():
             self._stop.clear()
@@ -117,9 +123,10 @@ class AutoFlatRunner:
             preconditions=[
                 ("camera_connected", cam_st.connected, "카메라 연결 필요"),
                 ("mount_connected", mount_st.connected, "마운트 연결 필요"),
-                ("after_sunset", sun_ok,
-                 f"태양 고도 {sun_alt:+.1f}° > {params.sun_alt_start}° "
-                 f"(일몰 전 — 황혼 시뮬을 켜면 테스트 가능)"),
+                ("twilight_window", sun_ok,
+                 f"태양 고도 {sun_alt:+.1f}°가 박명 창 "
+                 f"({params.flat_sun_alt_high:.0f}°~{params.flat_sun_alt_low:.0f}°) 밖 — "
+                 f"스카이플랫은 일몰/일출 전후에만. (시뮬은 황혼 토글로 테스트)"),
             ],
         )
 
@@ -147,6 +154,16 @@ class AutoFlatRunner:
             for filt in p.filters:
                 if self._stop.is_set():
                     break
+                # 박명 창을 벗어나면(저녁엔 너무 어두워짐 / 아침엔 너무 밝아짐) 종료.
+                if not self.twilight.enabled:
+                    sa = self.sun_alt_fn()
+                    if not p.in_twilight_window(sa):
+                        self.events.log(
+                            "autoflat",
+                            f"태양 고도 {sa:+.1f}°가 박명 창 "
+                            f"({p.flat_sun_alt_high:.0f}°~{p.flat_sun_alt_low:.0f}°) 밖 — 세션 종료",
+                            "warn")
+                        break
                 results[filt] = await self._do_filter(session.id, filt, p)
                 self._state["results"] = dict(results)
             if self._stop.is_set():

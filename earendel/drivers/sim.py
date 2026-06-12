@@ -45,45 +45,74 @@ class TwilightSim:
 
 
 class SimMount(MountDriver):
+    """슬루를 연속 보간하고(돔에서 이동이 보이게), 트래킹 시 항성시
+    드리프트를 모델링한다 — 위치 값이 1 Hz마다 실제로 바뀐다."""
     is_sim = True
+    SLEW_RATE = 6.0   # deg/s
 
     def __init__(self, lat_deg: float, lst_fn: Callable[[], float]):
         self._lat = lat_deg
         self._lst_fn = lst_fn
         self._lock = threading.Lock()
         self._connected = False
-        self._alt = 30.0   # 파킹 자세 (낮은 고도 → 오토플랫이 슬루를 시연)
-        self._az = 180.0
+        self._alt = 40.0   # 현재 실제 포인팅
+        self._az = 150.0
         self._tracking = False
-        self._slew_until = 0.0
-        self._target = (30.0, 180.0)
+        self._track_radec: tuple[float, float] | None = None  # 트래킹 중 고정 RA/Dec
+        # 슬루: (t0, dur, a0, z0, a1, z1) | None
+        self._slew: tuple[float, float, float, float, float, float] | None = None
 
     def connect(self) -> None:
         self._connected = True
 
-    def _tick(self) -> None:
-        if self._slew_until and time.time() >= self._slew_until:
-            self._alt, self._az = self._target
-            self._slew_until = 0.0
+    @staticmethod
+    def _az_delta(z0: float, z1: float) -> float:
+        return ((z1 - z0 + 540.0) % 360.0) - 180.0  # 최단 경로
+
+    def _current_altaz(self) -> tuple[float, float]:
+        """슬루/트래킹을 반영한 현재 alt/az. 슬루 완료 시 상태를 정착시킨다."""
+        from ..core import ephemeris
+        if self._slew is not None:
+            t0, dur, a0, z0, a1, z1 = self._slew
+            f = min(1.0, max(0.0, (time.time() - t0) / dur))
+            alt = a0 + (a1 - a0) * f
+            az = (z0 + self._az_delta(z0, z1) * f) % 360.0
+            if f >= 1.0:
+                self._alt, self._az = a1, z1
+                self._slew = None
+                if self._tracking:
+                    self._track_radec = ephemeris.altaz_to_radec(
+                        a1, z1, self._lat, self._lst_fn())
+            return alt, az
+        if self._tracking and self._track_radec is not None:
+            ra, dec = self._track_radec
+            return ephemeris.radec_to_altaz(ra, dec, self._lat, self._lst_fn())
+        return self._alt, self._az
 
     def status(self) -> MountStatus:
         from ..core import ephemeris
         with self._lock:
-            self._tick()
-            slewing = self._slew_until > 0.0
-            ra, dec = ephemeris.altaz_to_radec(self._alt, self._az, self._lat, self._lst_fn())
+            slewing = self._slew is not None
+            alt, az = self._current_altaz()
+            ra, dec = ephemeris.altaz_to_radec(alt, az, self._lat, self._lst_fn())
             return MountStatus(
                 connected=self._connected, ra_hours=ra, dec_degs=dec,
-                alt_degs=self._alt, az_degs=self._az,
-                slewing=slewing, tracking=self._tracking, detail="SIM",
+                alt_degs=alt, az_degs=az,
+                slewing=slewing and self._slew is not None,
+                tracking=self._tracking, detail="SIM",
             )
+
+    def _begin_slew(self, alt1: float, az1: float, min_dur: float = 2.0) -> None:
+        a0, z0 = self._current_altaz()
+        self._alt, self._az = a0, z0
+        self._track_radec = None  # 정착 후 재고정
+        dist = math.hypot(alt1 - a0, abs(self._az_delta(z0, az1)))
+        dur = max(min_dur, dist / self.SLEW_RATE)
+        self._slew = (time.time(), dur, a0, z0, alt1, az1)
 
     def goto_altaz(self, alt_deg: float, az_deg: float) -> None:
         with self._lock:
-            self._tick()
-            dist = math.hypot(alt_deg - self._alt, az_deg - self._az)
-            self._target = (alt_deg, az_deg)
-            self._slew_until = time.time() + max(1.5, dist / 8.0)  # 8°/s
+            self._begin_slew(alt_deg, az_deg % 360.0)
 
     def goto_radec(self, ra_hours: float, dec_degs: float) -> None:
         from ..core import ephemeris
@@ -91,27 +120,32 @@ class SimMount(MountDriver):
                                            self._lst_fn())
         if alt < 5.0:
             raise ValueError(f"대상 고도 {alt:.1f}° — 지평선 근처/아래라 이동 불가")
-        self.goto_altaz(alt, az)
+        with self._lock:
+            self._begin_slew(alt, az)
 
     def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None:
         with self._lock:
-            self._tick()
-            # 디더: alt/az에 근사 반영, 짧은 정착 시간 시뮬
-            self._target = (
-                self._alt + ddec_arcsec / 3600.0,
-                self._az + dra_arcsec / 3600.0,
-            )
-            self._slew_until = time.time() + 2.0
+            a0, z0 = self._current_altaz()
+            self._begin_slew(a0 + ddec_arcsec / 3600.0,
+                             (z0 + dra_arcsec / 3600.0) % 360.0, min_dur=1.2)
 
     def set_tracking(self, on: bool) -> None:
+        from ..core import ephemeris
         with self._lock:
             self._tracking = on
+            if on and self._slew is None:
+                a, z = self._current_altaz()
+                self._track_radec = ephemeris.altaz_to_radec(
+                    a, z, self._lat, self._lst_fn())
+            elif not on:
+                self._track_radec = None
 
     def stop(self) -> None:
         with self._lock:
-            self._tick()
-            self._slew_until = 0.0
+            self._alt, self._az = self._current_altaz()
+            self._slew = None
             self._tracking = False
+            self._track_radec = None
 
 
 class SimFilterWheel(FilterWheelDriver):

@@ -16,7 +16,10 @@ from .base import MountDriver, MountStatus
 class Pwi4Mount(MountDriver):
     def __init__(self, base_url: str = "http://127.0.0.1:8220"):
         import httpx  # real 모드에서만 import
-        self._client = httpx.Client(base_url=base_url, timeout=5.0)
+        # PWI4가 꺼져 있을 때 빠르게 실패하도록 연결 타임아웃을 짧게.
+        self._client = httpx.Client(
+            base_url=base_url,
+            timeout=httpx.Timeout(4.0, connect=1.5))
 
     def _get(self, path: str, **params) -> str:
         r = self._client.get(path, params={k: v for k, v in params.items() if v is not None})

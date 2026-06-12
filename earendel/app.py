@@ -14,7 +14,7 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ from .core import ephemeris
 from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
 from .core.ontology import ActionLog, Db, Frame, ObservationSession, WeatherRecord
+from .core.preview import stretch_to_png
 from .drivers import build_drivers
 from .drivers.sim import TwilightSim
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
@@ -120,13 +121,28 @@ def create_app() -> FastAPI:
     db = Db(cfg.data_dir / "earendel.db")
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
     bus = ActionBus(db, events, lambda: sampler.snapshot)
+    # 프레임 미리보기 홀더 (캡처/플랫 직후 스트레치 PNG)
+    frame_preview = {"png": b"", "token": 0, "meta": {}}
+
+    async def publish_preview(img, meta):
+        png = await asyncio.to_thread(stretch_to_png, img)
+        if not png:
+            return
+        frame_preview["png"] = png
+        frame_preview["token"] += 1
+        frame_preview["meta"] = meta
+        events.emit({"type": "preview", "token": frame_preview["token"],
+                     "meta": meta})
+
     runner = AutoFlatRunner(cfg, drivers, bus, db, events, twilight,
-                            sun_alt_now, cfg.data_dir / "frames")
+                            sun_alt_now, cfg.data_dir / "frames",
+                            preview_cb=publish_preview)
     sampler.autoflat_status = runner.status_dict
     capture = CaptureService(
         cfg, drivers, bus, db, events, cfg.data_dir / "frames",
         blocked_fn=lambda: ("오토플랫 실행 중 — 카메라 사용 불가"
-                            if runner.running() else None))
+                            if runner.running() else None),
+        preview_cb=publish_preview)
     sampler.capture_status = capture.status_dict
 
     DEVICES = ("mount", "camera", "filterwheel", "focuser", "weather")
@@ -186,6 +202,17 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def index():
         return FileResponse(WEB_DIR / "index.html")
+
+    @app.get("/api/preview.png", include_in_schema=False)
+    async def preview_png():
+        if not frame_preview["png"]:
+            raise HTTPException(404, "아직 캡처된 프레임 없음")
+        return Response(frame_preview["png"], media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/preview/meta")
+    async def preview_meta():
+        return {"token": frame_preview["token"], "meta": frame_preview["meta"]}
 
     # ---------- 조회 ----------
 

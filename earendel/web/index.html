@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=020">
+<link rel="stylesheet" href="/static/style.css?v=022">
 </head>
 <body>
 
@@ -215,6 +215,16 @@
     </div>
   </section>
 
+  <!-- 프레임 미리보기 -->
+  <section class="card span4" data-panel="image">
+    <div class="card-head"><span class="card-title">프레임 미리보기</span><span class="card-tag">LATEST FRAME</span></div>
+    <div class="frame-view" id="frame-view">
+      <img id="frame-img" alt="아직 캡처된 프레임이 없습니다">
+      <div class="frame-empty" id="frame-empty">캡처/플랫을 찍으면 여기에 표시됩니다</div>
+    </div>
+    <div class="frame-meta" id="frame-meta">—</div>
+  </section>
+
   <!-- 야간 타임라인 -->
   <section class="card span8" data-panel="timeline">
     <div class="card-head"><span class="card-title">야간 타임라인</span><span class="card-tag">NIGHT TIMELINE · KST</span></div>
@@ -333,6 +343,6 @@
   </div>
 </aside>
 
-<script src="/static/app.js?v=020"></script>
+<script src="/static/app.js?v=022"></script>
 </body>
 </html>

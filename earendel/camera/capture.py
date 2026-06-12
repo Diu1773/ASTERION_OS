@@ -30,7 +30,8 @@ FRAME_TYPES = ("LIGHT", "FLAT", "DARK", "BIAS")
 class CaptureService:
     def __init__(self, cfg: Config, drivers: dict[str, Any], bus: ActionBus,
                  db: Db, events: EventHub, frames_dir: Path,
-                 blocked_fn: Callable[[], str | None] = lambda: None):
+                 blocked_fn: Callable[[], str | None] = lambda: None,
+                 preview_cb=None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -38,6 +39,7 @@ class CaptureService:
         self.events = events
         self.frames_dir = frames_dir
         self._blocked_fn = blocked_fn
+        self.preview_cb = preview_cb
         self.autosave = bool(cfg.get("capture.autosave", True))
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -151,6 +153,12 @@ class CaptureService:
                     std_adu=float(np.std(img)), flag="ok",
                 ))
                 self.events.frame(row_to_dict(frame))
+                if self.preview_cb:
+                    await self.preview_cb(img, {
+                        "type": frame_type, "filter": fw_st.name,
+                        "exposure_s": round(exposure_s, 3),
+                        "median": round(median), "seq": n,
+                        "file": path.name if path else ""})
                 self._state.update(last_median=round(median),
                                    last_file=path.name if path else "")
                 total = f"/{count}" if count else ""

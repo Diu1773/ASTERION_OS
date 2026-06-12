@@ -120,6 +120,18 @@ function drawSpark(id, buf, color) {
 
 let skyTarget = null;   // {alt, az, ts} — 클릭으로 지정한 목표
 let skyGeom = null;     // {cx, cy, R} — 마지막 그리기 기하 (클릭 역변환용)
+let mountDraw = null;   // 화면에 그리는 망원경 위치 (서버 1Hz 값으로 이징)
+
+// 서버 위치(1Hz, 슬루 보간됨)를 향해 매 프레임 부드럽게 따라감
+function easeMount(m) {
+  if (m.alt === null || m.az === null) return mountDraw;
+  if (!mountDraw) { mountDraw = { alt: m.alt, az: m.az }; return mountDraw; }
+  const k = 0.2;
+  mountDraw.alt += (m.alt - mountDraw.alt) * k;
+  const daz = ((m.az - mountDraw.az + 540) % 360) - 180;
+  mountDraw.az = (mountDraw.az + daz * k + 360) % 360;
+  return mountDraw;
+}
 
 function drawSky(s) {
   const cv = $("sky-canvas"); if (!cv) return;
@@ -170,12 +182,13 @@ function drawSky(s) {
 
   const hasMount = m.alt !== null && m.alt !== undefined &&
                    m.az !== null && m.az !== undefined;
+  const md = hasMount ? easeMount(m) : null;  // 부드러운 보간 위치
 
   // 클릭 목표 마커 (주황 다이아) + 망원경→목표 점선
   if (skyTarget) {
     const [gx, gy] = proj(skyTarget.alt, skyTarget.az);
-    if (hasMount) {
-      const [tx, ty] = proj(m.alt, m.az);
+    if (md) {
+      const [tx, ty] = proj(md.alt, md.az);
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(gx, gy);
       ctx.strokeStyle = "rgba(251,146,60,.6)"; ctx.lineWidth = 1.2; ctx.stroke();
@@ -186,7 +199,6 @@ function drawSky(s) {
     ctx.strokeStyle = "#fb923c"; ctx.lineWidth = 1.6;
     ctx.strokeRect(-5, -5, 10, 10);
     ctx.restore();
-    // 펄스 링
     const pulse = (Date.now() % 1600) / 1600;
     ctx.beginPath(); ctx.arc(gx, gy, 7 + pulse * 9, 0, TAU);
     ctx.strokeStyle = `rgba(251,146,60,${0.55 * (1 - pulse)})`;
@@ -194,8 +206,8 @@ function drawSky(s) {
   }
 
   // 망원경 포인팅 (청록 십자 / 슬루 중 호박색)
-  if (hasMount) {
-    const [tx, ty] = proj(m.alt, m.az);
+  if (md) {
+    const [tx, ty] = proj(md.alt, md.az);
     const col = m.slewing ? "#fbbf24" : "#4cc9f0";
     ctx.strokeStyle = col; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(tx, ty, 7, 0, TAU); ctx.stroke();
@@ -246,6 +258,7 @@ function skyClickHandler(ev) {
   $("sm-goto").onclick = async () => {
     hideSkyMenu();
     skyTarget = { alt, az, ts: Date.now() };
+    kickSky();
     try { await post("/api/actions/mount/goto", { alt, az }); }
     catch (e) { skyTarget = null; }
   };
@@ -700,6 +713,7 @@ function applyStatus(s) {
   $("twilight-row").style.display =
     (s.mode === "sim" || tw.enabled) ? "" : "none";
   drawSky(s);
+  kickSky();  // 위치가 바뀌었으면 마커가 부드럽게 따라가도록 애니메이션 재개
 
   // 오토플랫
   const [aduMin, aduMax] = aduRange();
@@ -821,8 +835,48 @@ function connectWS() {
     else if (data.type === "log") logLine(data);
     else if (data.type === "frame") prependRow("tbl-frames", frameRow(data.frame));
     else if (data.type === "action") prependRow("tbl-actions", actionRow(data.action));
+    else if (data.type === "preview") updatePreview(data.token, data.meta);
   };
 }
+
+// ---------- 프레임 미리보기 ----------
+
+function updatePreview(token, meta) {
+  const img = $("frame-img");
+  img.onload = () => { img.classList.add("on"); $("frame-empty").style.display = "none"; };
+  img.src = `/api/preview.png?t=${token}`;
+  const m = meta || {};
+  const med = (m.median ?? null) !== null ? Number(m.median).toLocaleString() : "?";
+  $("frame-meta").textContent =
+    `${m.type || ""} ${m.filter || ""} · ${m.exposure_s ?? "?"}s · median ${med}` +
+    (m.file ? ` · ${m.file}` : "");
+}
+
+async function initPreview() {
+  try {
+    const d = await (await fetch("/api/preview/meta")).json();
+    if (d.token > 0) updatePreview(d.token, d.meta);
+  } catch (e) { /* 아직 프레임 없음 */ }
+}
+
+// ---------- 부드러운 돔 애니메이션 (움직일 때만 rAF, 정지하면 idle) ----------
+
+let skyRaf = 0;
+function skyNeedsAnim() {
+  if (!lastStatus) return false;
+  const m = lastStatus.mount || {};
+  if (m.slewing || skyTarget) return true;
+  if (mountDraw && m.alt != null && m.az != null) {
+    const daz = Math.abs(((m.az - mountDraw.az + 540) % 360) - 180);
+    if (Math.abs(m.alt - mountDraw.alt) > 0.05 || daz > 0.05) return true;
+  }
+  return false;
+}
+function skyLoop() {
+  if (lastStatus) drawSky(lastStatus);
+  skyRaf = skyNeedsAnim() ? requestAnimationFrame(skyLoop) : 0;
+}
+function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }
 
 // ---------- 초기 로드 ----------
 
@@ -863,6 +917,8 @@ async function init() {
   fetchTimeline();
   setInterval(fetchTimeline, 600000);  // 10분마다 갱신
   initTelemetry();
+  initPreview();
+  kickSky();                            // 돔 애니메이션 (필요할 때만)
 }
 
 // ---------- 버튼 핸들러 ----------
@@ -872,6 +928,7 @@ $("btn-goto").onclick = () => {
   const alt = Number($("in-alt").value), az = Number($("in-az").value);
   if (Number.isNaN(alt) || $("in-alt").value === "") return;
   skyTarget = { alt, az: az % 360, ts: Date.now() };
+  kickSky();
   post("/api/actions/mount/goto", { alt, az }).catch(() => { skyTarget = null; });
 };
 $("btn-goto-radec").onclick = () => {

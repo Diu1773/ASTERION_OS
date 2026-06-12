@@ -4,6 +4,7 @@ sqlalchemy>=2.0
 numpy>=1.24
 astropy>=5.3
 httpx>=0.27
+pillow>=10.0
 
 # Real-hardware mode only (ASCOM camera/filterwheel COM):
 # pywin32>=306

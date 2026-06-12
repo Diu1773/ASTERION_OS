@@ -30,9 +30,9 @@ def _com_executor() -> ThreadPoolExecutor:
 
 
 class AscomCamera(CameraDriver):
+    # ProgID가 비어 있어도 생성은 허용 — REAL 전환을 막지 않는다.
+    # 실제 연결/노출 시점에 안내하고, status()는 '미연결'로 정직하게 보고.
     def __init__(self, progid: str, saturation: int = 65535):
-        if not progid:
-            raise RuntimeError(_HINT)
         self._progid = progid
         self._sat = saturation
         self._ex = _com_executor()
@@ -43,6 +43,8 @@ class AscomCamera(CameraDriver):
         return self._ex.submit(fn).result()
 
     def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
         def _do():
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
@@ -109,8 +111,6 @@ class AscomCamera(CameraDriver):
 
 class AscomFilterWheel(FilterWheelDriver):
     def __init__(self, progid: str, fallback_names: list[str] | None = None):
-        if not progid:
-            raise RuntimeError(_HINT)
         self._progid = progid
         self._fallback = fallback_names or []
         self._ex = _com_executor()
@@ -120,6 +120,8 @@ class AscomFilterWheel(FilterWheelDriver):
         return self._ex.submit(fn).result()
 
     def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
         def _do():
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
@@ -162,8 +164,6 @@ class AscomFilterWheel(FilterWheelDriver):
 
 class AscomFocuser(FocuserDriver):
     def __init__(self, progid: str):
-        if not progid:
-            raise RuntimeError(_HINT)
         self._progid = progid
         self._ex = _com_executor()
         self._dev = None
@@ -172,6 +172,8 @@ class AscomFocuser(FocuserDriver):
         return self._ex.submit(fn).result()
 
     def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
         def _do():
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)

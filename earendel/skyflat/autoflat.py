@@ -70,7 +70,7 @@ class AutoFlatParams:
 class AutoFlatRunner:
     def __init__(self, cfg: Config, drivers: dict[str, Any], bus: ActionBus,
                  db: Db, events: EventHub, twilight: TwilightSim,
-                 sun_alt_fn, frames_dir: Path):
+                 sun_alt_fn, frames_dir: Path, preview_cb=None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -79,6 +79,7 @@ class AutoFlatRunner:
         self.twilight = twilight
         self.sun_alt_fn = sun_alt_fn
         self.frames_dir = frames_dir
+        self.preview_cb = preview_cb
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._state: dict[str, Any] = {"running": False, "phase": "idle"}
@@ -307,6 +308,12 @@ class AutoFlatRunner:
                        f"중앙값 {stats['median']:.0f} ADU가 목표 범위 밖",
             ))
             self.events.frame(row_to_dict(frame))
+            if self.preview_cb:
+                await self.preview_cb(img, {
+                    "type": "FLAT", "filter": filt,
+                    "exposure_s": round(exposure, 3),
+                    "median": round(stats["median"]), "seq": seq,
+                    "file": path.name if path else ""})
             self._set(last_adu=round(stats["median"]), frame=seq)
             self.events.log(
                 "autoflat",

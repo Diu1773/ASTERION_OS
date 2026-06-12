@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 
 from ..config import Config
+from ..core import fitsio
 from ..core.actions import ActionBus, ActionError
 from ..core.events import EventHub
 from ..core.ontology import (
@@ -32,11 +33,6 @@ from ..core.ontology import (
     TelescopeState, row_to_dict,
 )
 from ..drivers.sim import TwilightSim
-
-try:
-    from astropy.io import fits as _fits
-except ImportError:  # astropy 없으면 통계만 기록하고 파일 저장은 생략
-    _fits = None
 
 
 @dataclass
@@ -100,7 +96,9 @@ class AutoFlatRunner:
 
     # ---------- 시작/정지 ----------
 
-    async def start(self, params: AutoFlatParams) -> None:
+    async def start(self, params: AutoFlatParams,
+                    extra_preconditions: list[tuple[str, bool, str]] | None = None,
+                    ) -> None:
         if self.running():
             raise ActionError("오토플랫이 이미 실행 중입니다")
 
@@ -127,7 +125,7 @@ class AutoFlatRunner:
                  f"태양 고도 {sun_alt:+.1f}°가 박명 창 "
                  f"({params.flat_sun_alt_high:.0f}°~{params.flat_sun_alt_low:.0f}°) 밖 — "
                  f"스카이플랫은 일몰/일출 전후에만. (시뮬은 황혼 토글로 테스트)"),
-            ],
+            ] + list(extra_preconditions or []),
         )
 
     async def request_stop(self) -> None:
@@ -395,40 +393,9 @@ class AutoFlatRunner:
             "sat_frac": float(np.mean(img >= 60000)),
         }
 
-    @staticmethod
-    def _ascii(value: str) -> str:
-        """FITS 헤더는 ASCII만 허용 — 비ASCII 문자는 제거."""
-        return value.encode("ascii", errors="ignore").decode("ascii").strip()
-
     def _save_fits(self, img: np.ndarray, filt: str, exposure: float,
                    seq: int, mount_st) -> Path | None:
-        if _fits is None:
-            return None
-        now = datetime.now(timezone.utc)
-        day_dir = self.frames_dir / now.strftime("%Y%m%d")
-        day_dir.mkdir(parents=True, exist_ok=True)
-        path = day_dir / f"FLAT_{filt}_{now.strftime('%H%M%S')}_{seq:03d}.fits"
-        hdu = _fits.PrimaryHDU(img)
-        h = hdu.header
-        h["IMAGETYP"] = "FLAT"
-        h["OBJECT"] = "SKYFLAT"
-        h["FILTER"] = filt
-        h["EXPTIME"] = round(exposure, 3)
-        h["DATE-OBS"] = now.strftime("%Y-%m-%dT%H:%M:%S")
-        site = self._ascii(str(self.cfg.get("site.name_ascii",
-                                            self.cfg.get("site.name", ""))))
-        if site:
-            h["SITENAME"] = site
-        h["INSTRUME"] = self._ascii(str(self.cfg.get("site.instrument", "")))
-        h["FOCALLEN"] = float(self.cfg.get("site.focal_length_mm", 0.0))
-        if mount_st.alt_degs is not None:
-            h["ALTITUDE"] = round(mount_st.alt_degs, 4)
-        if mount_st.az_degs is not None:
-            h["AZIMUTH"] = round(mount_st.az_degs, 4)
-        if mount_st.ra_hours is not None:
-            h["RA"] = round(mount_st.ra_hours * 15.0, 6)
-        if mount_st.dec_degs is not None:
-            h["DEC"] = round(mount_st.dec_degs, 6)
-        h["SWCREATE"] = "Earendel 0.1"
-        hdu.writeto(path, overwrite=True)
-        return path
+        return fitsio.save_frame(
+            self.frames_dir, self.cfg, img, image_type="FLAT",
+            filter_name=filt, exposure_s=exposure, seq=seq,
+            mount_st=mount_st, object_name="SKYFLAT")

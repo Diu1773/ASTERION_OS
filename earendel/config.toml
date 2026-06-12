@@ -21,6 +21,7 @@ mode = "sim"
 mount = "pwi4"          # real 모드에서: "pwi4" | "sim"
 camera = "ascom"        # real 모드에서: "ascom" | "sim"
 filterwheel = "ascom"   # real 모드에서: "ascom" | "sim"
+focuser = "ascom"       # real 모드에서: "ascom" | "sim"
 weather = "sim"         # 기상 장비 연결 전까지 sim
 
 [drivers.pwi4]
@@ -30,6 +31,13 @@ base_url = "http://127.0.0.1:8220"
 # scripts/choose_ascom.py 실행 → ASCOM Chooser에서 선택 → 출력된 ProgID를 여기에 입력
 camera_progid = ""        # 예: "ASCOM.C3_61000.Camera"
 filterwheel_progid = ""
+focuser_progid = ""
+
+[capture]
+# 수동 캡처 콘솔 기본값
+default_exposure = 2.0
+default_interval = 1.0
+autosave = true
 
 [filters]
 # 필터휠 슬롯 순서대로

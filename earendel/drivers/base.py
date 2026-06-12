@@ -43,6 +43,16 @@ class FilterStatus:
 
 
 @dataclass
+class FocuserStatus:
+    connected: bool = False
+    position: int | None = None
+    moving: bool = False
+    temperature: float | None = None
+    max_position: int = 60000
+    detail: str = ""
+
+
+@dataclass
 class WeatherStatus:
     connected: bool = False
     temp_c: float | None = None
@@ -66,6 +76,9 @@ class MountDriver(abc.ABC):
 
     @abc.abstractmethod
     def goto_altaz(self, alt_deg: float, az_deg: float) -> None: ...
+
+    @abc.abstractmethod
+    def goto_radec(self, ra_hours: float, dec_degs: float) -> None: ...
 
     @abc.abstractmethod
     def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None: ...
@@ -94,7 +107,7 @@ class CameraDriver(abc.ABC):
         """노출 완료까지 블로킹, uint16 2D 배열 반환."""
 
     @abc.abstractmethod
-    def set_cooler(self, on: bool) -> None: ...
+    def set_cooler(self, on: bool, setpoint_c: float | None = None) -> None: ...
 
     def close(self) -> None:
         pass
@@ -125,6 +138,23 @@ class WeatherDriver(abc.ABC):
 
     @abc.abstractmethod
     def read(self) -> WeatherStatus: ...
+
+    def close(self) -> None:
+        pass
+
+
+class FocuserDriver(abc.ABC):
+    is_sim = False
+
+    @abc.abstractmethod
+    def connect(self) -> None: ...
+
+    @abc.abstractmethod
+    def status(self) -> "FocuserStatus": ...
+
+    @abc.abstractmethod
+    def move_to(self, position: int) -> None:
+        """목표 스텝으로 이동 시작 (논블로킹 — status().moving으로 추적)."""
 
     def close(self) -> None:
         pass

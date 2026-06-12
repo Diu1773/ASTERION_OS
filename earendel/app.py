@@ -1,14 +1,16 @@
 """Earendel — 통합 관측 플랫폼 (FastAPI: REST + WebSocket + 대시보드).
 
 플랫폼 본체. core(데이터·액션 백본)와 drivers(하드웨어 브리지) 위에
-named system들(watchtower 환경·안전, skyflat 오토플랫)을 조립해 단일
-웹으로 노출한다.
+named system들(watchtower 환경·안전, skyflat 오토플랫, capture 수동
+촬영)을 조립해 단일 웹으로 노출한다.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
+from .camera.capture import CaptureService
 from .config import Config
 from .core import ephemeris
 from .core.actions import ActionBus, ActionError
@@ -60,6 +63,7 @@ class FilterReq(BaseModel):
 
 class CoolerReq(BaseModel):
     on: bool
+    setpoint: float | None = None
 
 
 class TwilightReq(BaseModel):
@@ -68,6 +72,35 @@ class TwilightReq(BaseModel):
 
 class DevModeReq(BaseModel):
     mode: str  # "sim" | "real"
+
+
+class GotoRaDecReq(BaseModel):
+    ra: str   # "5.59" | "05:35:17" | "5h35m17s"
+    dec: str  # "-5.39" | "-05:23:28"
+
+
+class JogReq(BaseModel):
+    direction: str       # N | S | E | W
+    arcsec: float = 10.0
+
+
+class FocuserMoveReq(BaseModel):
+    position: int
+
+
+class FocuserNudgeReq(BaseModel):
+    delta: int
+
+
+class CaptureStartReq(BaseModel):
+    exposure_s: float = 2.0
+    frame_type: str = "LIGHT"   # LIGHT | FLAT | DARK | BIAS
+    count: int = 1              # 0 = 무한 (정지 버튼까지)
+    interval_s: float = 1.0
+
+
+class AutosaveReq(BaseModel):
+    on: bool
 
 
 def create_app() -> FastAPI:
@@ -90,8 +123,13 @@ def create_app() -> FastAPI:
     runner = AutoFlatRunner(cfg, drivers, bus, db, events, twilight,
                             sun_alt_now, cfg.data_dir / "frames")
     sampler.autoflat_status = runner.status_dict
+    capture = CaptureService(
+        cfg, drivers, bus, db, events, cfg.data_dir / "frames",
+        blocked_fn=lambda: ("오토플랫 실행 중 — 카메라 사용 불가"
+                            if runner.running() else None))
+    sampler.capture_status = capture.status_dict
 
-    DEVICES = ("mount", "camera", "filterwheel", "weather")
+    DEVICES = ("mount", "camera", "filterwheel", "focuser", "weather")
 
     async def rebuild_drivers(target_mode: str) -> None:
         """런타임 SIM↔REAL 전환. 새 드라이버를 먼저 만들고(실패 시 기존 유지),
@@ -116,7 +154,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         events.attach_loop(asyncio.get_running_loop())
-        for name in ("mount", "camera", "filterwheel", "weather"):
+        for name in DEVICES:
             drv = drivers[name]
             try:
                 await asyncio.to_thread(drv.connect)
@@ -129,7 +167,7 @@ def create_app() -> FastAPI:
                    f"Earendel v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
         yield
         await sampler.stop()
-        for name in ("mount", "camera", "filterwheel", "weather"):
+        for name in DEVICES:
             try:
                 drivers[name].close()
             except Exception:
@@ -180,7 +218,10 @@ def create_app() -> FastAPI:
     @app.post("/api/actions/autoflat/start")
     async def autoflat_start(req: AutoFlatStartReq):
         params = AutoFlatParams.from_config(cfg, req.model_dump())
-        await runner.start(params)
+        await runner.start(params, extra_preconditions=[
+            ("capture_idle", not capture.active(),
+             "수동 캡처 실행 중 — 정지 후 시작"),
+        ])
         return {"started": True}
 
     @app.post("/api/actions/autoflat/stop")
@@ -197,6 +238,36 @@ def create_app() -> FastAPI:
                       params={"alt": req.alt, "az": req.az},
                       func=lambda: asyncio.to_thread(mount.goto_altaz,
                                                      req.alt, req.az % 360.0))
+        return {"ok": True}
+
+    @app.post("/api/actions/mount/goto_radec")
+    async def mount_goto_radec(req: GotoRaDecReq):
+        try:
+            ra = ephemeris.parse_ra_hours(req.ra)
+            dec = ephemeris.parse_dec_degs(req.dec)
+        except Exception as exc:
+            raise HTTPException(400, f"RA/Dec 해석 실패: {exc}")
+        mount = drivers["mount"]
+        await bus.run("mount_goto_radec", actor="operator",
+                      params={"ra_hours": round(ra, 5),
+                              "dec_degs": round(dec, 5),
+                              "input": [req.ra, req.dec]},
+                      func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec))
+        return {"ok": True, "ra_hours": ra, "dec_degs": dec}
+
+    @app.post("/api/actions/mount/jog")
+    async def mount_jog(req: JogReq):
+        d = req.direction.upper()
+        if d not in ("N", "S", "E", "W"):
+            raise HTTPException(400, "direction은 N/S/E/W")
+        arc = max(0.5, min(3600.0, float(req.arcsec)))
+        dra = arc if d == "E" else (-arc if d == "W" else 0.0)
+        ddec = arc if d == "N" else (-arc if d == "S" else 0.0)
+        mount = drivers["mount"]
+        await bus.run("mount_jog", actor="operator",
+                      params={"direction": d, "arcsec": arc},
+                      func=lambda: asyncio.to_thread(mount.offset_arcsec,
+                                                     dra, ddec))
         return {"ok": True}
 
     @app.post("/api/actions/mount/tracking")
@@ -230,9 +301,112 @@ def create_app() -> FastAPI:
     async def camera_cooler(req: CoolerReq):
         cam = drivers["camera"]
         await bus.run("camera_cooler", actor="operator",
-                      params={"on": req.on},
-                      func=lambda: asyncio.to_thread(cam.set_cooler, req.on))
+                      params={"on": req.on, "setpoint": req.setpoint},
+                      func=lambda: asyncio.to_thread(cam.set_cooler, req.on,
+                                                     req.setpoint))
         return {"ok": True}
+
+    @app.post("/api/actions/camera/capture")
+    async def camera_capture(req: CaptureStartReq):
+        await capture.start(exposure_s=req.exposure_s,
+                            frame_type=req.frame_type,
+                            count=req.count, interval_s=req.interval_s)
+        return {"started": True}
+
+    @app.post("/api/actions/camera/capture/stop")
+    async def camera_capture_stop():
+        await capture.stop()
+        return {"stopping": True}
+
+    @app.post("/api/actions/camera/autosave")
+    async def camera_autosave(req: AutosaveReq):
+        await bus.run("capture_autosave", actor="operator",
+                      params={"on": req.on},
+                      func=lambda: asyncio.to_thread(capture.set_autosave,
+                                                     req.on))
+        return {"autosave": capture.autosave}
+
+    @app.post("/api/actions/focuser/move")
+    async def focuser_move(req: FocuserMoveReq):
+        foc = drivers["focuser"]
+        st = await asyncio.to_thread(foc.status)
+        if not 0 <= req.position <= st.max_position:
+            raise HTTPException(400, f"포커서 위치 0~{st.max_position} 범위")
+        await bus.run("focuser_move", actor="operator",
+                      params={"position": req.position},
+                      func=lambda: asyncio.to_thread(foc.move_to, req.position))
+        return {"ok": True}
+
+    @app.post("/api/actions/focuser/nudge")
+    async def focuser_nudge(req: FocuserNudgeReq):
+        foc = drivers["focuser"]
+        st = await asyncio.to_thread(foc.status)
+        if st.position is None:
+            raise HTTPException(409, "포커서 위치를 읽을 수 없음")
+        target = max(0, min(st.max_position, st.position + int(req.delta)))
+        await bus.run("focuser_nudge", actor="operator",
+                      params={"delta": int(req.delta), "target": target},
+                      func=lambda: asyncio.to_thread(foc.move_to, target))
+        return {"ok": True, "target": target}
+
+    # ---------- 대상 해석 / 천체력 ----------
+
+    @app.get("/api/resolve")
+    async def resolve_target(name: str):
+        """CDS Sesame(SIMBAD/NED/VizieR) 이름 해석 — 인터넷 필요."""
+        def _fetch() -> str:
+            import httpx
+            url = ("https://cds.unistra.fr/cgi-bin/nph-sesame/-ox/SNV?"
+                   + urllib.parse.quote(name))
+            r = httpx.get(url, timeout=8.0)
+            r.raise_for_status()
+            return r.text
+        try:
+            text = await asyncio.to_thread(_fetch)
+        except Exception as exc:
+            raise HTTPException(502, f"이름 해석 서비스 연결 실패: {exc}")
+        m_ra = re.search(r"<jradeg>([\d.+\-eE]+)</jradeg>", text)
+        m_de = re.search(r"<jdedeg>([\d.+\-eE]+)</jdedeg>", text)
+        if not (m_ra and m_de):
+            raise HTTPException(404, f"'{name}' 해석 실패 (SIMBAD/NED/VizieR)")
+        ra_h = float(m_ra.group(1)) / 15.0
+        dec = float(m_de.group(1))
+        return {"name": name, "ra_hours": round(ra_h, 6),
+                "dec_degs": round(dec, 6),
+                "ra_str": ephemeris.fmt_ra_hours(ra_h),
+                "dec_str": ephemeris.fmt_dec_degs(dec)}
+
+    @app.get("/api/night/timeline")
+    async def night_timeline():
+        return ephemeris.night_timeline(
+            lat, lon,
+            flat_high=float(cfg.get("autoflat.flat_sun_alt_high", -1.0)),
+            flat_low=float(cfg.get("autoflat.flat_sun_alt_low", -12.0)))
+
+    @app.get("/api/night/track")
+    async def night_track(ra: str, dec: str):
+        try:
+            ra_h = ephemeris.parse_ra_hours(ra)
+            dec_d = ephemeris.parse_dec_degs(dec)
+        except Exception as exc:
+            raise HTTPException(400, f"RA/Dec 해석 실패: {exc}")
+        tl = ephemeris.night_timeline(lat, lon)
+        alts = ephemeris.target_track(ra_h, dec_d, lat, lon, tl["t"])
+        return {"t": tl["t"], "alt": alts,
+                "ra_hours": ra_h, "dec_degs": dec_d}
+
+    # ---------- 텔레메트리 (시계열 플롯 빌더) ----------
+
+    @app.get("/api/telemetry/keys")
+    async def telemetry_keys():
+        return sampler.telemetry_keys()
+
+    @app.get("/api/telemetry/history")
+    async def telemetry_history(keys: str, seconds: int = 900):
+        key_list = [k.strip() for k in keys.split(",") if k.strip()]
+        if not key_list:
+            raise HTTPException(400, "keys 파라미터 필요 (쉼표 구분)")
+        return sampler.telemetry_history(key_list, seconds)
 
     @app.post("/api/dev/mode")
     async def dev_mode(req: DevModeReq):
@@ -241,8 +415,12 @@ def create_app() -> FastAPI:
         await bus.run("dev_set_mode", actor="developer",
                       params={"mode": req.mode},
                       func=lambda: rebuild_drivers(req.mode),
-                      preconditions=[("not_running", not runner.running(),
-                                      "자동 세션 실행 중에는 모드 전환 불가")])
+                      preconditions=[
+                          ("autoflat_idle", not runner.running(),
+                           "오토플랫 실행 중에는 모드 전환 불가"),
+                          ("capture_idle", not capture.active(),
+                           "캡처 실행 중에는 모드 전환 불가"),
+                      ])
         return {"mode": drivers["mode"]}
 
     @app.post("/api/sim/twilight")

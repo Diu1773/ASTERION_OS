@@ -76,6 +76,10 @@ class Pwi4Mount(MountDriver):
     def goto_altaz(self, alt_deg: float, az_deg: float) -> None:
         self._get("/mount/goto_alt_az", alt_degs=alt_deg, az_degs=az_deg)
 
+    def goto_radec(self, ra_hours: float, dec_degs: float) -> None:
+        self._get("/mount/goto_ra_dec_j2000", ra_hours=ra_hours,
+                  dec_degs=dec_degs)
+
     def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None:
         # pwi4_client.mount_offset 기준 파라미터명 — PWI4 버전에서 확인 필요
         self._get("/mount/offset", ra_add_arcsec=dra_arcsec,

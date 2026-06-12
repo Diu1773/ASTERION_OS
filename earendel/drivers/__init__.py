@@ -59,13 +59,23 @@ def build_drivers(cfg: Config, twilight: TwilightSim,
             saturation=int(cfg.get("camera.saturation_adu", 65535)),
         )
 
+    # 포커서
+    if kind("focuser") == "ascom":
+        from .ascom import AscomFocuser
+        focuser = AscomFocuser(str(cfg.get("drivers.ascom.focuser_progid", "")))
+    else:
+        from .sim import SimFocuser
+        focuser = SimFocuser()
+
     # 기상
     weather = SimWeather()  # 실물 기상 장비 어댑터는 도입 시 추가
 
-    drivers = {"mount": mount, "camera": camera, "filterwheel": fw, "weather": weather}
+    devices = (mount, camera, fw, focuser, weather)
+    drivers = {"mount": mount, "camera": camera, "filterwheel": fw,
+               "focuser": focuser, "weather": weather}
     drivers["mode"] = "sim" if all(getattr(d, "is_sim", False) for d in
-                                   (mount, camera, fw, weather)) else "mixed"
-    if drivers["mode"] == "mixed" and not any(getattr(d, "is_sim", False) for d in
-                                              (mount, camera, fw, weather)):
+                                   devices) else "mixed"
+    if drivers["mode"] == "mixed" and not any(getattr(d, "is_sim", False)
+                                              for d in devices):
         drivers["mode"] = "real"
     return drivers

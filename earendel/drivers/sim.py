@@ -16,7 +16,8 @@ import numpy as np
 
 from .base import (
     CameraDriver, CameraStatus, FilterStatus, FilterWheelDriver,
-    MountDriver, MountStatus, WeatherDriver, WeatherStatus,
+    FocuserDriver, FocuserStatus, MountDriver, MountStatus,
+    WeatherDriver, WeatherStatus,
 )
 
 
@@ -83,6 +84,14 @@ class SimMount(MountDriver):
             dist = math.hypot(alt_deg - self._alt, az_deg - self._az)
             self._target = (alt_deg, az_deg)
             self._slew_until = time.time() + max(1.5, dist / 8.0)  # 8°/s
+
+    def goto_radec(self, ra_hours: float, dec_degs: float) -> None:
+        from ..core import ephemeris
+        alt, az = ephemeris.radec_to_altaz(ra_hours, dec_degs, self._lat,
+                                           self._lst_fn())
+        if alt < 5.0:
+            raise ValueError(f"대상 고도 {alt:.1f}° — 지평선 근처/아래라 이동 불가")
+        self.goto_altaz(alt, az)
 
     def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None:
         with self._lock:
@@ -178,9 +187,53 @@ class SimCamera(CameraDriver):
         finally:
             self._state = "idle"
 
-    def set_cooler(self, on: bool) -> None:
+    def set_cooler(self, on: bool, setpoint_c: float | None = None) -> None:
         self._cooler = on
-        self._temp = -10.0 if on else 15.0
+        if on:
+            self._temp = float(setpoint_c) if setpoint_c is not None else -10.0
+        else:
+            self._temp = 15.0
+
+
+class SimFocuser(FocuserDriver):
+    is_sim = True
+    SPEED = 1500.0  # steps/s
+
+    def __init__(self, max_position: int = 60000):
+        self._connected = False
+        self._pos = 30000.0
+        self._target = 30000.0
+        self._t_last = time.time()
+        self._max = max_position
+        self._lock = threading.Lock()
+
+    def connect(self) -> None:
+        self._connected = True
+
+    def _tick(self) -> None:
+        now = time.time()
+        dt = now - self._t_last
+        self._t_last = now
+        if self._pos != self._target:
+            step = self.SPEED * dt
+            if abs(self._target - self._pos) <= step:
+                self._pos = self._target
+            else:
+                self._pos += step if self._target > self._pos else -step
+
+    def status(self) -> FocuserStatus:
+        with self._lock:
+            self._tick()
+            return FocuserStatus(
+                connected=self._connected, position=int(round(self._pos)),
+                moving=abs(self._pos - self._target) > 0.5,
+                temperature=8.5, max_position=self._max, detail="SIM",
+            )
+
+    def move_to(self, position: int) -> None:
+        with self._lock:
+            self._tick()
+            self._target = float(max(0, min(self._max, int(position))))
 
 
 class SimWeather(WeatherDriver):

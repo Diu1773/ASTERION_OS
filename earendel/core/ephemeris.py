@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
 D2R = math.pi / 180.0
 R2D = 180.0 / math.pi
@@ -114,3 +115,98 @@ def fmt_dec_degs(dec: float | None) -> str:
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# ---------- RA/Dec 입력 파싱 ----------
+
+def _parse_sexagesimal(text: str) -> tuple[float, float, float, int]:
+    s = str(text).strip()
+    sign = -1 if s.startswith("-") else 1
+    s = s.lstrip("+-")
+    parts = [p for p in re.split(r"[:hmsdHMSD°'\"\s]+", s) if p]
+    if not parts:
+        raise ValueError(f"좌표를 해석할 수 없음: {text!r}")
+    nums = [float(p) for p in parts]
+    while len(nums) < 3:
+        nums.append(0.0)
+    return nums[0], nums[1], nums[2], sign
+
+
+def parse_ra_hours(text: str) -> float:
+    """'5.59', '05:35:17', '5h35m17s', '5 35 17' → 시간 단위 RA."""
+    h, m, s, sign = _parse_sexagesimal(text)
+    return (sign * (h + m / 60.0 + s / 3600.0)) % 24.0
+
+
+def parse_dec_degs(text: str) -> float:
+    """'-5.39', '-05:23:28', '-5d23m28s' → 도 단위 Dec."""
+    d, m, s, sign = _parse_sexagesimal(text)
+    val = sign * (d + m / 60.0 + s / 3600.0)
+    if not -90.0 <= val <= 90.0:
+        raise ValueError(f"적위 범위 밖: {val:.4f}°")
+    return val
+
+
+# ---------- 야간 타임라인 ----------
+
+KST = timezone(timedelta(hours=9))
+
+
+def night_timeline(lat_deg: float, lon_deg: float, *, step_s: int = 120,
+                   flat_high: float = -1.0, flat_low: float = -12.0,
+                   now: datetime | None = None) -> dict:
+    """지역(KST) 정오→다음 정오의 태양고도 곡선 + 박명 이벤트 + 플랫 창."""
+    now = now or now_utc()
+    local_now = now.astimezone(KST)
+    start_local = local_now.replace(hour=12, minute=0, second=0, microsecond=0)
+    if local_now.hour < 12:
+        start_local -= timedelta(days=1)
+    start = start_local.astimezone(timezone.utc)
+
+    n = int(24 * 3600 / step_s)
+    ts: list[float] = []
+    alts: list[float] = []
+    for i in range(n + 1):
+        t = start + timedelta(seconds=i * step_s)
+        alt, _ = sun_altaz(t, lat_deg, lon_deg)
+        ts.append(round(t.timestamp(), 1))
+        alts.append(round(alt, 2))
+
+    events: dict[str, float] = {}
+    for name, th in (("horizon", -0.833), ("civil", -6.0),
+                     ("nautical", -12.0), ("astro", -18.0)):
+        for i in range(1, len(alts)):
+            a0, a1 = alts[i - 1], alts[i]
+            if (a0 - th) * (a1 - th) <= 0 and a0 != a1:
+                frac = (th - a0) / (a1 - a0)
+                key = f"{name}_{'set' if a1 < a0 else 'rise'}"
+                events.setdefault(key, round(ts[i - 1] + frac * step_s, 1))
+
+    windows: list[dict] = []
+    in_window = False
+    t0 = 0.0
+    for i, a in enumerate(alts):
+        ok = flat_low <= a <= flat_high
+        if ok and not in_window:
+            in_window, t0 = True, ts[i]
+        elif not ok and in_window:
+            windows.append({"start": t0, "end": ts[i]})
+            in_window = False
+    if in_window:
+        windows.append({"start": t0, "end": ts[-1]})
+
+    return {"start": ts[0], "end": ts[-1], "step_s": step_s,
+            "t": ts, "sun_alt": alts, "events": events,
+            "flat_windows": windows, "now": round(now.timestamp(), 1)}
+
+
+def target_track(ra_hours: float, dec_degs: float, lat_deg: float,
+                 lon_deg: float, t_epochs: list[float]) -> list[float]:
+    """타임라인 시각 그리드에서 대상의 고도 곡선."""
+    out: list[float] = []
+    for te in t_epochs:
+        dt = datetime.fromtimestamp(te, tz=timezone.utc)
+        alt, _ = radec_to_altaz(ra_hours, dec_degs, lat_deg,
+                                lst_hours(dt, lon_deg))
+        out.append(round(alt, 2))
+    return out

@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=020">
 </head>
 <body>
 
@@ -33,22 +33,26 @@
   </div>
 </header>
 
-<main class="grid">
+<main class="grid" id="grid">
 
   <!-- 하늘 돔 -->
-  <section class="card span4">
+  <section class="card span4" data-panel="sky">
     <div class="card-head"><span class="card-title">하늘</span><span class="card-tag">ALL-SKY</span></div>
-    <div class="sky-wrap"><canvas id="sky-canvas"></canvas></div>
+    <div class="sky-wrap" id="sky-wrap">
+      <canvas id="sky-canvas"></canvas>
+      <div class="sky-menu" id="sky-menu"></div>
+    </div>
     <div class="kv"><span>태양 고도</span><b class="accent" id="s-sunalt">—</b></div>
     <div class="kv"><span>박명</span><b id="s-phase">—</b></div>
     <div class="kv"><span>반태양 방위</span><b id="s-antisolar">—</b></div>
+    <div class="hint">돔을 클릭하면 그 지점으로 GoTo할 수 있습니다</div>
     <div class="ctrl-row" id="twilight-row">
       <button id="btn-twilight" class="btn">☼ 황혼 시뮬</button>
     </div>
   </section>
 
   <!-- 오토플랫 콘솔 -->
-  <section class="card span8">
+  <section class="card span8" data-panel="skyflat">
     <div class="card-head"><span class="card-title">오토플랫</span><span class="card-tag sys">SKYFLAT SYSTEM</span></div>
     <div class="af-grid">
       <div>
@@ -82,7 +86,7 @@
   </section>
 
   <!-- 망원경 -->
-  <section class="card span3">
+  <section class="card span3" data-panel="mount">
     <div class="card-head"><span class="card-title">망원경</span><span class="card-tag">MOUNT · PWI4</span></div>
     <div class="kv"><span>고도 ALT</span><b class="accent" id="m-alt">—</b></div>
     <div class="kv"><span>방위 AZ</span><b class="accent" id="m-az">—</b></div>
@@ -93,9 +97,37 @@
       <span class="pill" id="m-slew">SLEWING</span>
     </div>
     <div class="ctrl-row">
+      <input id="in-target" type="text" placeholder="대상 검색 (M42, NGC7789…)">
+      <button id="btn-resolve" class="btn">검색</button>
+    </div>
+    <div class="resolve-line" id="resolve-line"></div>
+    <div class="ctrl-row">
+      <input id="in-ra" type="text" placeholder="RA (h / hh:mm:ss)">
+      <input id="in-dec" type="text" placeholder="DEC (±dd:mm:ss)">
+      <button id="btn-goto-radec" class="btn">GoTo</button>
+    </div>
+    <div class="ctrl-row">
       <input id="in-alt" type="number" placeholder="ALT°" min="0" max="89" step="0.1">
       <input id="in-az" type="number" placeholder="AZ°" min="0" max="360" step="0.1">
       <button id="btn-goto" class="btn">이동</button>
+    </div>
+    <div class="jog-pad">
+      <span></span>
+      <button class="btn jog" data-jog="N">▲</button>
+      <span></span>
+      <button class="btn jog" data-jog="W">◀</button>
+      <select id="jog-step" title="조그 스텝(″)">
+        <option value="5">5″</option>
+        <option value="10" selected>10″</option>
+        <option value="30">30″</option>
+        <option value="60">1′</option>
+        <option value="300">5′</option>
+        <option value="1800">30′</option>
+      </select>
+      <button class="btn jog" data-jog="E">▶</button>
+      <span></span>
+      <button class="btn jog" data-jog="S">▼</button>
+      <span></span>
     </div>
     <div class="ctrl-row">
       <button id="btn-tracking" class="btn">Tracking</button>
@@ -104,33 +136,67 @@
   </section>
 
   <!-- 카메라 -->
-  <section class="card span3">
-    <div class="card-head"><span class="card-title">카메라</span><span class="card-tag">C3-61000</span></div>
+  <section class="card span3" data-panel="camera">
+    <div class="card-head"><span class="card-title">카메라</span><span class="card-tag sys">CAPTURE · C3-61000</span></div>
     <div class="kv"><span>CCD 온도</span><b class="accent" id="c-temp">—</b></div>
-    <div class="kv"><span>쿨러</span><b id="c-cooler">—</b></div>
     <div class="kv"><span>상태</span><b id="c-state">—</b></div>
     <div class="kv"><span>현재 필터</span><b id="c-filter">—</b></div>
     <div class="ctrl-row">
       <select id="sel-filter"></select>
-      <button id="btn-filter" class="btn">이동</button>
+      <button id="btn-filter" class="btn">필터 이동</button>
     </div>
     <div class="ctrl-row">
       <button id="btn-cooler" class="btn">쿨러 ON/OFF</button>
+      <input id="c-setpoint" type="number" placeholder="설정 °C" step="1" style="max-width:84px">
+    </div>
+    <div class="cap-form">
+      <label>노출 (s) <input id="cap-exp" type="number" value="2.0" step="0.1" min="0"></label>
+      <label>타입
+        <select id="cap-type">
+          <option>LIGHT</option><option>FLAT</option>
+          <option>DARK</option><option>BIAS</option>
+        </select>
+      </label>
+      <label>장수 (0=∞) <input id="cap-count" type="number" value="5" min="0"></label>
+      <label>간격 (s) <input id="cap-interval" type="number" value="1.0" step="0.1" min="0"></label>
+    </div>
+    <div class="ctrl-row">
+      <button id="btn-cap-once" class="btn btn-go">● 촬영</button>
+      <button id="btn-cap-loop" class="btn">▶ 연속</button>
+      <button id="btn-cap-stop" class="btn btn-danger" disabled>■</button>
+      <button id="btn-autosave" class="btn" title="FITS 자동 저장">💾</button>
+    </div>
+    <div class="kv"><span>캡처</span><b id="cap-state">idle</b></div>
+    <div class="kv"><span>직전 중앙값</span><b id="cap-median">—</b></div>
+    <div class="kv"><span>저장</span><b id="cap-file" class="small">—</b></div>
+  </section>
+
+  <!-- 포커서 -->
+  <section class="card span3" data-panel="focuser">
+    <div class="card-head"><span class="card-title">포커서</span><span class="card-tag">FOCUSER</span></div>
+    <div class="kv"><span>위치</span><b class="accent" id="f-pos">—</b></div>
+    <div class="kv"><span>이동 중</span><b id="f-moving">—</b></div>
+    <div class="kv"><span>온도</span><b id="f-temp">—</b></div>
+    <div class="f-bar"><div class="f-bar-fill" id="f-bar"></div></div>
+    <div class="ctrl-row">
+      <input id="f-target" type="number" placeholder="목표 스텝" min="0">
+      <button id="btn-f-go" class="btn">이동</button>
+    </div>
+    <div class="ctrl-row f-nudge">
+      <button class="btn" data-fn="-1000">−1000</button>
+      <button class="btn" data-fn="-100">−100</button>
+      <button class="btn" data-fn="100">+100</button>
+      <button class="btn" data-fn="1000">+1000</button>
     </div>
   </section>
 
   <!-- 기상 -->
-  <section class="card span3">
+  <section class="card span3" data-panel="weather">
     <div class="card-head"><span class="card-title">기상</span><span class="card-tag">WEATHER</span></div>
     <div class="spark-row"><span class="sl">기온</span><canvas id="spark-temp"></canvas><span class="sv" id="w-temp">—</span></div>
     <div class="spark-row"><span class="sl">습도</span><canvas id="spark-hum"></canvas><span class="sv" id="w-hum">—</span></div>
     <div class="spark-row"><span class="sl">풍속</span><canvas id="spark-wind"></canvas><span class="sv" id="w-wind">—</span></div>
     <div class="kv" style="margin-top:10px"><span>이슬점</span><b id="w-dew">—</b></div>
-  </section>
-
-  <!-- 시스템 / 안전 -->
-  <section class="card span3">
-    <div class="card-head"><span class="card-title">시스템</span><span class="card-tag">SYSTEMS</span></div>
     <div class="safety-hero">
       <div class="safety-state" id="sys-safety-state">—</div>
       <div class="safety-reason" id="sys-safety-reason"></div>
@@ -143,16 +209,49 @@
       <div class="sys-name"><span class="sys-dot idle" id="sys-sf-dot"></span>Skyflat</div>
       <span class="sys-state" id="sys-sf-state">idle</span>
     </div>
+    <div class="sys-row">
+      <div class="sys-name"><span class="sys-dot idle" id="sys-cp-dot"></span>Capture</div>
+      <span class="sys-state" id="sys-cp-state">idle</span>
+    </div>
+  </section>
+
+  <!-- 야간 타임라인 -->
+  <section class="card span8" data-panel="timeline">
+    <div class="card-head"><span class="card-title">야간 타임라인</span><span class="card-tag">NIGHT TIMELINE · KST</span></div>
+    <canvas id="timeline-canvas"></canvas>
+    <div class="tl-legend">
+      <span><i style="background:#ffd884"></i> 태양</span>
+      <span><i style="background:#4cc9f0"></i> 대상 <b id="tl-target">—</b></span>
+      <span><i style="background:rgba(52,211,153,.5)"></i> 플랫 창</span>
+      <span><i style="background:#fb7185"></i> 현재</span>
+    </div>
   </section>
 
   <!-- 라이브 로그 -->
-  <section class="card span4 tall">
+  <section class="card span4 tall" data-panel="log">
     <div class="card-head"><span class="card-title">라이브 로그</span><span class="card-tag">LIVE LOG</span></div>
     <div class="log" id="log"></div>
   </section>
 
+  <!-- 시계열 플롯 빌더 -->
+  <section class="card span8" data-panel="plots">
+    <div class="card-head"><span class="card-title">시계열 플롯</span><span class="card-tag">TELEMETRY PLOTS</span></div>
+    <div class="plot-builder">
+      <div class="plot-keys" id="plot-keys"></div>
+      <div class="ctrl-row">
+        <select id="plot-window" style="max-width:110px">
+          <option value="300">5분</option>
+          <option value="900" selected>15분</option>
+          <option value="3600">1시간</option>
+        </select>
+        <button id="btn-plot-add" class="btn btn-go">+ 차트 추가</button>
+      </div>
+    </div>
+    <div id="charts"></div>
+  </section>
+
   <!-- 최근 프레임 -->
-  <section class="card span4">
+  <section class="card span6" data-panel="frames">
     <div class="card-head"><span class="card-title">최근 프레임</span><span class="card-tag">FRAMES</span></div>
     <div class="tbl-scroll">
       <table class="tbl" id="tbl-frames">
@@ -163,7 +262,7 @@
   </section>
 
   <!-- 액션 감사로그 -->
-  <section class="card span4">
+  <section class="card span6" data-panel="actions">
     <div class="card-head"><span class="card-title">액션 감사로그</span><span class="card-tag">ACTION AUDIT</span></div>
     <div class="tbl-scroll">
       <table class="tbl" id="tbl-actions">
@@ -198,6 +297,12 @@
     <div class="dev-dev"><div class="nm">박명 상태</div><span class="dl" id="set-phase">—</span></div>
   </div>
 
+  <div class="drawer-sec">
+    <div class="drawer-label">패널 배치</div>
+    <button id="btn-layout-reset" class="btn" style="width:100%">패널 배치 초기화 (타일 정렬)</button>
+    <div class="drawer-note">각 패널 헤더의 ⤢(크기)/▾(접기) 버튼, 헤더 드래그로 순서 변경. 배치는 저장됩니다.</div>
+  </div>
+
   <!-- 개발자 모드에서만 보이는 고급 설정 -->
   <div class="dev-only" id="dev-only">
     <div class="drawer-sec">
@@ -228,6 +333,6 @@
   </div>
 </aside>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=020"></script>
 </body>
 </html>

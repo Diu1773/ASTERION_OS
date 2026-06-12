@@ -333,3 +333,23 @@ input:focus, select:focus { outline: none; border-color: var(--accent); box-shad
 .dev-dev .cd { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dev-dev .cd.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
 .dev-dev .cd.off { background: var(--err); box-shadow: 0 0 7px var(--err); }
+
+/* 개발자 모드 토글 스위치 + 고급 설정 게이팅 */
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.switch-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.switch-sub { font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+.switch { position: relative; width: 46px; height: 26px; flex: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+  background: #16213a; border: 1px solid var(--edge); transition: .2s;
+}
+.switch .slider::before {
+  content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+  border-radius: 50%; background: var(--dim); transition: .2s;
+}
+.switch input:checked + .slider { background: rgba(76,201,240,.22); border-color: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(20px); background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+.dev-only { display: none; }
+.drawer.devmode .dev-only { display: block; }

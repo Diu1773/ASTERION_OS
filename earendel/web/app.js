@@ -314,6 +314,13 @@ function updateModeSeg(mode) {
 }
 
 function renderDev(s) {
+  // 일반 설정(관측 정보)
+  $("set-site").textContent = s.site || "—";
+  $("set-mode").textContent = (s.mode || "—").toUpperCase();
+  $("set-lst").textContent = s.time?.lst || "—";
+  const sun = s.sun || {}, tw = s.twilight_sim || {};
+  $("set-phase").textContent = (sun.phase_label || "—") + (tw.enabled ? " · 황혼시뮬" : "");
+  // 개발자: 장비 연결 상태
   const rows = [
     ["마운트", s.mount?.connected, s.mount?.detail || ""],
     ["카메라", s.camera?.connected, s.camera?.detail || ""],
@@ -323,6 +330,14 @@ function renderDev(s) {
   $("dev-devices").innerHTML = rows.map(([nm, on, dl]) =>
     `<div class="dev-dev"><div class="nm"><span class="cd ${on ? "on" : "off"}"></span>${nm}</div><span class="dl">${escapeHtml(dl)}</span></div>`
   ).join("");
+}
+
+// 개발자 모드 (localStorage 저장; 고급 설정 노출 여부)
+const DEVMODE_KEY = "earendel.devmode";
+function applyDevMode(on) {
+  $("dev-drawer").classList.toggle("devmode", on);
+  $("devmode-toggle").checked = on;
+  try { localStorage.setItem(DEVMODE_KEY, on ? "1" : "0"); } catch (e) { /* noop */ }
 }
 
 function openDrawer(open) {
@@ -427,10 +442,13 @@ $("btn-af-start").onclick = () => post("/api/actions/autoflat/start", {
 });
 $("btn-af-stop").onclick = () => post("/api/actions/autoflat/stop");
 
-// 개발자 드로어
+// 설정 드로어
 $("dev-btn").onclick = () => openDrawer(true);
 $("dev-close").onclick = () => openDrawer(false);
 $("dev-overlay").onclick = () => openDrawer(false);
+// 개발자 모드 토글 (기본 OFF — 일반 관측 설정만; 켜면 고급 설정 노출)
+applyDevMode(localStorage.getItem(DEVMODE_KEY) === "1");
+$("devmode-toggle").onchange = (e) => applyDevMode(e.target.checked);
 document.querySelectorAll("#mode-seg .seg-btn").forEach((b) => {
   b.onclick = async () => {
     if (b.classList.contains("active")) return;

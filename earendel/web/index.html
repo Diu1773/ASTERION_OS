@@ -29,7 +29,7 @@
     <span class="badge" id="badge-mode">--</span>
     <span class="badge safety" id="badge-safety">--</span>
     <span class="ws-dot" id="ws-dot" title="WebSocket 연결"></span>
-    <button class="dev-btn" id="dev-btn"><span class="gear">⚙</span> DEV</button>
+    <button class="dev-btn" id="dev-btn"><span class="gear">⚙</span> 설정</button>
   </div>
 </header>
 
@@ -175,35 +175,56 @@
 
 </main>
 
-<!-- 개발자 드로어 -->
+<!-- 설정 드로어 (일반 + 개발자) -->
 <div class="drawer-overlay" id="dev-overlay"></div>
 <aside class="drawer" id="dev-drawer">
-  <div class="drawer-head"><span>개발자 · DEV</span><button class="x" id="dev-close">✕</button></div>
+  <div class="drawer-head"><span>설정 · SETTINGS</span><button class="x" id="dev-close">✕</button></div>
 
   <div class="drawer-sec">
-    <div class="drawer-label">드라이버 모드</div>
-    <div class="seg" id="mode-seg">
-      <button class="seg-btn" data-mode="sim">SIM</button>
-      <button class="seg-btn" data-mode="real">REAL</button>
-    </div>
-    <div class="drawer-note" id="mode-note">
-      SIM = 모든 장비 시뮬레이터. REAL = config.toml의 장비별 설정(PWI4 / ASCOM)을 사용.
-      실제 하드웨어·PWI4가 꺼져 있거나 ASCOM ProgID 미설정이면 REAL 전환이 거부될 수 있습니다.
+    <div class="switch-row">
+      <div>
+        <div class="switch-title">개발자 모드</div>
+        <div class="switch-sub">드라이버 전환 등 고급 설정 표시</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="devmode-toggle"><span class="slider"></span></label>
     </div>
   </div>
 
   <div class="drawer-sec">
-    <div class="drawer-label">장비 연결 상태</div>
-    <div id="dev-devices"></div>
+    <div class="drawer-label">관측 정보</div>
+    <div class="dev-dev"><div class="nm">사이트</div><span class="dl" id="set-site">—</span></div>
+    <div class="dev-dev"><div class="nm">현재 모드</div><span class="dl" id="set-mode">—</span></div>
+    <div class="dev-dev"><div class="nm">항성시 LST</div><span class="dl" id="set-lst">—</span></div>
+    <div class="dev-dev"><div class="nm">박명 상태</div><span class="dl" id="set-phase">—</span></div>
   </div>
 
-  <div class="drawer-sec">
-    <div class="drawer-label">시뮬 도구</div>
-    <div class="dev-dev">
-      <div class="nm">황혼 시뮬레이션</div>
-      <button id="btn-twilight2" class="btn" style="flex:none;padding:6px 12px">토글</button>
+  <!-- 개발자 모드에서만 보이는 고급 설정 -->
+  <div class="dev-only" id="dev-only">
+    <div class="drawer-sec">
+      <div class="drawer-label">드라이버 모드 · DEV</div>
+      <div class="seg" id="mode-seg">
+        <button class="seg-btn" data-mode="sim">SIM</button>
+        <button class="seg-btn" data-mode="real">REAL</button>
+      </div>
+      <div class="drawer-note">
+        SIM = 모든 장비 시뮬레이터. REAL = config.toml의 장비별 설정(PWI4 / ASCOM) 사용.
+        PWI4가 꺼져 있거나 ASCOM ProgID 미설정이면 REAL 전환이 거부됩니다.
+      </div>
     </div>
-    <div class="drawer-note">낮에도 박명 하늘을 흉내내 오토플랫 노출 루프를 시험합니다.</div>
+
+    <div class="drawer-sec">
+      <div class="drawer-label">장비 연결 상태 · DEV</div>
+      <div id="dev-devices"></div>
+    </div>
+
+    <div class="drawer-sec">
+      <div class="drawer-label">시뮬 도구 · DEV</div>
+      <div class="dev-dev">
+        <div class="nm">황혼 시뮬레이션</div>
+        <button id="btn-twilight2" class="btn" style="flex:none;padding:6px 12px">토글</button>
+      </div>
+      <div class="drawer-note">낮/밤에도 박명 하늘을 흉내내 오토플랫 노출 루프를 시험합니다.</div>
+    </div>
   </div>
 </aside>
 

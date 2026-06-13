@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
@@ -8,6 +8,6 @@
 .claude/
 
 # Runtime data (DB, captured FITS) - regenerated on first run
-earendel/data/
+asterion/data/
 *.log
 .DS_Store

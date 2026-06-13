@@ -58,6 +58,6 @@ def save_frame(frames_dir: Path, cfg, img: np.ndarray, *, image_type: str,
             h["RA"] = round(mount_st.ra_hours * 15.0, 6)
         if mount_st.dec_degs is not None:
             h["DEC"] = round(mount_st.dec_degs, 6)
-    h["SWCREATE"] = "Earendel 0.1"
+    h["SWCREATE"] = "Asterion 0.1"
     hdu.writeto(path, overwrite=True)
     return path

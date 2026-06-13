@@ -1,4 +1,4 @@
-"""Earendel — 통합 관측 플랫폼 (FastAPI: REST + WebSocket + 대시보드).
+"""Asterion — 통합 관측 플랫폼 (FastAPI: REST + WebSocket + 대시보드).
 
 플랫폼 본체. core(데이터·액션 백본)와 drivers(하드웨어 브리지) 위에
 named system들(watchtower 환경·안전, skyflat 오토플랫, capture 수동
@@ -105,7 +105,7 @@ class AutosaveReq(BaseModel):
 
 
 def create_app() -> FastAPI:
-    cfg = Config.load(os.environ.get("EARENDEL_CONFIG"))
+    cfg = Config.load(os.environ.get("ASTERION_CONFIG"))
     lat = float(cfg.get("site.latitude", 36.6))
     lon = float(cfg.get("site.longitude", 127.5))
 
@@ -118,7 +118,7 @@ def create_app() -> FastAPI:
     twilight = TwilightSim(efold_s=float(cfg.get("sim.twilight_efold_s", 240.0)))
     drivers = build_drivers(cfg, twilight, sun_alt_now, lst_now)
     events = EventHub()
-    db = Db(cfg.data_dir / "earendel.db")
+    db = Db(cfg.data_dir / "asterion.db")
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
     bus = ActionBus(db, events, lambda: sampler.snapshot)
     # 프레임 미리보기 홀더 (캡처/플랫 직후 스트레치 PNG)
@@ -180,7 +180,7 @@ def create_app() -> FastAPI:
                 events.log("system", f"{name} 연결 실패: {exc}", "error")
         sampler.start()
         events.log("system",
-                   f"Earendel v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
+                   f"Asterion v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
         yield
         await sampler.stop()
         for name in DEVICES:
@@ -189,7 +189,7 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
-    app = FastAPI(title="Earendel", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Asterion", version=__version__, lifespan=lifespan)
 
     @app.exception_handler(ActionError)
     async def _action_error(_, exc: ActionError):

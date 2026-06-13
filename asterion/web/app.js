@@ -1,4 +1,4 @@
-/* Earendel 통합 관측 플랫폼 대시보드
+/* Asterion 통합 관측 플랫폼 대시보드
    — WebSocket 실시간, 클릭-GoTo 전천 돔, 캡처/포커서 콘솔,
      야간 타임라인, 자율형 시계열 플롯 빌더, 패널 매니저 */
 "use strict";
@@ -396,7 +396,7 @@ function drawTimeline() {
 
 const PALETTE = ["#4cc9f0", "#34d399", "#fbbf24", "#fb7185",
                  "#c084fc", "#f97316", "#a3e635", "#38bdf8"];
-const CHARTS_KEY = "earendel.charts.v1";
+const CHARTS_KEY = "asterion.charts.v1";
 const tele = { t: [], series: {} };  // 클라이언트 텔레메트리 스토어 (최근 1h)
 let teleKeys = [];
 let charts = [];                      // {id, keys, window}
@@ -519,7 +519,7 @@ function drawAllCharts() { charts.forEach(drawChart); }
 
 // ---------- 패널 매니저 (크기/접기/드래그/타일) ----------
 
-const LAYOUT_KEY = "earendel.layout.v1";
+const LAYOUT_KEY = "asterion.layout.v1";
 const SPANS = [3, 4, 6, 8, 12];
 
 function panelId(card) { return card.dataset.panel; }
@@ -785,7 +785,7 @@ function renderDev(s) {
     `<span class="dl">${escapeHtml(dl)}</span></div>`).join("");
 }
 
-const DEVMODE_KEY = "earendel.devmode";
+const DEVMODE_KEY = "asterion.devmode";
 function applyDevMode(on) {
   $("dev-drawer").classList.toggle("devmode", on);
   $("devmode-toggle").checked = on;

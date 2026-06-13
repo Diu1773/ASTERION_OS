@@ -1,12 +1,11 @@
-# EARENDEL — 청람천문대 통합 관측 OS
+# ASTERION — 청람천문대 통합 관측 OS
 
 관측 전·중·후를 하나의 웹으로 연결하는 **통합 관측 플랫폼**. APEX(분석 엔진)와
 별개 트랙으로, 팔란티어식 운영 레이어다.
 
-> **이름의 유래** — *Eärendel / Earendel*: 고대 영어로 "샛별". 톨킨의 *밤하늘을
-> 항해하며 가장 밝게 빛나는 별*(실마릴을 든 뱃사공)의 이름이자, 2022년 허블이
-> 관측한 **인류 사상 가장 먼 단일 별**의 이름. "다른 모든 빛이 꺼졌을 때 어둠
-> 속에서 너를 비출 빛."
+> **이름의 유래** — *Asterion* (ἀστερίων): 그리스어로 **"별의 / 별이 빛나는 자"**
+> (*astēr*, 별). 전천을 보고 별빛을 데이터로 거두는 관측 OS에 어울리는,
+> 별에 속한 이름.
 
 ## 설계 원칙 (팔란티어식)
 
@@ -20,17 +19,17 @@
 ## 구조 — 플랫폼 + named systems
 
 ```
-Earendel (통합 플랫폼 웹  :8520)
-  earendel/
+Asterion (통합 플랫폼 웹  :8520)
+  asterion/
     app.py · __main__.py · config       ← 플랫폼 본체 (시스템 조립 + 웹/REST/WS)
     core/        ← 데이터·액션 백본: ontology · actions(감사) · events · ephemeris
     drivers/     ← 하드웨어 브리지: sim │ PWI4 HTTP(마운트) │ ASCOM COM(카메라/필터)
     watchtower/  ← [시스템] 환경·안전 감시 (기상·태양고도·장비 → 관측 가능 판정)
     skyflat/     ← [시스템] 자동 스카이플랫 보정 세션
-    web/         ← Earendel 대시보드
+    web/         ← Asterion 대시보드
 ```
 
-- **Earendel** = OS / 통합 플랫폼 (대시보드가 이를 구현).
+- **Asterion** = OS / 통합 플랫폼 (대시보드가 이를 구현).
 - 그 안의 **시스템**들은 각자 이름을 가진다. `watchtower`(환경·안전)가 첫 번째,
   `skyflat`(오토플랫)이 두 번째. **`skyflat`은 이름 변경 예정 placeholder** —
   최종 이름이 정해지면 서브패키지 폴더를 리네임하고 `app.py`의 import 한 줄만
@@ -40,13 +39,13 @@ Earendel (통합 플랫폼 웹  :8520)
 ## 실행
 
 ```bat
-earendel\run.bat
+asterion\run.bat
 ```
 
-또는 수동 (`Earendel\` 폴더에서):
+또는 수동 (`Asterion\` 폴더에서):
 
 ```bat
-.venv\Scripts\python -m earendel
+.venv\Scripts\python -m asterion
 ```
 
 → 브라우저에서 **http://127.0.0.1:8520**
@@ -56,11 +55,11 @@ earendel\run.bat
 1. 대시보드 우측 하늘 패널에서 **황혼 시뮬 ON** (낮이어도 박명 하늘을 흉내냄)
 2. 오토플랫 카드에서 **오토플랫 시작**
 3. 라이브 로그에서 노출 탐색 → 디더 → 촬영 → ADU 판정 흐름 확인
-4. 프레임/액션 테이블과 `earendel/data/` 아래 FITS·DB 확인
+4. 프레임/액션 테이블과 `asterion/data/` 아래 FITS·DB 확인
 
 ## 실제 하드웨어 연결 (청람천문대)
 
-`earendel/config.toml`:
+`asterion/config.toml`:
 
 ```toml
 [drivers]
@@ -77,14 +76,14 @@ weather = "sim"        # 기상 장비 어댑터는 추후
 
 ```bat
 .venv\Scripts\pip install pywin32
-.venv\Scripts\python earendel\scripts\choose_ascom.py
+.venv\Scripts\python asterion\scripts\choose_ascom.py
 ```
 
 Maxim DL 드롭다운과 같은 선택창이 뜬다. 출력된 ProgID를 `[drivers.ascom]`에 입력.
 
 ### 주의
 
-- **카메라 점유**: ASCOM 카메라는 한 앱만 연결 가능. Earendel이 직접 잡을 때는
+- **카메라 점유**: ASCOM 카메라는 한 앱만 연결 가능. Asterion이 직접 잡을 때는
   Maxim DL에서 카메라를 Disconnect할 것 (또는 ASCOM Device Hub 사용).
 - **PWI4 offset 파라미터**: `/mount/offset`의 인자명은 PWI4 버전에 따라 다를 수
   있다 — `drivers/pwi4.py` 주석 참고, 실물에서 1회 확인.

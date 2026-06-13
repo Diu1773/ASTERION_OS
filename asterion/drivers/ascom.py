@@ -18,7 +18,7 @@ from .base import (
     FocuserDriver, FocuserStatus,
 )
 
-_HINT = "ASCOM ProgID 미설정 — earendel/scripts/choose_ascom.py 실행 후 config.toml에 입력"
+_HINT = "ASCOM ProgID 미설정 — asterion/scripts/choose_ascom.py 실행 후 config.toml에 입력"
 
 
 def _com_executor() -> ThreadPoolExecutor:

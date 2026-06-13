@@ -100,6 +100,7 @@ class SimMount(MountDriver):
                 alt_degs=alt, az_degs=az,
                 slewing=slewing and self._slew is not None,
                 tracking=self._tracking, detail="SIM",
+                device_name="Sim Telescope",
             )
 
     def _begin_slew(self, alt1: float, az1: float, min_dur: float = 2.0) -> None:
@@ -162,7 +163,8 @@ class SimFilterWheel(FilterWheelDriver):
     def status(self) -> FilterStatus:
         name = self._names[self._pos] if 0 <= self._pos < len(self._names) else ""
         return FilterStatus(connected=self._connected, position=self._pos,
-                            name=name, names=list(self._names))
+                            name=name, names=list(self._names),
+                            device_name="Sim Filter Wheel")
 
     def set_position(self, index: int) -> None:
         if not 0 <= index < len(self._names):
@@ -205,7 +207,8 @@ class SimCamera(CameraDriver):
 
     def status(self) -> CameraStatus:
         return CameraStatus(connected=self._connected, ccd_temp_c=self._temp,
-                            cooler_on=self._cooler, state=self._state, detail="SIM")
+                            cooler_on=self._cooler, state=self._state,
+                            detail="SIM", device_name="Sim Camera")
 
     def expose(self, seconds: float, light: bool = True) -> np.ndarray:
         self._state = "exposing"
@@ -262,6 +265,7 @@ class SimFocuser(FocuserDriver):
                 connected=self._connected, position=int(round(self._pos)),
                 moving=abs(self._pos - self._target) > 0.5,
                 temperature=8.5, max_position=self._max, detail="SIM",
+                device_name="Sim Focuser",
             )
 
     def move_to(self, position: int) -> None:
@@ -294,4 +298,5 @@ class SimWeather(WeatherDriver):
             humidity=round(self._hum, 1), dew_point_c=round(dew, 1),
             wind_ms=round(self._wind, 1), wind_dir_deg=round(self._wind_dir),
             cloud_score=0.1, rain=False, detail="SIM",
+            device_name="Sim Weather",
         )

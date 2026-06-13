@@ -64,7 +64,8 @@ class Pwi4Mount(MountDriver):
         try:
             d = self._parse(self._get("/status"))
         except Exception as exc:
-            return MountStatus(connected=False, detail=f"PWI4 응답 없음: {exc}")
+            return MountStatus(connected=False, detail=f"PWI4 응답 없음: {exc}",
+                               device_name="PlaneWave (PWI4)")
         return MountStatus(
             connected=self._b(d, "mount.is_connected"),
             ra_hours=self._f(d, "mount.ra_j2000_hours"),
@@ -74,6 +75,7 @@ class Pwi4Mount(MountDriver):
             slewing=self._b(d, "mount.is_slewing"),
             tracking=self._b(d, "mount.is_tracking"),
             detail="PWI4",
+            device_name="PlaneWave (PWI4)",
         )
 
     def goto_altaz(self, alt_deg: float, az_deg: float) -> None:

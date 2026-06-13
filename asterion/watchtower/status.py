@@ -169,6 +169,7 @@ class StatusSampler:
             },
             "mount": {
                 "connected": mount.connected,
+                "name": mount.device_name,
                 "alt": None if mount.alt_degs is None else round(mount.alt_degs, 3),
                 "az": None if mount.az_degs is None else round(mount.az_degs, 3),
                 "ra_hours": mount.ra_hours,
@@ -180,6 +181,7 @@ class StatusSampler:
             },
             "camera": {
                 "connected": camera.connected,
+                "name": camera.device_name,
                 "ccd_temp": camera.ccd_temp_c,
                 "cooler_on": camera.cooler_on,
                 "state": camera.state, "detail": camera.detail,
@@ -187,9 +189,11 @@ class StatusSampler:
             "filter": {
                 "connected": filt.connected, "position": filt.position,
                 "name": filt.name, "names": filt.names,
+                "device_name": filt.device_name,
             },
             "focuser": {
                 "connected": focuser.connected,
+                "name": focuser.device_name,
                 "position": focuser.position,
                 "moving": focuser.moving,
                 "temperature": focuser.temperature,
@@ -197,6 +201,8 @@ class StatusSampler:
                 "detail": focuser.detail,
             },
             "weather": {
+                "connected": weather.connected,
+                "name": weather.device_name,
                 "temp": weather.temp_c, "humidity": weather.humidity,
                 "dew_point": weather.dew_point_c, "wind": weather.wind_ms,
                 "wind_dir": weather.wind_dir_deg,

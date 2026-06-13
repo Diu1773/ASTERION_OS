@@ -38,6 +38,7 @@ class AscomCamera(CameraDriver):
         self._ex = _com_executor()
         self._dev = None
         self._state = "idle"
+        self._name = ""
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -49,11 +50,17 @@ class AscomCamera(CameraDriver):
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
             self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)  # 예: "Moravian C3-61000"
+            except Exception:
+                self._name = self._progid
         self._call(_do)
 
     def status(self) -> CameraStatus:
         if self._dev is None:
-            return CameraStatus(connected=False, detail=_HINT if not self._progid else "미연결")
+            return CameraStatus(connected=False,
+                                detail=_HINT if not self._progid else "미연결",
+                                device_name=self._name)
         def _do():
             d = self._dev
             temp = None
@@ -68,11 +75,12 @@ class AscomCamera(CameraDriver):
                 pass
             return CameraStatus(connected=bool(d.Connected), ccd_temp_c=temp,
                                 cooler_on=cooler, state=self._state,
-                                detail=self._progid)
+                                detail=self._progid, device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
-            return CameraStatus(connected=False, detail=f"ASCOM 오류: {exc}")
+            return CameraStatus(connected=False, detail=f"ASCOM 오류: {exc}",
+                                device_name=self._name)
 
     def expose(self, seconds: float, light: bool = True) -> np.ndarray:
         def _do():
@@ -115,6 +123,7 @@ class AscomFilterWheel(FilterWheelDriver):
         self._fallback = fallback_names or []
         self._ex = _com_executor()
         self._dev = None
+        self._name = ""
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -126,11 +135,16 @@ class AscomFilterWheel(FilterWheelDriver):
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
             self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)
+            except Exception:
+                self._name = self._progid
         self._call(_do)
 
     def status(self) -> FilterStatus:
         if self._dev is None:
-            return FilterStatus(connected=False, names=list(self._fallback))
+            return FilterStatus(connected=False, names=list(self._fallback),
+                                device_name=self._name)
         def _do():
             d = self._dev
             try:
@@ -140,11 +154,12 @@ class AscomFilterWheel(FilterWheelDriver):
             pos = int(d.Position)
             name = names[pos] if 0 <= pos < len(names) else ""
             return FilterStatus(connected=bool(d.Connected), position=pos,
-                                name=name, names=names)
+                                name=name, names=names, device_name=self._name)
         try:
             return self._call(_do)
         except Exception:
-            return FilterStatus(connected=False, names=list(self._fallback))
+            return FilterStatus(connected=False, names=list(self._fallback),
+                                device_name=self._name)
 
     def set_position(self, index: int) -> None:
         def _do():
@@ -167,6 +182,7 @@ class AscomFocuser(FocuserDriver):
         self._progid = progid
         self._ex = _com_executor()
         self._dev = None
+        self._name = ""
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -178,11 +194,16 @@ class AscomFocuser(FocuserDriver):
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
             self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)
+            except Exception:
+                self._name = self._progid
         self._call(_do)
 
     def status(self) -> FocuserStatus:
         if self._dev is None:
-            return FocuserStatus(connected=False, detail="미연결")
+            return FocuserStatus(connected=False, detail="미연결",
+                                 device_name=self._name)
         def _do():
             d = self._dev
             temp = None
@@ -198,11 +219,13 @@ class AscomFocuser(FocuserDriver):
             return FocuserStatus(connected=bool(d.Connected),
                                  position=int(d.Position),
                                  moving=bool(d.IsMoving), temperature=temp,
-                                 max_position=maxpos, detail=self._progid)
+                                 max_position=maxpos, detail=self._progid,
+                                 device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
-            return FocuserStatus(connected=False, detail=f"ASCOM 오류: {exc}")
+            return FocuserStatus(connected=False, detail=f"ASCOM 오류: {exc}",
+                                 device_name=self._name)
 
     def move_to(self, position: int) -> None:
         self._call(lambda: self._dev.Move(int(position)))

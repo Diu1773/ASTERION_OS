@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 
+# device_name = 장비가 스스로 보고하는 표시명 (ASCOM .Name = "Moravian C3-61000",
+# PWI4 = "PlaneWave PWI4", 시뮬 = "Sim ..."). 패널 헤더가 이걸 자동 표시한다.
+
 @dataclass
 class MountStatus:
     connected: bool = False
@@ -23,6 +26,7 @@ class MountStatus:
     slewing: bool = False
     tracking: bool = False
     detail: str = ""
+    device_name: str = ""
 
 
 @dataclass
@@ -32,14 +36,16 @@ class CameraStatus:
     cooler_on: bool = False
     state: str = "idle"  # idle / exposing / error
     detail: str = ""
+    device_name: str = ""
 
 
 @dataclass
 class FilterStatus:
     connected: bool = False
     position: int | None = None
-    name: str = ""
+    name: str = ""              # 현재 필터 이름 (장비명 아님)
     names: list[str] = field(default_factory=list)
+    device_name: str = ""
 
 
 @dataclass
@@ -50,6 +56,7 @@ class FocuserStatus:
     temperature: float | None = None
     max_position: int = 60000
     detail: str = ""
+    device_name: str = ""
 
 
 @dataclass
@@ -63,6 +70,7 @@ class WeatherStatus:
     cloud_score: float | None = None
     rain: bool = False
     detail: str = ""
+    device_name: str = ""
 
 
 class MountDriver(abc.ABC):

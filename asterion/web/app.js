@@ -637,6 +637,12 @@ function applyStatus(s) {
   safBadge.className = `badge safety s-${saf.state}`;
   safBadge.title = (saf.reasons || []).join(", ");
 
+  // 장비 연결 칩 (자동 이름 + 초록/빨강)
+  setConn("conn-mount", s.mount, "MOUNT");
+  setConn("conn-camera", s.camera, "CAMERA");
+  setConn("conn-focuser", s.focuser, "FOCUSER");
+  setConn("conn-weather", s.weather, "WEATHER");
+
   // 망원경
   const m = s.mount || {};
   $("m-alt").textContent = fmt(m.alt, 2, "°");
@@ -755,6 +761,17 @@ function setSysRow(key, state, text) {
     (state === "idle" ? " idle" : state === "run" ? " run" : "");
   const st = $(`sys-${key}-state`);
   if (st) st.textContent = text;
+}
+
+// 장비 연결 칩: 연결되면 초록+장비명, 안 되면 빨강+타입라벨
+function setConn(id, dev, fallback) {
+  const el = $(id);
+  if (!el) return;
+  const on = !!(dev && dev.connected);
+  el.classList.toggle("on", on);
+  el.classList.toggle("off", !on);
+  el.textContent = (on && dev.name) ? dev.name : fallback;
+  el.title = on ? (dev.name || fallback) : `${fallback} 미연결`;
 }
 
 // ---------- 설정 드로어 ----------

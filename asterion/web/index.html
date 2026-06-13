@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=023">
+<link rel="stylesheet" href="/static/style.css?v=024">
 </head>
 <body>
 
@@ -87,7 +87,7 @@
 
   <!-- 망원경 -->
   <section class="card span3" data-panel="mount">
-    <div class="card-head"><span class="card-title">망원경</span><span class="card-tag">MOUNT · PWI4</span></div>
+    <div class="card-head"><span class="card-title">망원경</span><span class="card-tag conn" id="conn-mount">MOUNT</span></div>
     <div class="kv"><span>고도 ALT</span><b class="accent" id="m-alt">—</b></div>
     <div class="kv"><span>방위 AZ</span><b class="accent" id="m-az">—</b></div>
     <div class="kv"><span>적경 RA</span><b id="m-ra">—</b></div>
@@ -137,7 +137,7 @@
 
   <!-- 카메라 -->
   <section class="card span3" data-panel="camera">
-    <div class="card-head"><span class="card-title">카메라</span><span class="card-tag sys">CAPTURE · C3-61000</span></div>
+    <div class="card-head"><span class="card-title">카메라</span><span class="card-tag conn" id="conn-camera">CAMERA</span></div>
     <div class="kv"><span>CCD 온도</span><b class="accent" id="c-temp">—</b></div>
     <div class="kv"><span>상태</span><b id="c-state">—</b></div>
     <div class="kv"><span>현재 필터</span><b id="c-filter">—</b></div>
@@ -173,7 +173,7 @@
 
   <!-- 포커서 -->
   <section class="card span3" data-panel="focuser">
-    <div class="card-head"><span class="card-title">포커서</span><span class="card-tag">FOCUSER</span></div>
+    <div class="card-head"><span class="card-title">포커서</span><span class="card-tag conn" id="conn-focuser">FOCUSER</span></div>
     <div class="kv"><span>위치</span><b class="accent" id="f-pos">—</b></div>
     <div class="kv"><span>이동 중</span><b id="f-moving">—</b></div>
     <div class="kv"><span>온도</span><b id="f-temp">—</b></div>
@@ -192,7 +192,7 @@
 
   <!-- 기상 -->
   <section class="card span3" data-panel="weather">
-    <div class="card-head"><span class="card-title">기상</span><span class="card-tag">WEATHER</span></div>
+    <div class="card-head"><span class="card-title">기상</span><span class="card-tag conn" id="conn-weather">WEATHER</span></div>
     <div class="spark-row"><span class="sl">기온</span><canvas id="spark-temp"></canvas><span class="sv" id="w-temp">—</span></div>
     <div class="spark-row"><span class="sl">습도</span><canvas id="spark-hum"></canvas><span class="sv" id="w-hum">—</span></div>
     <div class="spark-row"><span class="sl">풍속</span><canvas id="spark-wind"></canvas><span class="sv" id="w-wind">—</span></div>
@@ -343,6 +343,6 @@
   </div>
 </aside>
 
-<script src="/static/app.js?v=023"></script>
+<script src="/static/app.js?v=024"></script>
 </body>
 </html>

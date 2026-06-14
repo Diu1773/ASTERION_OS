@@ -179,8 +179,10 @@ body { padding-bottom: 38px; }
   margin-bottom: 13px; padding-bottom: 10px;
   border-bottom: 1px solid var(--edge);
 }
-/* 제목 뒤로 나머지(태그·도구)를 오른쪽으로 밀어, 고정핀+제목은 좌측에 고정 */
-.card-title { font-size: 14px; font-weight: 600; letter-spacing: .1px; margin-right: auto; }
+/* 제목은 좌측 고정. 연결 칩(conn)은 제목 바로 옆(좌측)에 붙고,
+   설명용 태그와 도구(핀·크기·접기)는 우측으로 민다. */
+.card-title { font-size: 14px; font-weight: 600; letter-spacing: .1px; }
+.card-head > .card-tag:not(.conn) { margin-left: auto; }
 .card-tag {
   font-family: var(--mono); font-size: 9.5px; letter-spacing: 1px;
   color: var(--faint); text-transform: uppercase;
@@ -232,6 +234,10 @@ select option, select optgroup {
   background: #12161e; color: var(--text);
 }
 select { color-scheme: dark; }
+/* 넓어진 카드에서 짧은 값 드롭다운이 과하게 늘어나지 않게 — 콤팩트하게.
+   (시스템 탭 ASCOM ProgID 셀렉트는 긴 이름이라 제외, 여기서만 한정) */
+#sel-filter { flex: 0 0 auto; min-width: 96px; max-width: 150px; }
+.cap-form select { max-width: 150px; }
 .btn {
   background: rgba(255,255,255,.045); color: var(--text); border: 1px solid var(--edge);
   border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 500;
@@ -302,6 +308,42 @@ select { color-scheme: dark; }
 .frame-empty { color: var(--faint); font-size: 11px; text-align: center; padding: 0 12px; }
 .frame-meta { font-family: var(--mono); font-size: 10.5px; color: var(--dim); margin-top: 7px; text-align: center; min-height: 13px; }
 
+/* ---------------- 임베드 패널 (위성영상·CCTV 등 외부 소스 붙여넣기) ---------------- */
+.embed-view {
+  position: relative; background: #05070b; border: 1px solid var(--edge);
+  border-radius: var(--radius-sm); overflow: hidden; aspect-ratio: 16 / 9;
+  display: flex; align-items: center; justify-content: center;
+}
+.embed-view img, .embed-view iframe { width: 100%; height: 100%; border: 0; display: none; }
+.embed-view img { object-fit: contain; }
+.embed-view img.on, .embed-view iframe.on { display: block; }
+.embed-empty { color: var(--faint); font-size: 11px; text-align: center; padding: 0 16px; line-height: 1.55; }
+.embed-meta { font-family: var(--mono); font-size: 10.5px; color: var(--dim); margin-top: 7px; text-align: center; min-height: 13px; }
+
+.embed-gear {
+  flex: none; width: 22px; height: 20px; cursor: pointer; font-size: 12px; line-height: 1;
+  background: none; border: 1px solid var(--edge); border-radius: 6px; color: var(--dim);
+  transition: color .15s, border-color .15s;
+}
+.embed-gear:hover { color: var(--text); border-color: var(--edge-strong); }
+
+.embed-editor {
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--edge);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.embed-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
+.embed-field input, .embed-field select {
+  background: rgba(255,255,255,.04); color: var(--text); border: 1px solid var(--edge);
+  border-radius: var(--radius-sm); padding: 7px 9px; font-size: 12px; font-family: inherit;
+}
+.embed-field input:focus, .embed-field select:focus { outline: none; border-color: var(--accent); }
+.embed-row { display: flex; gap: 8px; }
+.embed-row .embed-field { flex: 1; }
+.embed-field--num { flex: 0 0 112px; }
+.embed-actions { display: flex; gap: 8px; }
+.embed-actions .btn { flex: 1; }
+.btn-sm { padding: 6px 10px; font-size: 11.5px; }
+
 /* ---------------- night timeline ---------------- */
 #timeline-canvas { width: 100%; height: 180px; display: block; }
 .tl-legend {
@@ -336,7 +378,7 @@ select { color-scheme: dark; }
 /* ---------------- panel chrome (고정핀/크기/접기/드래그) ---------------- */
 .card-head { cursor: grab; }
 .card-head:active { cursor: grabbing; }
-.panel-tools { display: flex; gap: 4px; }
+.panel-tools { display: flex; gap: 4px; margin-left: auto; }
 .pt-btn {
   background: none; border: 1px solid transparent; color: var(--faint);
   border-radius: 5px; cursor: pointer; font-size: 11px; padding: 2px 5px; line-height: 1;

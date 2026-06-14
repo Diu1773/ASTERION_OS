@@ -613,6 +613,24 @@ function addPanelTools(item, tab) {
   };
 }
 
+// 행(row) 기준 격자 레이아웃 — Muuri 기본은 masonry라 높이로 패킹해, 같은 줄
+// 카드 높이가 다르면 계단처럼 어긋난다. 이 레이아웃은 폭(wN)을 보고 한 줄을
+// 채우되 그 줄의 모든 카드를 같은 y(이전 줄의 최대 높이 아래)에 정렬해, 진짜
+// 격자(2열 2행 등)로 보이게 한다. 드래그 재배치/리사이즈는 그대로 동작.
+function rowGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
+  const slots = [];
+  let x = 0, y = 0, rowH = 0;
+  for (let i = 0; i < items.length; i++) {
+    const w = items[i].getWidth();    // 마진 포함 외곽 폭 (여기선 마진 0)
+    const h = items[i].getHeight();
+    if (x > 0 && x + w > gridWidth + 1) { x = 0; y += rowH; rowH = 0; }  // 다음 줄로
+    slots.push(x, y);
+    x += w;
+    if (h > rowH) rowH = h;
+  }
+  callback({ id: layoutId, items, slots, styles: { height: (y + rowH) + "px" } });
+}
+
 function ensureGrid(tab) {
   if (grids[tab]) { grids[tab].refreshItems().layout(true); return grids[tab]; }
   const el = document.getElementById(`grid-${tab}`);
@@ -622,11 +640,7 @@ function ensureGrid(tab) {
     dragEnabled: true,
     dragHandle: ".card-head",
     dragContainer: document.body,
-    // rounding:false — 슬롯을 정수로 반올림하면 행 합이 컨테이너와 같을 때
-    // 1px 넘쳐 매 행이 줄바꿈된다. 서브픽셀 폭이 정확히 99.99%라 갭 없이 채워짐.
-    // fillGaps:false — 작은 카드를 빈틈에 욱여넣지 않고 줄(row) 기준으로 정렬해
-    // 깔끔한 그리드를 만든다(모자이크 X). 폭은 줄마다 100%로 타일링되게 맞춤.
-    layout: { fillGaps: false, rounding: false },
+    layout: rowGridLayout,   // 행 단위 정렬 격자 (masonry 계단현상 제거)
     layoutDuration: 300,
     layoutEasing: "cubic-bezier(.2,.8,.2,1)",
     dragStartPredicate: (item, e) => {
@@ -1334,5 +1348,112 @@ window.addEventListener("resize", () => {
     drawAllCharts();
   }, 150);
 });
+
+// ---------------- 임베드 패널 (위성영상·CCTV 등 외부 소스 붙여넣기) ----------------
+// Grafana 패널처럼 URL만 붙여넣으면 이미지/MJPEG/페이지를 카드 안에 띄운다.
+// 설정은 패널별로 localStorage(asterion.embed.<id>)에 저장된다. (ENV 탭)
+(function initEmbeds() {
+  const EKEY = (id) => `asterion.embed.${id}`;
+  const timers = {};
+  const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return u.slice(0, 36); } };
+  const q = (sel) => document.querySelector(sel);
+  const loadCfg = (id) => {
+    try { return JSON.parse(localStorage.getItem(EKEY(id)) || "null") || {}; }
+    catch (e) { return {}; }
+  };
+  const storeCfg = (id, cfg) => {
+    try { localStorage.setItem(EKEY(id), JSON.stringify(cfg)); } catch (e) { /* noop */ }
+  };
+
+  function renderEmbed(id) {
+    const view = q(`.embed-view[data-embed="${id}"]`);
+    if (!view) return;
+    const img = view.querySelector(".embed-img");
+    const frame = view.querySelector(".embed-frame");
+    const empty = view.querySelector(".embed-empty");
+    const meta = q(`.embed-meta[data-embed-meta="${id}"]`);
+    const cfg = loadCfg(id);
+
+    clearInterval(timers[id]);
+    img.classList.remove("on"); frame.classList.remove("on");
+    img.removeAttribute("src"); frame.removeAttribute("src");
+    img.onerror = null;
+
+    if (!cfg.url) {
+      empty.style.display = "";
+      if (meta) meta.textContent = "—";
+      return;
+    }
+    empty.style.display = "none";
+    const tag = hostOf(cfg.url);
+
+    if (cfg.type === "iframe") {
+      frame.src = cfg.url;
+      frame.classList.add("on");
+      if (meta) meta.textContent = "페이지 · " + tag;
+      return;
+    }
+    // image·stream 둘 다 <img>로 표시 (MJPEG는 브라우저가 스트림을 유지)
+    img.onerror = () => { if (meta) meta.textContent = "로드 실패 · " + tag; };
+    img.classList.add("on");
+    if (cfg.type === "stream") {
+      img.src = cfg.url;
+      if (meta) meta.textContent = "스트림 · " + tag;
+    } else {
+      const bust = () => {
+        const sep = cfg.url.includes("?") ? "&" : "?";
+        img.src = cfg.url + sep + "_t=" + Date.now();   // 캐시버스트로 새 프레임
+      };
+      bust();
+      const sec = Math.max(0, Number(cfg.interval) || 0);
+      if (sec > 0) timers[id] = setInterval(bust, sec * 1000);
+      if (meta) meta.textContent = (sec > 0 ? `이미지 · ${sec}s 갱신` : "이미지") + " · " + tag;
+    }
+  }
+
+  function showEditor(id, open) {
+    const editor = q(`.embed-editor[data-embed-editor="${id}"]`);
+    if (!editor) return;
+    if (open) {
+      const cfg = loadCfg(id);
+      editor.querySelector("[data-embed-url]").value = cfg.url || "";
+      if (cfg.type) editor.querySelector("[data-embed-type]").value = cfg.type;
+      if (cfg.interval != null) editor.querySelector("[data-embed-interval]").value = cfg.interval;
+    }
+    editor.hidden = !open;
+    const g = grids[currentTab()]; if (g) g.refreshItems().layout(true);   // 높이 변화 → 재팩킹
+  }
+
+  document.querySelectorAll("[data-embed-gear]").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();   // 카드헤드 드래그/접기와 충돌 방지
+      const id = btn.dataset.embedGear;
+      const editor = q(`.embed-editor[data-embed-editor="${id}"]`);
+      showEditor(id, editor.hidden);
+    };
+  });
+
+  document.querySelectorAll(".embed-editor").forEach((editor) => {
+    const id = editor.dataset.embedEditor;
+    editor.querySelector("[data-embed-save]").onclick = () => {
+      storeCfg(id, {
+        url: editor.querySelector("[data-embed-url]").value.trim(),
+        type: editor.querySelector("[data-embed-type]").value,
+        interval: Number(editor.querySelector("[data-embed-interval]").value) || 0,
+      });
+      renderEmbed(id);
+      showEditor(id, false);
+    };
+    editor.querySelector("[data-embed-clear]").onclick = () => {
+      try { localStorage.removeItem(EKEY(id)); } catch (e) { /* noop */ }
+      editor.querySelector("[data-embed-url]").value = "";
+      renderEmbed(id);
+      showEditor(id, false);
+    };
+    editor.querySelector("[data-embed-cancel]").onclick = () => showEditor(id, false);
+  });
+
+  document.querySelectorAll(".embed-view[data-embed]").forEach((v) => renderEmbed(v.dataset.embed));
+})();
 
 init();

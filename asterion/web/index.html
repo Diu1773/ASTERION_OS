@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=045">
+<link rel="stylesheet" href="/static/style.css?v=047">
 </head>
 <body>
 
@@ -276,6 +276,84 @@
       </section>
       </div>
 
+      <!-- 위성영상 — 외부 소스 붙여넣기(기상위성·대시보드). ⚙로 URL 설정 -->
+      <div class="muuri-item w6" data-panel="embed-sat">
+      <section class="muuri-item-content card">
+        <div class="card-head">
+          <span class="card-title">위성영상</span>
+          <span class="card-tag">SATELLITE</span>
+          <button class="embed-gear" data-embed-gear="sat" title="소스 설정" aria-label="위성영상 소스 URL 설정">⚙</button>
+        </div>
+        <div class="embed-view" data-embed="sat">
+          <img class="embed-img" alt="">
+          <iframe class="embed-frame" referrerpolicy="no-referrer" allowfullscreen></iframe>
+          <div class="embed-empty">⚙ 를 눌러 위성영상·대시보드 URL을 붙여넣으세요</div>
+        </div>
+        <div class="embed-meta" data-embed-meta="sat">—</div>
+        <div class="embed-editor" data-embed-editor="sat" hidden>
+          <label class="embed-field"><span>소스 URL</span>
+            <input type="url" data-embed-url placeholder="https://… 이미지(.jpg/.png)·MJPEG·페이지">
+          </label>
+          <div class="embed-row">
+            <label class="embed-field"><span>유형</span>
+              <select data-embed-type>
+                <option value="image">이미지 (자동 새로고침)</option>
+                <option value="stream">스트림 (MJPEG)</option>
+                <option value="iframe">페이지 (iframe)</option>
+              </select>
+            </label>
+            <label class="embed-field embed-field--num"><span>새로고침(초)</span>
+              <input type="number" data-embed-interval min="0" step="10" value="300">
+            </label>
+          </div>
+          <div class="embed-actions">
+            <button class="btn btn-sm btn-go" data-embed-save>저장</button>
+            <button class="btn btn-sm" data-embed-clear>지우기</button>
+            <button class="btn btn-sm" data-embed-cancel>닫기</button>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <!-- CCTV — 관측소 카메라(MJPEG 스트림 권장). ⚙로 URL 설정 -->
+      <div class="muuri-item w6" data-panel="embed-cctv">
+      <section class="muuri-item-content card">
+        <div class="card-head">
+          <span class="card-title">CCTV</span>
+          <span class="card-tag">CAMERA FEED</span>
+          <button class="embed-gear" data-embed-gear="cctv" title="소스 설정" aria-label="CCTV 소스 URL 설정">⚙</button>
+        </div>
+        <div class="embed-view" data-embed="cctv">
+          <img class="embed-img" alt="">
+          <iframe class="embed-frame" referrerpolicy="no-referrer" allowfullscreen></iframe>
+          <div class="embed-empty">⚙ 를 눌러 CCTV 스트림 URL을 붙여넣으세요</div>
+        </div>
+        <div class="embed-meta" data-embed-meta="cctv">—</div>
+        <div class="embed-editor" data-embed-editor="cctv" hidden>
+          <label class="embed-field"><span>소스 URL</span>
+            <input type="url" data-embed-url placeholder="http://…/mjpeg, .jpg 스냅샷, 또는 페이지">
+          </label>
+          <div class="embed-row">
+            <label class="embed-field"><span>유형</span>
+              <select data-embed-type>
+                <option value="stream">스트림 (MJPEG)</option>
+                <option value="image">이미지 (자동 새로고침)</option>
+                <option value="iframe">페이지 (iframe)</option>
+              </select>
+            </label>
+            <label class="embed-field embed-field--num"><span>새로고침(초)</span>
+              <input type="number" data-embed-interval min="0" step="5" value="5">
+            </label>
+          </div>
+          <div class="embed-actions">
+            <button class="btn btn-sm btn-go" data-embed-save>저장</button>
+            <button class="btn btn-sm" data-embed-clear>지우기</button>
+            <button class="btn btn-sm" data-embed-cancel>닫기</button>
+          </div>
+        </div>
+      </section>
+      </div>
+
     </div>
   </section>
 
@@ -438,6 +516,6 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=045"></script>
+<script src="/static/app.js?v=047"></script>
 </body>
 </html>

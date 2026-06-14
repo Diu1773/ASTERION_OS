@@ -120,20 +120,6 @@ function drawSpark(id, buf, color) {
 
 let skyTarget = null;   // {alt, az, ts} — 클릭으로 지정한 목표
 let skyGeom = null;     // {cx, cy, R} — 마지막 그리기 기하 (클릭 역변환용)
-let mountDraw = null;   // 화면에 그리는 망원경 위치 (서버 1Hz 값으로 이징)
-
-// 서버 위치(1Hz, 슬루 보간됨)를 향해 매 프레임 부드럽게 따라감
-function easeMount(m) {
-  // 실물 ASCOM 마운트가 슬루 중 null/NaN을 내뱉으면 마커가 순간이동하므로 무시
-  if (m.alt == null || m.az == null || Number.isNaN(m.alt) || Number.isNaN(m.az))
-    return mountDraw;
-  if (!mountDraw) { mountDraw = { alt: m.alt, az: m.az }; return mountDraw; }
-  const k = 0.2;
-  mountDraw.alt += (m.alt - mountDraw.alt) * k;
-  const daz = ((m.az - mountDraw.az + 540) % 360) - 180;
-  mountDraw.az = (mountDraw.az + daz * k + 360) % 360;
-  return mountDraw;
-}
 
 function drawSky(s) {
   const cv = $("sky-canvas"); if (!cv) return;
@@ -185,7 +171,7 @@ function drawSky(s) {
 
   const hasMount = m.alt != null && m.az != null &&
                    !Number.isNaN(m.alt) && !Number.isNaN(m.az);
-  const md = hasMount ? easeMount(m) : null;  // 부드러운 보간 위치
+  const md = hasMount ? { alt: m.alt, az: m.az } : null;  // 라이브 위치(실시간, 보간 없음)
 
   // 클릭 목표 마커 (주황 다이아) + 망원경→목표 점선
   if (skyTarget) {
@@ -969,8 +955,8 @@ function applyStatus(s) {
   $("btn-twilight").classList.toggle("active", !!tw.enabled);
   $("twilight-row").style.display =
     (s.mode === "sim" || tw.enabled) ? "" : "none";
-  drawSky(s);
-  kickSky();  // 위치가 바뀌었으면 마커가 부드럽게 따라가도록 애니메이션 재개
+  drawSky(s);   // 1Hz 라이브 위치를 즉시 렌더 (보간 없음 = 실시간)
+  kickSky();    // 목표 마커 펄스 애니메이션만 (필요할 때) 재개
 
   // 오토플랫
   const [aduMin, aduMax] = aduRange();
@@ -1121,26 +1107,12 @@ async function initPreview() {
 
 let skyRaf = 0;
 function skyNeedsAnim() {
-  if (!lastStatus) return false;
-  const m = lastStatus.mount || {};
-  if (m.slewing || skyTarget) return true;
-  if (mountDraw && m.alt != null && m.az != null) {
-    const daz = Math.abs(((m.az - mountDraw.az + 540) % 360) - 180);
-    if (Math.abs(m.alt - mountDraw.alt) > 0.05 || daz > 0.05) return true;
-  }
-  return false;
+  // 목표 마커 펄스만 rAF로 애니메이션. 마운트는 1Hz 라이브 위치라 보간 불필요
+  // (실물 마운트의 실제 위치를 그대로 표시 = 실시간).
+  return !!skyTarget;
 }
 function skyLoop() {
-  if (lastStatus) {
-    drawSky(lastStatus);   // easeMount()로 mountDraw를 보간
-    // 슬루 중엔 ALT/AZ 숫자도 보간값으로 부드럽게 — 1Hz 스냅샷의 뚝뚝 끊김 제거
-    // (실물 PWI4/ASCOM도 1Hz 폴링이라 동일하게 부드러워진다)
-    const m = lastStatus.mount || {};
-    if (mountDraw && (m.slewing || skyNeedsAnim())) {
-      $("m-alt").textContent = fmt(mountDraw.alt, 2, "°");
-      $("m-az").textContent = fmt(mountDraw.az, 2, "°");
-    }
-  }
+  if (lastStatus) drawSky(lastStatus);
   skyRaf = skyNeedsAnim() ? requestAnimationFrame(skyLoop) : 0;
 }
 function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }

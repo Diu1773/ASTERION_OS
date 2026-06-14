@@ -225,6 +225,11 @@ input, select {
 .cap-form input, .cap-form select, .af-form input { width: 100%; }
 input::placeholder { color: var(--faint); }
 input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* 펼쳐진 드롭다운 목록(OS 렌더)도 다크로 — 흰 글씨가 흰 배경에 묻히는 것 방지 */
+select option, select optgroup {
+  background: #12161e; color: var(--text);
+}
+select { color-scheme: dark; }
 .btn {
   background: rgba(255,255,255,.045); color: var(--text); border: 1px solid var(--edge);
   border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 500;

@@ -142,7 +142,7 @@ class DeviceSpec:
 
 REGISTRY: dict[str, DeviceSpec] = {
     "mount": DeviceSpec(
-        "mount", "망원경", "status", _sim_mount,
+        "mount", "마운트", "status", _sim_mount,
         {"pwi4": _pwi4_mount, "ascom": _ascom_mount},
         ascom_type="Telescope",
         progid_key="drivers.ascom.mount_progid",

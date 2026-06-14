@@ -818,6 +818,9 @@ function renderConnLive() {
     const dot = root.querySelector('[data-role="dot"]');
     dot.classList.toggle("on", on);
     dot.classList.toggle("off", !on);
+    const chip = root.querySelector('[data-role="backend"]');  // 드라이버 칩도 상태색
+    chip.classList.toggle("on", on);
+    chip.classList.toggle("off", !on);
     root.querySelector('[data-role="name"]').textContent =
       on ? (d.device_name || d.name || "연결됨") : "미연결";
     root.querySelector('[data-role="detail"]').textContent = d.detail || "";

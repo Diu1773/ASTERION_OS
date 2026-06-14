@@ -726,8 +726,9 @@ function connDevHtml(dev) {
     <div class="conn-dev-top">
       <span class="cd-dot" data-role="dot"></span>
       <span class="cd-label">${escapeHtml(dev.label)}</span>
-      <span class="cd-backend" data-role="backend" title="드라이버/어댑터">${dev.backend}</span>
-      <span class="cd-name" data-role="name"></span>
+      <span class="cd-backend" data-role="backend" title="프로토콜/어댑터">${dev.backend}</span>
+      <span class="cd-name" data-role="name" title="장비명"></span>
+      <span class="cd-state off" data-role="state">미연결</span>
     </div>
     ${backend}${cfg}
     <div class="conn-dev-actions">
@@ -818,13 +819,25 @@ function renderConnLive() {
     const dot = root.querySelector('[data-role="dot"]');
     dot.classList.toggle("on", on);
     dot.classList.toggle("off", !on);
-    const chip = root.querySelector('[data-role="backend"]');  // 드라이버 칩도 상태색
-    chip.classList.toggle("on", on);
-    chip.classList.toggle("off", !on);
+    // 장비명 — 드라이버가 보고하는 이름 (연결 시에만, 예: Hubo-i)
     root.querySelector('[data-role="name"]').textContent =
-      on ? (d.device_name || d.name || "연결됨") : "미연결";
+      on ? (d.device_name || d.name || "") : "";
+    // 명시적 상태 — 연결됨 / 미연결 / 연결됨·응답대기 (드라이버만 붙고 실제 데이터 없음)
+    const st = root.querySelector('[data-role="state"]');
+    if (!on) { st.textContent = "미연결"; st.className = "cd-state off"; }
+    else if (deviceResponding(dev.key, d)) { st.textContent = "연결됨"; st.className = "cd-state on"; }
+    else { st.textContent = "연결됨 · 응답대기"; st.className = "cd-state warn"; }
     root.querySelector('[data-role="detail"]').textContent = d.detail || "";
   });
+}
+
+// 드라이버는 connected라는데 실제 데이터가 오는지 — 가대 물리연결 안 됐는데
+// 드라이버만 붙어 connected로 뜨는 경우를 노란 '응답대기'로 구분.
+function deviceResponding(key, d) {
+  if (key === "mount") return d.alt != null || d.az != null || d.ra_hours != null;
+  if (key === "weather") return d.temp != null;
+  if (key === "focuser") return d.position != null;
+  return true;  // 카메라/필터휠 등은 connected로 충분
 }
 
 // ---------- 상태 반영 ----------

@@ -1,0 +1,13 @@
+# ASTERION OS — 런타임 의존성
+#   설치: .venv\Scripts\pip install -r requirements.txt
+fastapi>=0.136
+uvicorn>=0.49
+pydantic>=2.13
+httpx>=0.28           # PWI4 / Davis WeatherLink HTTP, 대상 이름 해석
+numpy>=2.4
+SQLAlchemy>=2.0       # 온톨로지 DB
+
+# 실제 ASCOM 하드웨어 연결 시 필요 — Windows 전용.
+#   설치돼 있으면 시스템 탭의 ProgID 드롭다운이 설치된 드라이버로 자동 채워진다.
+#   (PWI4/Davis 백엔드는 httpx만 쓰므로 pywin32 없이도 동작)
+pywin32>=306; platform_system == "Windows"

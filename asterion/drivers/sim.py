@@ -61,6 +61,9 @@ class SimMount(MountDriver):
         self._track_radec: tuple[float, float] | None = None  # 트래킹 중 고정 RA/Dec
         # 슬루: (t0, dur, a0, z0, a1, z1) | None
         self._slew: tuple[float, float, float, float, float, float] | None = None
+        self._at_park = False
+        self._park_altaz = (0.0, 90.0)    # 기본 파킹 위치 (set_park로 변경 가능)
+        self._home_altaz = (45.0, 0.0)
 
     def connect(self) -> None:
         self._connected = True
@@ -99,7 +102,8 @@ class SimMount(MountDriver):
                 connected=self._connected, ra_hours=ra, dec_degs=dec,
                 alt_degs=alt, az_degs=az,
                 slewing=slewing and self._slew is not None,
-                tracking=self._tracking, detail="SIM",
+                tracking=self._tracking, at_park=self._at_park,
+                can_park=True, can_home=True, detail="SIM",
                 device_name="Sim Telescope",
             )
 
@@ -107,6 +111,7 @@ class SimMount(MountDriver):
         a0, z0 = self._current_altaz()
         self._alt, self._az = a0, z0
         self._track_radec = None  # 정착 후 재고정
+        self._at_park = False     # 움직이면 파킹 해제 (park()는 슬루 뒤 다시 True)
         dist = math.hypot(alt1 - a0, abs(self._az_delta(z0, az1)))
         dur = max(min_dur, dist / self.SLEW_RATE)
         self._slew = (time.time(), dur, a0, z0, alt1, az1)
@@ -147,6 +152,25 @@ class SimMount(MountDriver):
             self._slew = None
             self._tracking = False
             self._track_radec = None
+
+    def park(self) -> None:
+        with self._lock:
+            self._tracking = False
+            self._begin_slew(self._park_altaz[0], self._park_altaz[1])
+            self._at_park = True
+
+    def unpark(self) -> None:
+        with self._lock:
+            self._at_park = False
+
+    def find_home(self) -> None:
+        with self._lock:
+            self._tracking = False
+            self._begin_slew(self._home_altaz[0], self._home_altaz[1])
+
+    def set_park(self) -> None:
+        with self._lock:
+            self._park_altaz = self._current_altaz()   # 현재 위치를 파킹 위치로
 
 
 class SimFilterWheel(FilterWheelDriver):

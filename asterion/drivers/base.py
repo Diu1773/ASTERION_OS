@@ -34,6 +34,9 @@ class MountStatus:
     az_degs: float | None = None
     slewing: bool = False
     tracking: bool = False
+    at_park: bool = False
+    can_park: bool = False      # 드라이버가 파킹 지원 (UI 버튼 노출용)
+    can_home: bool = False      # 드라이버가 홈 찾기 지원
     detail: str = ""
     device_name: str = ""
 
@@ -46,7 +49,8 @@ class MountStatus:
             "ra_str": ephemeris.fmt_ra_hours(self.ra_hours),
             "dec_str": ephemeris.fmt_dec_degs(self.dec_degs),
             "slewing": self.slewing, "tracking": self.tracking,
-            "detail": self.detail,
+            "at_park": self.at_park, "can_park": self.can_park,
+            "can_home": self.can_home, "detail": self.detail,
         }
 
     def telemetry(self) -> dict:
@@ -166,6 +170,19 @@ class MountDriver(abc.ABC):
 
     @abc.abstractmethod
     def stop(self) -> None: ...
+
+    # 파킹/홈 — 기본은 미지원. 지원 드라이버(sim/ascom)가 오버라이드한다.
+    def park(self) -> None:
+        raise NotImplementedError("이 마운트는 파킹을 지원하지 않습니다")
+
+    def unpark(self) -> None:
+        raise NotImplementedError("이 마운트는 언파킹을 지원하지 않습니다")
+
+    def find_home(self) -> None:
+        raise NotImplementedError("이 마운트는 홈 찾기를 지원하지 않습니다")
+
+    def set_park(self) -> None:
+        raise NotImplementedError("이 마운트는 파킹 위치 설정을 지원하지 않습니다")
 
     def close(self) -> None:
         pass

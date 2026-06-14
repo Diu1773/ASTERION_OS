@@ -307,6 +307,34 @@ def create_app() -> FastAPI:
                       func=lambda: asyncio.to_thread(mount.stop))
         return {"ok": True}
 
+    @app.post("/api/actions/mount/park")
+    async def mount_park():
+        mount = drivers["mount"]
+        await bus.run("mount_park", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(mount.park))
+        return {"ok": True}
+
+    @app.post("/api/actions/mount/unpark")
+    async def mount_unpark():
+        mount = drivers["mount"]
+        await bus.run("mount_unpark", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(mount.unpark))
+        return {"ok": True}
+
+    @app.post("/api/actions/mount/home")
+    async def mount_home():
+        mount = drivers["mount"]
+        await bus.run("mount_find_home", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(mount.find_home))
+        return {"ok": True}
+
+    @app.post("/api/actions/mount/setpark")
+    async def mount_setpark():
+        mount = drivers["mount"]
+        await bus.run("mount_set_park", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(mount.set_park))
+        return {"ok": True}
+
     @app.post("/api/actions/filter")
     async def filter_set(req: FilterReq):
         fw = drivers["filterwheel"]

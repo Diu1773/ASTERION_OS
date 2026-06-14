@@ -80,6 +80,8 @@ class AscomMount(MountDriver):
                 ra_hours=g("RightAscension"), dec_degs=g("Declination"),
                 alt_degs=g("Altitude"), az_degs=g("Azimuth"),
                 slewing=b("Slewing"), tracking=b("Tracking"),
+                at_park=b("AtPark"), can_park=b("CanPark"),
+                can_home=b("CanFindHome"),
                 detail=self._progid, device_name=self._name)
         try:
             return self._call(_do)
@@ -129,6 +131,18 @@ class AscomMount(MountDriver):
 
     def stop(self) -> None:
         self._call(lambda: self._dev.AbortSlew())
+
+    def park(self) -> None:
+        self._call(lambda: self._dev.Park())
+
+    def unpark(self) -> None:
+        self._call(lambda: self._dev.Unpark())
+
+    def find_home(self) -> None:
+        self._call(lambda: self._dev.FindHome())
+
+    def set_park(self) -> None:
+        self._call(lambda: self._dev.SetPark())   # 현재 위치를 파킹 위치로 저장
 
     def close(self) -> None:
         try:

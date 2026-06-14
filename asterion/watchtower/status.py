@@ -21,11 +21,24 @@ from ..core import ephemeris
 from ..core.events import EventHub
 from ..core.ontology import Db, WeatherRecord
 from ..drivers import REGISTRY
+from ..drivers.base import (
+    CameraStatus, FilterStatus, FocuserStatus, MountStatus, WeatherStatus,
+)
 from ..drivers.sim import TwilightSim
 
 KST = timezone(timedelta(hours=9))
 
 TELEMETRY_MAXLEN = 3600  # 1 Hz × 1시간
+STATUS_TIMEOUT_S = 3.0   # 장비 status()가 이 시간 안에 안 오면 응답없음 처리
+
+# 응답 없는 장비용 오프라인 상태 (멈춘 COM 호출이 대시보드를 얼리지 않게)
+_OFFLINE = {
+    "mount": lambda: MountStatus(connected=False, detail="응답 없음 (시간 초과)"),
+    "camera": lambda: CameraStatus(connected=False, detail="응답 없음 (시간 초과)"),
+    "filterwheel": lambda: FilterStatus(connected=False),
+    "focuser": lambda: FocuserStatus(connected=False, detail="응답 없음 (시간 초과)"),
+    "weather": lambda: WeatherStatus(connected=False, detail="응답 없음 (시간 초과)"),
+}
 
 
 class StatusSampler:
@@ -41,6 +54,7 @@ class StatusSampler:
         self.capture_status = lambda: {"active": False, "state": "idle"}
         self.telemetry: deque[tuple[float, dict]] = deque(maxlen=TELEMETRY_MAXLEN)
         self._task: asyncio.Task | None = None
+        self._stuck: dict[str, Any] = {}   # key → 응답없어 폴링 보류 중인 드라이버 인스턴스
         self._last_weather_db = 0.0
         self._lat = float(cfg.get("site.latitude", 36.6))
         self._lon = float(cfg.get("site.longitude", 127.5))
@@ -112,7 +126,24 @@ class StatusSampler:
         device_snaps: dict[str, dict] = {}
         flat_telemetry: dict[str, Any] = {}
         for key, spec in REGISTRY.items():
-            st = await asyncio.to_thread(getattr(self.drivers[key], spec.status_attr))
+            drv = self.drivers[key]
+            if self._stuck.get(key) is drv:
+                st = _OFFLINE[key]()        # 멈춘 인스턴스 → 폴링 스킵 (재연결 전까지)
+            else:
+                try:
+                    st = await asyncio.wait_for(
+                        asyncio.to_thread(getattr(drv, spec.status_attr)),
+                        timeout=STATUS_TIMEOUT_S)
+                    self._stuck.pop(key, None)
+                except asyncio.TimeoutError:
+                    # 죽은 하드웨어의 COM 호출이 멈춤 → 그 장비만 보류, 대시보드는 계속.
+                    # 재연결로 새 인스턴스가 들어오면 자동 재개된다.
+                    self._stuck[key] = drv
+                    self.events.log("status", f"{spec.label} 응답 없음 — 폴링 보류 "
+                                    "(재연결하면 재개)", "warn")
+                    st = _OFFLINE[key]()
+                except Exception:
+                    st = _OFFLINE[key]()
             statuses[key] = st
             device_snaps[spec.snap_key] = st.snapshot()
             flat_telemetry.update(st.telemetry())

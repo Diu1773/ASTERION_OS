@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=042">
+<link rel="stylesheet" href="/static/style.css?v=043">
 </head>
 <body>
 
@@ -51,7 +51,7 @@
       <!-- 하늘 돔 -->
       <div class="muuri-item w4" data-panel="sky">
       <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">하늘</span><span class="card-tag">ALL-SKY</span></div>
+        <div class="card-head"><span class="card-title">Sky Panel</span><span class="card-tag">ALL-SKY</span></div>
         <div class="sky-wrap" id="sky-wrap">
           <canvas id="sky-canvas"></canvas>
           <div class="sky-menu" id="sky-menu"></div>
@@ -113,6 +113,7 @@
         <div class="pills">
           <span class="pill" id="m-track">TRACKING</span>
           <span class="pill" id="m-slew">SLEWING</span>
+          <span class="pill" id="m-park">PARKED</span>
         </div>
         <div class="ctrl-row">
           <input id="in-target" type="text" placeholder="대상 검색 (M42, NGC7789…)">
@@ -150,6 +151,12 @@
         <div class="ctrl-row">
           <button id="btn-tracking" class="btn">Tracking</button>
           <button id="btn-stop" class="btn btn-danger">STOP</button>
+        </div>
+        <div class="ctrl-row" id="park-row">
+          <button id="btn-park" class="btn">Park</button>
+          <button id="btn-unpark" class="btn">Unpark</button>
+          <button id="btn-home" class="btn">Home</button>
+          <button id="btn-setpark" class="btn" title="현재 위치를 파킹 위치로 저장">Set Park</button>
         </div>
       </section>
       </div>
@@ -429,6 +436,6 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=042"></script>
+<script src="/static/app.js?v=043"></script>
 </body>
 </html>

@@ -349,6 +349,32 @@ class ConnectionManager:
             self._log(f"ASCOM 목록 조회 실패 ({spec.ascom_type}): {exc}", "warn")
             return []
 
+    def setup_dialog(self, key: str) -> None:
+        """장치 ASCOM 드라이버의 설정창(SetupDialog)을 띄운다 — COM 포트 등.
+        모달 창이 이 프로세스 데스크톱(=관측 PC)에 뜬다. 사용자가 포트를 정하고
+        닫으면 ASCOM Profile에 저장돼 이후 connect가 성공한다 (NINA의 'Properties'와
+        동일). ProgID가 설정돼 있어야 한다."""
+        spec = REGISTRY[key]
+        progid = str(self.cfg.get(spec.progid_key, "")) if spec.progid_key else ""
+        if not spec.ascom_type:
+            raise ValueError(f"{spec.label}: ASCOM 장비가 아니라 설정창이 없습니다")
+        if not progid:
+            raise ValueError(f"{spec.label}: 먼저 ASCOM ProgID를 선택·저장하세요")
+
+        def _show():
+            import win32com.client
+            dev = win32com.client.Dispatch(progid)
+            try:
+                dev.SetupDialog()
+            finally:
+                try:
+                    dev.Dispose()
+                except Exception:
+                    pass
+
+        _run_com(_show)
+        self._log(f"{spec.label} 드라이버 설정창 닫힘 ({progid})")
+
     def configure(self, key: str, *, progid: str | None = None,
                   url: str | None = None, backend: str | None = None) -> None:
         """기기별 설정을 오버레이에 저장 (config.toml은 손대지 않음)."""

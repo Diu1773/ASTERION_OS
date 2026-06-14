@@ -707,7 +707,8 @@ function connDevHtml(dev) {
   if (dev.has_progid) {
     cfg += `<div class="conn-dev-cfg"><span class="cfg-lbl">ASCOM ProgID</span>` +
       `<select data-cfg="progid" data-dev="${dev.key}"></select>` +
-      `<button class="btn" data-act="save" data-dev="${dev.key}">저장</button></div>`;
+      `<button class="btn" data-act="save" data-dev="${dev.key}">저장</button>` +
+      `<button class="btn" data-act="setup" data-dev="${dev.key}" title="드라이버 설정창 (COM 포트 등)">⚙</button></div>`;
   }
   if (dev.has_url) {
     cfg += `<div class="conn-dev-cfg"><span class="cfg-lbl">URL / IP</span>` +
@@ -792,7 +793,12 @@ async function deviceAction(key, act, root) {
     if (uinp) body.url = uinp.value.trim();
     return saveDeviceCfg(key, body);
   }
-  try {
+  if (act === "setup") {   // 드라이버 설정창(모달) — 응답은 {ok}, 목록 갱신만
+    try { await post("/api/system/setup", { device: key }); refreshDevices(); }
+    catch (e) { /* post()가 이미 로그 */ }
+    return;
+  }
+  try {   // connect / disconnect / reconnect → describe() 반환
     deviceConfig = await post(`/api/system/${act}`, { device: key });
     renderConnList();
   } catch (e) { /* post()가 이미 로그 */ }
@@ -828,6 +834,11 @@ function renderConnLive() {
     else if (deviceResponding(dev.key, d)) { st.textContent = "연결됨"; st.className = "cd-state on"; }
     else { st.textContent = "연결됨 · 응답대기"; st.className = "cd-state warn"; }
     root.querySelector('[data-role="detail"]').textContent = d.detail || "";
+    // 버튼 활성화: 연결되면 [연결] 비활성, 끊겨 있으면 [해제] 비활성
+    const cBtn = root.querySelector('[data-act="connect"]');
+    const dBtn = root.querySelector('[data-act="disconnect"]');
+    if (cBtn) cBtn.disabled = on;
+    if (dBtn) dBtn.disabled = !on;
   });
 }
 

@@ -469,6 +469,18 @@ def create_app() -> FastAPI:
         events.log("system", f"{REGISTRY[req.device].label} 설정 저장")
         return conn.describe()
 
+    @app.post("/api/system/setup")
+    async def system_setup(req: DeviceReq):
+        """ASCOM 드라이버 설정창(SetupDialog) — 포트 등 (NINA의 Properties 격)."""
+        _device_or_404(req.device)
+        try:
+            await asyncio.to_thread(conn.setup_dialog, req.device)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except Exception as exc:
+            raise HTTPException(500, f"설정창 실패: {exc}")
+        return {"ok": True}
+
     @app.post("/api/system/connect")
     async def system_connect(req: DeviceReq):
         _device_or_404(req.device)

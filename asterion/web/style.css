@@ -133,6 +133,8 @@ body {
 .tab.active span { color: var(--dim); }
 
 .workspace { max-width: 1760px; margin: 0 auto; padding: 16px 18px 28px; }
+/* 하단 고정 로그 독(접힘 38px)이 콘텐츠 끝을 가리지 않게 여백 확보 */
+body { padding-bottom: 38px; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 
@@ -398,6 +400,45 @@ select { color-scheme: dark; }
 .log .l-src { color: var(--accent); }
 .log::-webkit-scrollbar, .card *::-webkit-scrollbar { width: 8px; height: 8px; }
 .log::-webkit-scrollbar-thumb, .card *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; }
+
+/* ---------------- 전역 라이브 로그 독 (모든 탭 하단, 접이식) ---------------- */
+.log-dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  display: flex; flex-direction: column;
+  background: rgba(12, 15, 22, 0.93);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--edge-strong);
+  max-height: 46vh;
+  transition: max-height .24s cubic-bezier(.2, .8, .2, 1);
+}
+.log-dock.collapsed { max-height: 38px; }
+.log-dock-head {
+  display: flex; align-items: center; gap: 12px;
+  height: 38px; flex: none; padding: 0 18px;
+  cursor: pointer; user-select: none;
+}
+.log-dock-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.log-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(74, 222, 128, .12); flex: none; }
+.log-dock-peek {
+  flex: 1; min-width: 0; color: var(--faint); font-size: 11px;
+  font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: opacity .15s;
+}
+.log-dock:not(.collapsed) .log-dock-peek { opacity: 0; }
+.log-dock-toggle {
+  flex: none; width: 26px; height: 22px; cursor: pointer; font-size: 11px;
+  background: none; border: 1px solid var(--edge); border-radius: 7px; color: var(--dim);
+  transition: transform .22s, color .15s, border-color .15s;
+}
+.log-dock-toggle:hover { color: var(--text); border-color: var(--edge-strong); }
+.log-dock.collapsed .log-dock-toggle { transform: rotate(180deg); }
+/* 독 안의 로그는 패널용 고정 높이/테두리를 버리고 독에 꽉 채운다 */
+.log-dock .log {
+  flex: 1; min-height: 0; max-height: none;
+  border: none; border-radius: 0; background: transparent;
+  padding: 2px 18px 12px;
+}
+.log-dock.collapsed .log { display: none; }
 
 /* ---------------- tables ---------------- */
 .tbl-wrap { overflow-x: auto; }

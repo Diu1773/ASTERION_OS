@@ -89,6 +89,8 @@ function logLine(e) {
   logEl.appendChild(div);
   while (logEl.childNodes.length > 300) logEl.removeChild(logEl.firstChild);
   logEl.scrollTop = logEl.scrollHeight;
+  const peek = document.getElementById("log-dock-peek");   // 접힘 상태 미리보기(최신 1줄)
+  if (peek) peek.textContent = `${e.ts} [${e.source}] ${e.msg}`;
 }
 
 // ---------- 스파크라인 ----------
@@ -521,7 +523,7 @@ function currentTab() {
   const b = document.querySelector(".tab.active");
   return b ? b.dataset.tab : "control";
 }
-function layoutKey(tab) { return `asterion.layout.${tab}.v3`; }
+function layoutKey(tab) { return `asterion.layout.${tab}.v4`; }
 function widthClass(item) {
   return WIDTHS.find((w) => item.classList.contains(w)) || "w4";
 }
@@ -622,7 +624,9 @@ function ensureGrid(tab) {
     dragContainer: document.body,
     // rounding:false — 슬롯을 정수로 반올림하면 행 합이 컨테이너와 같을 때
     // 1px 넘쳐 매 행이 줄바꿈된다. 서브픽셀 폭이 정확히 99.99%라 갭 없이 채워짐.
-    layout: { fillGaps: true, rounding: false },
+    // fillGaps:false — 작은 카드를 빈틈에 욱여넣지 않고 줄(row) 기준으로 정렬해
+    // 깔끔한 그리드를 만든다(모자이크 X). 폭은 줄마다 100%로 타일링되게 맞춤.
+    layout: { fillGaps: false, rounding: false },
     layoutDuration: 300,
     layoutEasing: "cubic-bezier(.2,.8,.2,1)",
     dragStartPredicate: (item, e) => {
@@ -1293,6 +1297,20 @@ $("btn-layout-reset").onclick = () => {
   try { localStorage.removeItem(layoutKey(currentTab())); } catch (e) { /* noop */ }
   location.reload();
 };
+
+// 전역 로그 독 — 헤더 클릭으로 펼치기/접기, 상태를 localStorage에 저장
+const LOGDOCK_KEY = "asterion.logdock";
+function setLogDock(open) {
+  const dock = $("log-dock"); if (!dock) return;
+  dock.classList.toggle("collapsed", !open);
+  try { localStorage.setItem(LOGDOCK_KEY, open ? "1" : "0"); } catch (e) { /* noop */ }
+  if (open) logEl.scrollTop = logEl.scrollHeight;
+}
+$("log-dock-head").onclick = () =>
+  setLogDock($("log-dock").classList.contains("collapsed"));
+setLogDock((() => {
+  try { return localStorage.getItem(LOGDOCK_KEY) === "1"; } catch (e) { return false; }
+})());
 document.querySelectorAll("#mode-seg .seg-btn").forEach((b) => {
   b.onclick = async () => {
     if (b.classList.contains("active")) return;

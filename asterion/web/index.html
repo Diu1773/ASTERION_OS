@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=044">
+<link rel="stylesheet" href="/static/style.css?v=045">
 </head>
 <body>
 
@@ -49,7 +49,7 @@
     <div class="muuri" id="grid-control">
 
       <!-- 하늘 돔 -->
-      <div class="muuri-item w4" data-panel="sky">
+      <div class="muuri-item w6" data-panel="sky">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">Sky Panel</span><span class="card-tag">ALL-SKY</span></div>
         <div class="sky-wrap" id="sky-wrap">
@@ -67,7 +67,7 @@
       </div>
 
       <!-- 오토플랫 콘솔 -->
-      <div class="muuri-item w8" data-panel="skyflat">
+      <div class="muuri-item w6" data-panel="skyflat">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">오토플랫</span><span class="card-tag sys">SKYFLAT SYSTEM</span></div>
         <div class="af-grid">
@@ -103,7 +103,7 @@
       </div>
 
       <!-- 망원경 -->
-      <div class="muuri-item w3" data-panel="mount">
+      <div class="muuri-item w6" data-panel="mount">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">마운트</span><span class="card-tag conn" id="conn-mount">MOUNT</span></div>
         <div class="kv"><span>고도 ALT</span><b class="accent" id="m-alt">—</b></div>
@@ -162,7 +162,7 @@
       </div>
 
       <!-- 카메라 -->
-      <div class="muuri-item w4" data-panel="camera">
+      <div class="muuri-item w6" data-panel="camera">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">카메라</span><span class="card-tag conn" id="conn-camera">CAMERA</span></div>
         <div class="kv"><span>CCD 온도</span><b class="accent" id="c-temp">—</b></div>
@@ -200,7 +200,7 @@
       </div>
 
       <!-- 포커서 -->
-      <div class="muuri-item w3" data-panel="focuser">
+      <div class="muuri-item w6" data-panel="focuser">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">포커서</span><span class="card-tag conn" id="conn-focuser">FOCUSER</span></div>
         <div class="kv"><span>위치</span><b class="accent" id="f-pos">—</b></div>
@@ -221,7 +221,7 @@
       </div>
 
       <!-- 프레임 미리보기 -->
-      <div class="muuri-item w3" data-panel="image">
+      <div class="muuri-item w6" data-panel="image">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">프레임 미리보기</span><span class="card-tag">LATEST FRAME</span></div>
         <div class="frame-view" id="frame-view">
@@ -391,18 +391,20 @@
       </section>
       </div>
 
-      <!-- 라이브 로그 (장비 연결 옆에) -->
-      <div class="muuri-item w4 tall" data-panel="log">
-      <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">라이브 로그</span><span class="card-tag">LIVE LOG</span></div>
-        <div class="log" id="log"></div>
-      </section>
-      </div>
-
     </div>
   </section>
 
 </main>
+
+<!-- 전역 라이브 로그 독 — 모든 탭에서 하단 접이식으로 접근 (BOAO/Datadog 스타일) -->
+<section class="log-dock collapsed" id="log-dock">
+  <div class="log-dock-head" id="log-dock-head">
+    <span class="log-dock-title"><span class="log-dot"></span>라이브 로그 <span class="card-tag">LIVE LOG</span></span>
+    <span class="log-dock-peek" id="log-dock-peek">—</span>
+    <button class="log-dock-toggle" id="log-dock-toggle" title="펼치기 / 접기" aria-label="로그 펼치기/접기">▴</button>
+  </div>
+  <div class="log" id="log"></div>
+</section>
 
 <!-- 설정 드로어 (일반) -->
 <div class="drawer-overlay" id="dev-overlay"></div>
@@ -436,6 +438,6 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=044"></script>
+<script src="/static/app.js?v=045"></script>
 </body>
 </html>

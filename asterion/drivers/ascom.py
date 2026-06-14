@@ -270,13 +270,19 @@ class AscomFilterWheel(FilterWheelDriver):
                                 device_name=self._name)
         def _do():
             d = self._dev
-            try:
-                names = list(d.Names)
+            connected = bool(d.Connected)   # 연결 여부를 독립적으로 — 이동/호밍 중
+            try:                            # Position 읽기가 실패해도 connected를 뒤집지 않게.
+                names = list(d.Names)        # (안 그러면 워치독이 '끊김'으로 보고 재연결→재호밍 무한반복)
             except Exception:
                 names = list(self._fallback)
-            pos = int(d.Position)
-            name = names[pos] if 0 <= pos < len(names) else ""
-            return FilterStatus(connected=bool(d.Connected), position=pos,
+            try:
+                pos = int(d.Position)        # ASCOM 규약: 이동/호밍 중 -1
+            except Exception:
+                pos = -1
+            moving = pos < 0
+            name = "" if moving or not (0 <= pos < len(names)) else names[pos]
+            return FilterStatus(connected=connected,
+                                position=(None if moving else pos),
                                 name=name, names=names, device_name=self._name)
         try:
             return self._call(_do)

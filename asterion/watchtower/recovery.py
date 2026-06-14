@@ -28,8 +28,13 @@ class ConnectionWatchdog:
         self.interval = float(cfg.get("drivers.watchdog_interval_s", 5.0))
         self.base = float(cfg.get("drivers.reconnect_base_s", 5.0))
         self.cap = float(cfg.get("drivers.reconnect_max_s", 60.0))
+        # 끊김을 몇 번 연속 관측해야 '진짜 끊김'으로 보고 재연결할지 (디바운스).
+        # 1회 오탐(예: ZWO EFW가 호밍 중 잠깐 Connected=False/속성 오류)으로
+        # 재연결→슬롯 재생성→Connected=True 재설정→재호밍 무한반복을 막는다.
+        self.fail_threshold = max(1, int(cfg.get("drivers.reconnect_fail_threshold", 2)))
         self._attempts: dict[str, int] = {}   # key -> 연속 실패 횟수
         self._next: dict[str, float] = {}      # key -> 다음 시도 가능 시각
+        self._fails: dict[str, int] = {}       # key -> 연속 끊김 관측 횟수 (디바운스)
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -47,6 +52,19 @@ class ConnectionWatchdog:
     def _backoff(self, attempts: int) -> float:
         return min(self.base * (2 ** attempts), self.cap)
 
+    def _update_fail_counts(self, snapshot: dict) -> None:
+        """스냅샷을 보고 장비별 '연속 끊김 관측' 카운터를 갱신 (디바운스용).
+        연결됨/운영자 해제/미관측이면 0으로 리셋, 끊김이면 +1."""
+        for key, spec in REGISTRY.items():
+            if not self.conn.desired.get(key, False):
+                self._fails[key] = 0                       # 운영자가 끈 장비
+            elif spec.snap_key not in snapshot:
+                continue                                   # 미관측 → 카운트 보류
+            elif snapshot[spec.snap_key].get("connected"):
+                self._fails[key] = 0                       # 정상
+            else:
+                self._fails[key] = self._fails.get(key, 0) + 1
+
     def due_for_recovery(self, snapshot: dict, now: float) -> list[str]:
         """재연결을 시도해야 하는 장비 키 목록 (순수 함수 — 테스트 용이)."""
         out: list[str] = []
@@ -57,6 +75,8 @@ class ConnectionWatchdog:
                 continue                                  # 아직 관측 안 됨 → 판단 보류
             if snapshot[spec.snap_key].get("connected"):
                 continue                                  # 정상
+            if self._fails.get(key, 0) < self.fail_threshold:
+                continue                                  # 디바운스 — 일시 끊김(호밍 등)은 무시
             if now < self._next.get(key, 0.0):
                 continue                                  # 백오프 대기 중
             out.append(key)
@@ -74,12 +94,13 @@ class ConnectionWatchdog:
         if not snap:
             return
         now = time.time()
+        self._update_fail_counts(snap)        # 디바운스 카운터 갱신
         # 회복된 장비 백오프 리셋 + 회복 로그
         for key, spec in REGISTRY.items():
             dev = snap.get(spec.snap_key) or {}
             if dev.get("connected") and self.note_connected(key):
                 self.events.log("system", f"{spec.label} 자동 재연결 성공")
-        # 끊긴 장비 복구 시도
+        # 끊긴 장비 복구 시도 (디바운스 통과한 것만)
         for key in self.due_for_recovery(snap, now):
             attempts = self._attempts.get(key, 0)
             if attempts == 0:   # 끊김 첫 감지에만 경고 (재시도 로그 도배 방지)
@@ -89,6 +110,7 @@ class ConnectionWatchdog:
             await self.conn.reconnect(key)
             self._attempts[key] = attempts + 1
             self._next[key] = now + self._backoff(attempts)
+            self._fails[key] = 0   # 디바운스 리셋 — 재연결 직후 호밍/초기화 시간 확보
 
     async def _loop(self) -> None:
         while True:

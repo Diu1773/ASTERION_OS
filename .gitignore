@@ -11,3 +11,6 @@ __pycache__/
 asterion/data/
 *.log
 .DS_Store
+
+# Local config overrides (ProgID/URL saved from the SYSTEM tab) — machine-specific
+asterion/config.local.json

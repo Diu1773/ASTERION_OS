@@ -20,6 +20,7 @@ from ..config import Config
 from ..core import ephemeris
 from ..core.events import EventHub
 from ..core.ontology import Db, WeatherRecord
+from ..drivers import REGISTRY
 from ..drivers.sim import TwilightSim
 
 KST = timezone(timedelta(hours=9))
@@ -104,11 +105,20 @@ class StatusSampler:
             await asyncio.sleep(1.0)
 
     async def _sample(self) -> dict[str, Any]:
-        mount = await asyncio.to_thread(self.drivers["mount"].status)
-        camera = await asyncio.to_thread(self.drivers["camera"].status)
-        filt = await asyncio.to_thread(self.drivers["filterwheel"].status)
-        focuser = await asyncio.to_thread(self.drivers["focuser"].status)
-        weather = await asyncio.to_thread(self.drivers["weather"].read)
+        # 레지스트리 순회 — 각 장비의 status()/read()를 호출하고, Status가
+        # 스스로 서술하는 snapshot()/telemetry()를 모은다. 새 장비를 REGISTRY에
+        # 등록만 하면 대시보드 상태·1Hz 시계열에 자동 등장한다 (코드 변경 0).
+        statuses: dict[str, Any] = {}
+        device_snaps: dict[str, dict] = {}
+        flat_telemetry: dict[str, Any] = {}
+        for key, spec in REGISTRY.items():
+            st = await asyncio.to_thread(getattr(self.drivers[key], spec.status_attr))
+            statuses[key] = st
+            device_snaps[spec.snap_key] = st.snapshot()
+            flat_telemetry.update(st.telemetry())
+
+        mount, camera, weather = (statuses["mount"], statuses["camera"],
+                                  statuses["weather"])
 
         now = datetime.now(timezone.utc)
         sun_alt, sun_az = ephemeris.sun_altaz(now, self._lat, self._lon)
@@ -129,25 +139,15 @@ class StatusSampler:
             session_running=session_running,
         )
 
-        # 시계열 플롯 빌더용 수치 텔레메트리 (1 Hz 링버퍼)
-        flat_telemetry = {
-            "mount.alt": mount.alt_degs,
-            "mount.az": mount.az_degs,
-            "camera.ccd_temp": camera.ccd_temp_c,
-            "focuser.position": focuser.position,
-            "focuser.temp": focuser.temperature,
-            "weather.temp": weather.temp_c,
-            "weather.humidity": weather.humidity,
-            "weather.dew_point": weather.dew_point_c,
-            "weather.wind": weather.wind_ms,
-            "weather.cloud": weather.cloud_score,
+        # 장비 텔레메트리 + 샘플러 레벨 수치 (1 Hz 링버퍼)
+        flat_telemetry.update({
             "sun.alt": round(sun_alt, 2),
             "skyflat.last_adu": autoflat.get("last_adu"),
             "capture.last_median": capture.get("last_median"),
-        }
+        })
         self.telemetry.append((time.time(), flat_telemetry))
 
-        return {
+        snapshot = {
             "mode": self.drivers.get("mode", "sim"),
             "site": str(self.cfg.get("site.name", "")),
             "geo": {"lat": self._lat, "lon": self._lon},
@@ -167,47 +167,6 @@ class StatusSampler:
                 "enabled": self.twilight.enabled,
                 "factor": round(self.twilight.sky_factor(sun_alt), 5),
             },
-            "mount": {
-                "connected": mount.connected,
-                "name": mount.device_name,
-                "alt": None if mount.alt_degs is None else round(mount.alt_degs, 3),
-                "az": None if mount.az_degs is None else round(mount.az_degs, 3),
-                "ra_hours": mount.ra_hours,
-                "dec_degs": mount.dec_degs,
-                "ra_str": ephemeris.fmt_ra_hours(mount.ra_hours),
-                "dec_str": ephemeris.fmt_dec_degs(mount.dec_degs),
-                "slewing": mount.slewing, "tracking": mount.tracking,
-                "detail": mount.detail,
-            },
-            "camera": {
-                "connected": camera.connected,
-                "name": camera.device_name,
-                "ccd_temp": camera.ccd_temp_c,
-                "cooler_on": camera.cooler_on,
-                "state": camera.state, "detail": camera.detail,
-            },
-            "filter": {
-                "connected": filt.connected, "position": filt.position,
-                "name": filt.name, "names": filt.names,
-                "device_name": filt.device_name,
-            },
-            "focuser": {
-                "connected": focuser.connected,
-                "name": focuser.device_name,
-                "position": focuser.position,
-                "moving": focuser.moving,
-                "temperature": focuser.temperature,
-                "max_position": focuser.max_position,
-                "detail": focuser.detail,
-            },
-            "weather": {
-                "connected": weather.connected,
-                "name": weather.device_name,
-                "temp": weather.temp_c, "humidity": weather.humidity,
-                "dew_point": weather.dew_point_c, "wind": weather.wind_ms,
-                "wind_dir": weather.wind_dir_deg,
-                "cloud": weather.cloud_score, "rain": weather.rain,
-            },
             "safety": saf,
             "autoflat": autoflat,
             "capture": capture,
@@ -217,3 +176,5 @@ class StatusSampler:
                 "capture": self.cfg.get("capture", {}) or {},
             },
         }
+        snapshot.update(device_snaps)  # mount/camera/filter/focuser/weather
+        return snapshot

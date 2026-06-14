@@ -138,6 +138,7 @@ function drawSky(s) {
   const { ctx, w, h } = hidpi(cv);
   ctx.clearRect(0, 0, w, h);
   const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 12;
+  if (R <= 0) return;   // 숨겨진 탭이면 캔버스 크기 0 → 반지름 음수 (그리기 생략)
   skyGeom = { cx, cy, R };
   const sun = s.sun || {}, tw = s.twilight_sim || {}, m = s.mount || {};
 
@@ -273,6 +274,7 @@ function drawGauge(af, aduMin, aduMax) {
   const { ctx, w, h } = hidpi(cv);
   ctx.clearRect(0, 0, w, h);
   const cx = w / 2, cy = h * 0.9, R = Math.min(w / 2, h * 0.86) - 10;
+  if (R <= 0) return;   // 숨겨진 탭이면 캔버스 크기 0 → 반지름 음수 (그리기 생략)
   const A0 = Math.PI, A1 = TAU;
   const scaleMax = Math.max(aduMax * 2, 40000);
   const val = af.last_adu || 0;
@@ -474,9 +476,12 @@ function addChart(keys, windowS, persist = true) {
     charts = charts.filter((c) => c.id !== id);
     tile.remove();
     saveCharts();
+    if (grids.analysis) grids.analysis.refreshItems().layout(true);  // 높이 줄어듦 반영
   };
   if (persist) saveCharts();
   drawChart(chart);
+  // 차트가 추가돼 플롯 패널이 커지면 즉시 다시 팩킹 (아래 패널과 겹침 방지)
+  if (grids.analysis) grids.analysis.refreshItems().layout(true);
 }
 
 function drawChart(chart) {
@@ -517,102 +522,306 @@ function drawChart(chart) {
 }
 function drawAllCharts() { charts.forEach(drawChart); }
 
-// ---------- 패널 매니저 (크기/접기/드래그/타일) ----------
+// ---------- 워크스페이스 탭 + Muuri 패널 매니저 (갭 없는 팩킹) ----------
 
-const LAYOUT_KEY = "asterion.layout.v1";
-const SPANS = [3, 4, 6, 8, 12];
+const WIDTHS = ["w3", "w4", "w6", "w8", "w12"];
+const TABS = ["control", "env", "plan", "analysis", "system"];
+const ACTIVE_TAB_KEY = "asterion.activetab";
+const grids = {};   // tab -> Muuri 인스턴스 (탭별 독립 그리드)
 
-function panelId(card) { return card.dataset.panel; }
-function getSpan(card) {
-  const m = [...card.classList].find((c) => /^span\d+$/.test(c));
-  return m ? Number(m.slice(4)) : 4;
+function currentTab() {
+  const b = document.querySelector(".tab.active");
+  return b ? b.dataset.tab : "control";
 }
-function setSpan(card, n) {
-  [...card.classList].filter((c) => /^span\d+$/.test(c))
-    .forEach((c) => card.classList.remove(c));
-  card.classList.add(`span${n}`);
+function layoutKey(tab) { return `asterion.layout.${tab}.v3`; }
+function widthClass(item) {
+  return WIDTHS.find((w) => item.classList.contains(w)) || "w4";
+}
+function setWidth(item, w) {
+  WIDTHS.forEach((c) => item.classList.remove(c));
+  item.classList.add(w);
 }
 
-function saveLayout() {
-  const cards = [...document.querySelectorAll("#grid > section.card")];
+function saveLayout(tab) {
+  const grid = grids[tab];
+  if (!grid) return;
+  const els = grid.getItems().map((it) => it.getElement());
   const layout = {
-    order: cards.map(panelId),
-    spans: Object.fromEntries(cards.map((c) => [panelId(c), getSpan(c)])),
-    collapsed: Object.fromEntries(
-      cards.map((c) => [panelId(c), c.classList.contains("collapsed")])),
+    order: els.map((el) => el.dataset.panel),
+    widths: Object.fromEntries(els.map((el) => [el.dataset.panel, widthClass(el)])),
+    collapsed: Object.fromEntries(els.map((el) =>
+      [el.dataset.panel, el.querySelector(".card").classList.contains("collapsed")])),
+    pinned: Object.fromEntries(els.map((el) =>
+      [el.dataset.panel, el.classList.contains("pinned")])),
   };
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); }
+  try { localStorage.setItem(layoutKey(tab), JSON.stringify(layout)); }
   catch (e) { /* noop */ }
 }
 
-function applySavedLayout() {
+function applySavedLayout(tab, grid) {
   let layout = null;
-  try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"); }
+  try { layout = JSON.parse(localStorage.getItem(layoutKey(tab)) || "null"); }
   catch (e) { /* noop */ }
   if (!layout) return;
-  const grid = $("grid");
-  const byId = {};
-  document.querySelectorAll("#grid > section.card").forEach((c) => {
-    byId[panelId(c)] = c;
+  grid.getItems().forEach((it) => {
+    const el = it.getElement(), pid = el.dataset.panel;
+    if (layout.widths && layout.widths[pid]) setWidth(el, layout.widths[pid]);
+    if (layout.collapsed && layout.collapsed[pid])
+      el.querySelector(".card").classList.add("collapsed");
+    if (layout.pinned && layout.pinned[pid]) el.classList.add("pinned");
   });
-  (layout.order || []).forEach((pid) => {
-    if (byId[pid]) grid.appendChild(byId[pid]);
-  });
-  Object.entries(layout.spans || {}).forEach(([pid, n]) => {
-    if (byId[pid] && SPANS.includes(n)) setSpan(byId[pid], n);
-  });
-  Object.entries(layout.collapsed || {}).forEach(([pid, col]) => {
-    if (byId[pid]) byId[pid].classList.toggle("collapsed", !!col);
+  if (layout.order) {
+    const idx = {};
+    layout.order.forEach((p, i) => { idx[p] = i; });
+    grid.sort((a, b) => (idx[a.getElement().dataset.panel] ?? 99) -
+                        (idx[b.getElement().dataset.panel] ?? 99));
+  }
+}
+
+// 레이아웃이 바뀌면 캔버스 크기도 달라지므로 다시 그린다 (팩킹은 ensureGrid/RO가 담당)
+function relayoutAfter(tab) {
+  requestAnimationFrame(() => {
+    if (lastStatus) applyStatus(lastStatus);
+    drawTimeline(); drawAllCharts();
   });
 }
 
-let draggingCard = null;
+function addPanelTools(item, tab) {
+  const card = item.querySelector(".card");
+  const head = card.querySelector(".card-head");
+  if (head.querySelector(".panel-tools")) return;
+  // 좌상단 고정핀 — 켜면 드래그 잠금 (dragStartPredicate가 .pinned을 본다)
+  const pin = document.createElement("button");
+  pin.className = "pt-btn pt-pin" + (item.classList.contains("pinned") ? " on" : "");
+  pin.title = "고정 (드래그 잠금)";
+  pin.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.8V4h6v6.8l2 3.2H7l2-3.2Z"/></svg>`;
+  head.insertBefore(pin, head.firstChild);
+  pin.onclick = (e) => {
+    e.stopPropagation();
+    pin.classList.toggle("on", item.classList.toggle("pinned"));
+    saveLayout(tab);
+  };
+  const tools = document.createElement("div");
+  tools.className = "panel-tools";
+  tools.innerHTML =
+    `<button class="pt-btn pt-size" title="크기 변경">⤢</button>` +
+    `<button class="pt-btn pt-collapse" title="접기/펼치기">▾</button>`;
+  head.appendChild(tools);
+  tools.querySelector(".pt-size").onclick = (e) => {
+    e.stopPropagation();
+    const cur = widthClass(item);
+    setWidth(item, WIDTHS[(WIDTHS.indexOf(cur) + 1) % WIDTHS.length]);
+    grids[tab].refreshItems([item]).layout(true);
+    saveLayout(tab);
+    relayoutAfter(tab);
+  };
+  tools.querySelector(".pt-collapse").onclick = (e) => {
+    e.stopPropagation();
+    card.classList.toggle("collapsed");
+    grids[tab].refreshItems([item]).layout(true);
+    saveLayout(tab);
+  };
+}
 
-function initPanelManager() {
-  document.querySelectorAll("#grid > section.card").forEach((card) => {
-    const head = card.querySelector(".card-head");
-    const tools = document.createElement("div");
-    tools.className = "panel-tools";
-    tools.innerHTML =
-      `<button class="pt-btn pt-size" title="크기 변경">⤢</button>` +
-      `<button class="pt-btn pt-collapse" title="접기/펼치기">▾</button>`;
-    head.appendChild(tools);
-    tools.querySelector(".pt-size").onclick = (e) => {
-      e.stopPropagation();
-      const cur = getSpan(card);
-      const next = SPANS[(SPANS.indexOf(cur) + 1) % SPANS.length];
-      setSpan(card, next);
-      saveLayout();
-      if (lastStatus) applyStatus(lastStatus);
-      drawTimeline(); drawAllCharts();
-    };
-    tools.querySelector(".pt-collapse").onclick = (e) => {
-      e.stopPropagation();
-      card.classList.toggle("collapsed");
-      saveLayout();
-    };
-    head.setAttribute("draggable", "true");
-    head.addEventListener("dragstart", () => {
-      draggingCard = card;
-      card.classList.add("dragging");
-    });
-    head.addEventListener("dragend", () => {
-      card.classList.remove("dragging");
-      draggingCard = null;
-      saveLayout();
-      if (lastStatus) applyStatus(lastStatus);
-      drawTimeline(); drawAllCharts();
-    });
-    card.addEventListener("dragover", (e) => {
-      if (!draggingCard || draggingCard === card) return;
-      e.preventDefault();
-      const rect = card.getBoundingClientRect();
-      const before = (e.clientY - rect.top) < rect.height / 2;
-      card.parentNode.insertBefore(
-        draggingCard, before ? card : card.nextSibling);
-    });
+function ensureGrid(tab) {
+  if (grids[tab]) { grids[tab].refreshItems().layout(true); return grids[tab]; }
+  const el = document.getElementById(`grid-${tab}`);
+  if (!el || typeof Muuri === "undefined") return null;
+  const grid = new Muuri(el, {
+    items: ".muuri-item",
+    dragEnabled: true,
+    dragHandle: ".card-head",
+    dragContainer: document.body,
+    // rounding:false — 슬롯을 정수로 반올림하면 행 합이 컨테이너와 같을 때
+    // 1px 넘쳐 매 행이 줄바꿈된다. 서브픽셀 폭이 정확히 99.99%라 갭 없이 채워짐.
+    layout: { fillGaps: true, rounding: false },
+    layoutDuration: 300,
+    layoutEasing: "cubic-bezier(.2,.8,.2,1)",
+    dragStartPredicate: (item, e) => {
+      if (item.getElement().classList.contains("pinned")) return false;  // 고정핀
+      return Muuri.ItemDrag.defaultStartPredicate(item, e, { distance: 6 });
+    },
+    dragSortPredicate: { threshold: 40, action: "move" },  // 큰 패널도 잘 재배치
+    dragRelease: { duration: 300, easing: "cubic-bezier(.2,.8,.2,1)" },
   });
-  applySavedLayout();
+  grids[tab] = grid;
+  applySavedLayout(tab, grid);                  // 폭·접힘·고정·순서를 먼저 적용
+  grid.getItems().forEach((it) => addPanelTools(it.getElement(), tab));
+  grid.on("dragInit", () => { grid._dragging = true; });
+  grid.on("dragReleaseEnd", () => {
+    grid._dragging = false; saveLayout(tab); relayoutAfter(tab);
+  });
+  // 콘텐츠 높이가 바뀌면(카메라 상태·차트 추가·접기) 자동으로 다시 팩킹 →
+  // 칸 넘침·겹침 방지. 드래그 중에는 건드리지 않는다.
+  let roTimer = 0;
+  const ro = new ResizeObserver(() => {
+    if (grid._dragging) return;
+    clearTimeout(roTimer);
+    roTimer = setTimeout(() => { if (!grid._dragging) grid.refreshItems().layout(true); }, 90);
+  });
+  grid.getItems().forEach((it) => ro.observe(it.getElement()));
+  ro.observe(el);   // 컨테이너 폭 변화(탭 표시·뷰포트 늦게 잡힘)에도 자동 재팩킹
+  grid.refreshItems().layout(true);
+  return grid;
+}
+
+function showTab(tab) {
+  if (!TABS.includes(tab)) tab = "control";
+  document.querySelectorAll(".tab").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".tab-pane").forEach((p) =>
+    p.classList.toggle("active", p.dataset.pane === tab));
+  try { localStorage.setItem(ACTIVE_TAB_KEY, tab); } catch (e) { /* noop */ }
+  ensureGrid(tab);                 // 표시된 뒤에야 폭을 측정할 수 있다
+  if (tab === "system") refreshDevices();
+  relayoutAfter(tab);
+}
+
+function initWorkspace() {
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.onclick = () => showTab(b.dataset.tab);
+  });
+  let active = "control";
+  try { active = localStorage.getItem(ACTIVE_TAB_KEY) || "control"; }
+  catch (e) { /* noop */ }
+  showTab(active);
+}
+
+// ---------- 시스템 탭: 장비 연결 (ASCOM / PWI4) ----------
+
+let deviceConfig = null;     // /api/system/devices 결과
+const ascomCache = {};       // device key -> [{progid, name}]
+
+async function refreshDevices() {
+  try {
+    deviceConfig = await (await fetch("/api/system/devices")).json();
+    renderConnList();
+  } catch (e) { /* noop */ }
+}
+
+function snapKeyFor(key) { return key === "filterwheel" ? "filter" : key; }
+
+function connDevHtml(dev) {
+  // 백엔드별 설정 필드를 가산적으로 — 기상처럼 ASCOM+URL 둘 다인 장비도 지원
+  let cfg = "";
+  if (dev.has_progid) {
+    cfg += `<div class="conn-dev-cfg"><span class="cfg-lbl">ASCOM ProgID</span>` +
+      `<select data-cfg="progid" data-dev="${dev.key}"></select>` +
+      `<button class="btn" data-act="save" data-dev="${dev.key}">저장</button></div>`;
+  }
+  if (dev.has_url) {
+    cfg += `<div class="conn-dev-cfg"><span class="cfg-lbl">URL / IP</span>` +
+      `<input data-cfg="url" data-dev="${dev.key}" value="${escapeHtml(dev.url || "")}" placeholder="http://…">` +
+      `<button class="btn" data-act="save" data-dev="${dev.key}">저장</button></div>`;
+  }
+  if (!cfg) cfg = `<div class="conn-dev-cfg"><span class="cfg-lbl">시뮬레이터 전용 — 설정 없음</span></div>`;
+  const backend = dev.real_kinds.length
+    ? `<div class="conn-dev-cfg devmode-only"><span class="cfg-lbl">백엔드 (REAL 모드) · DEV</span>` +
+      `<select data-cfg="backend" data-dev="${dev.key}">` +
+      `<option value="sim">sim</option>` +
+      dev.real_kinds.map((k) => `<option value="${k}">${k}</option>`).join("") +
+      `</select></div>`
+    : "";
+  return `<div class="conn-dev" data-dev="${dev.key}">
+    <div class="conn-dev-top">
+      <span class="cd-dot" data-role="dot"></span>
+      <span class="cd-label">${escapeHtml(dev.label)}</span>
+      <span class="cd-backend" data-role="backend" title="드라이버/어댑터">${dev.backend}</span>
+      <span class="cd-name" data-role="name"></span>
+    </div>
+    ${backend}${cfg}
+    <div class="conn-dev-actions">
+      <button class="btn btn-go" data-act="connect" data-dev="${dev.key}">연결</button>
+      <button class="btn" data-act="reconnect" data-dev="${dev.key}">재연결</button>
+      <button class="btn btn-danger" data-act="disconnect" data-dev="${dev.key}">해제</button>
+    </div>
+    <div class="cd-detail" data-role="detail"></div>
+  </div>`;
+}
+
+async function wireConnDev(dev) {
+  const root = document.querySelector(`.conn-dev[data-dev="${dev.key}"]`);
+  if (!root) return;
+  const bsel = root.querySelector('[data-cfg="backend"]');
+  if (bsel) {
+    bsel.value = dev.backend === "sim" ? "sim" : dev.backend;
+    bsel.onchange = () => saveDeviceCfg(dev.key, { backend: bsel.value });
+  }
+  const psel = root.querySelector('[data-cfg="progid"]');
+  if (psel) {
+    psel.innerHTML = `<option value="">— 선택 —</option>`;
+    let list = ascomCache[dev.key];
+    if (!list) {
+      try {
+        const r = await (await fetch(`/api/system/ascom?device=${dev.key}`)).json();
+        list = r.drivers || [];
+      } catch (e) { list = []; }
+      ascomCache[dev.key] = list;
+    }
+    list.forEach((d) => {
+      const o = document.createElement("option");
+      o.value = d.progid; o.textContent = `${d.name} · ${d.progid}`;
+      psel.appendChild(o);
+    });
+    if (dev.progid && !list.some((d) => d.progid === dev.progid)) {
+      const o = document.createElement("option");
+      o.value = dev.progid; o.textContent = `${dev.progid} (저장됨)`;
+      psel.appendChild(o);
+    }
+    psel.value = dev.progid || "";
+  }
+  root.querySelectorAll("[data-act]").forEach((b) => {
+    b.onclick = () => deviceAction(dev.key, b.dataset.act, root);
+  });
+}
+
+async function saveDeviceCfg(key, body) {
+  try {
+    deviceConfig = await post("/api/system/configure", { device: key, ...body });
+    renderConnList();
+  } catch (e) { /* post()가 이미 로그 */ }
+}
+
+async function deviceAction(key, act, root) {
+  if (act === "save") {
+    const psel = root.querySelector('[data-cfg="progid"]');
+    const uinp = root.querySelector('[data-cfg="url"]');
+    const body = {};
+    if (psel) body.progid = psel.value;
+    if (uinp) body.url = uinp.value.trim();
+    return saveDeviceCfg(key, body);
+  }
+  try {
+    deviceConfig = await post(`/api/system/${act}`, { device: key });
+    renderConnList();
+  } catch (e) { /* post()가 이미 로그 */ }
+}
+
+function renderConnList() {
+  const host = $("conn-list");
+  if (!host || !deviceConfig) return;
+  host.innerHTML = deviceConfig.devices.map(connDevHtml).join("");
+  deviceConfig.devices.forEach(wireConnDev);
+  renderConnLive();
+  // 장비 카드가 채워지면 연결 패널 높이가 커지므로 시스템 그리드를 다시 팩킹
+  if (grids.system) grids.system.refreshItems().layout(true);
+}
+
+// /api/status 스냅샷에서 실시간 연결상태·장비명·detail을 칩에 반영
+function renderConnLive() {
+  if (!deviceConfig || !lastStatus) return;
+  deviceConfig.devices.forEach((dev) => {
+    const root = document.querySelector(`.conn-dev[data-dev="${dev.key}"]`);
+    if (!root) return;
+    const d = lastStatus[snapKeyFor(dev.key)] || {};
+    const on = !!d.connected;
+    const dot = root.querySelector('[data-role="dot"]');
+    dot.classList.toggle("on", on);
+    dot.classList.toggle("off", !on);
+    root.querySelector('[data-role="name"]').textContent =
+      on ? (d.device_name || d.name || "연결됨") : "미연결";
+    root.querySelector('[data-role="detail"]').textContent = d.detail || "";
+  });
 }
 
 // ---------- 상태 반영 ----------
@@ -693,6 +902,9 @@ function applyStatus(s) {
   $("w-hum").textContent = fmt(w.humidity, 0, "%");
   $("w-wind").textContent = fmt(w.wind, 1, " m/s");
   $("w-dew").textContent = fmt(w.dew_point, 1, " ℃");
+  $("w-winddir").textContent = fmt(w.wind_dir, 0, "°");
+  $("w-cloud").textContent = fmt(w.cloud, 2);
+  $("w-rain").textContent = w.rain ? "감지" : "없음";
   pushSpark("temp", w.temp); pushSpark("hum", w.humidity);
   pushSpark("wind", w.wind);
   drawSpark("spark-temp", sparkBuf.temp, "#38bdf8");
@@ -751,7 +963,8 @@ function applyStatus(s) {
   // 타임라인 now선 갱신 (30초 간격)
   if (Date.now() - lastTimelineDraw > 30000) drawTimeline();
 
-  if ($("dev-drawer").classList.contains("open")) renderDev(s);
+  renderSystemInfo(s);
+  renderConnLive();
   updateModeSeg(s.mode);
 }
 
@@ -782,29 +995,19 @@ function updateModeSeg(mode) {
     b.classList.toggle("active", b.dataset.mode === active));
 }
 
-function renderDev(s) {
-  $("set-site").textContent = s.site || "—";
-  $("set-mode").textContent = (s.mode || "—").toUpperCase();
-  $("set-lst").textContent = s.time?.lst || "—";
+// 시스템 탭 사이트/모드 정보 (항상 DOM에 있으므로 매 스냅샷 갱신)
+function renderSystemInfo(s) {
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  set("set-site", s.site || "—");
+  set("set-mode", (s.mode || "—").toUpperCase());
+  set("set-lst", s.time?.lst || "—");
   const sun = s.sun || {}, tw = s.twilight_sim || {};
-  $("set-phase").textContent = (sun.phase_label || "—") +
-    (tw.enabled ? " · 황혼시뮬" : "");
-  const rows = [
-    ["마운트", s.mount?.connected, s.mount?.detail || ""],
-    ["카메라", s.camera?.connected, s.camera?.detail || ""],
-    ["필터휠", s.filter?.connected,
-     s.filter?.name ? `pos ${s.filter.position} · ${s.filter.name}` : ""],
-    ["포커서", s.focuser?.connected, s.focuser?.detail || ""],
-    ["기상", s.weather?.temp != null, "SIM"],
-  ];
-  $("dev-devices").innerHTML = rows.map(([nm, on, dl]) =>
-    `<div class="dev-dev"><div class="nm"><span class="cd ${on ? "on" : "off"}"></span>${nm}</div>` +
-    `<span class="dl">${escapeHtml(dl)}</span></div>`).join("");
+  set("set-phase", (sun.phase_label || "—") + (tw.enabled ? " · 황혼시뮬" : ""));
 }
 
 const DEVMODE_KEY = "asterion.devmode";
 function applyDevMode(on) {
-  $("dev-drawer").classList.toggle("devmode", on);
+  document.body.classList.toggle("devmode", on);  // 시스템 탭 고급 컨트롤 게이팅
   $("devmode-toggle").checked = on;
   try { localStorage.setItem(DEVMODE_KEY, on ? "1" : "0"); } catch (e) { /* noop */ }
 }
@@ -812,7 +1015,6 @@ function applyDevMode(on) {
 function openDrawer(open) {
   $("dev-drawer").classList.toggle("open", open);
   $("dev-overlay").classList.toggle("open", open);
-  if (open && lastStatus) renderDev(lastStatus);
 }
 
 // ---------- 테이블 ----------
@@ -890,7 +1092,16 @@ function skyNeedsAnim() {
   return false;
 }
 function skyLoop() {
-  if (lastStatus) drawSky(lastStatus);
+  if (lastStatus) {
+    drawSky(lastStatus);   // easeMount()로 mountDraw를 보간
+    // 슬루 중엔 ALT/AZ 숫자도 보간값으로 부드럽게 — 1Hz 스냅샷의 뚝뚝 끊김 제거
+    // (실물 PWI4/ASCOM도 1Hz 폴링이라 동일하게 부드러워진다)
+    const m = lastStatus.mount || {};
+    if (mountDraw && (m.slewing || skyNeedsAnim())) {
+      $("m-alt").textContent = fmt(mountDraw.alt, 2, "°");
+      $("m-az").textContent = fmt(mountDraw.az, 2, "°");
+    }
+  }
   skyRaf = skyNeedsAnim() ? requestAnimationFrame(skyLoop) : 0;
 }
 function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }
@@ -898,7 +1109,7 @@ function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }
 // ---------- 초기 로드 ----------
 
 async function init() {
-  initPanelManager();
+  initWorkspace();
   try {
     const [status, logs, frames, actions] = await Promise.all([
       fetch("/api/status").then((r) => r.json()),
@@ -1064,7 +1275,7 @@ $("dev-overlay").onclick = () => openDrawer(false);
 applyDevMode(localStorage.getItem(DEVMODE_KEY) === "1");
 $("devmode-toggle").onchange = (e) => applyDevMode(e.target.checked);
 $("btn-layout-reset").onclick = () => {
-  try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* noop */ }
+  try { localStorage.removeItem(layoutKey(currentTab())); } catch (e) { /* noop */ }
   location.reload();
 };
 document.querySelectorAll("#mode-seg .seg-btn").forEach((b) => {
@@ -1083,6 +1294,8 @@ let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
+    const g = grids[currentTab()];
+    if (g) g.refreshItems().layout(true);
     if (lastStatus) applyStatus(lastStatus);
     drawTimeline();
     drawAllCharts();

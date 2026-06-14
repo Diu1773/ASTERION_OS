@@ -16,6 +16,15 @@ import numpy as np
 # device_name = 장비가 스스로 보고하는 표시명 (ASCOM .Name = "Moravian C3-61000",
 # PWI4 = "PlaneWave PWI4", 시뮬 = "Sim ..."). 패널 헤더가 이걸 자동 표시한다.
 
+# 각 XxxStatus는 두 가지를 자기서술한다 (제네릭 샘플러가 장치를 몰라도 읽게):
+#   snapshot()  → 대시보드/WebSocket용 dict (프론트가 읽는 키 형태 그대로)
+#   telemetry() → 시계열 플롯용 device-prefixed 수치 키 (예: "mount.alt")
+# 새 장비를 추가해도 샘플러는 이 두 메서드만 호출하므로 코드 변경이 없다.
+
+def _round(v: float | None, n: int) -> float | None:
+    return None if v is None else round(v, n)
+
+
 @dataclass
 class MountStatus:
     connected: bool = False
@@ -28,6 +37,21 @@ class MountStatus:
     detail: str = ""
     device_name: str = ""
 
+    def snapshot(self) -> dict:
+        from ..core import ephemeris
+        return {
+            "connected": self.connected, "name": self.device_name,
+            "alt": _round(self.alt_degs, 3), "az": _round(self.az_degs, 3),
+            "ra_hours": self.ra_hours, "dec_degs": self.dec_degs,
+            "ra_str": ephemeris.fmt_ra_hours(self.ra_hours),
+            "dec_str": ephemeris.fmt_dec_degs(self.dec_degs),
+            "slewing": self.slewing, "tracking": self.tracking,
+            "detail": self.detail,
+        }
+
+    def telemetry(self) -> dict:
+        return {"mount.alt": self.alt_degs, "mount.az": self.az_degs}
+
 
 @dataclass
 class CameraStatus:
@@ -38,6 +62,16 @@ class CameraStatus:
     detail: str = ""
     device_name: str = ""
 
+    def snapshot(self) -> dict:
+        return {
+            "connected": self.connected, "name": self.device_name,
+            "ccd_temp": self.ccd_temp_c, "cooler_on": self.cooler_on,
+            "state": self.state, "detail": self.detail,
+        }
+
+    def telemetry(self) -> dict:
+        return {"camera.ccd_temp": self.ccd_temp_c}
+
 
 @dataclass
 class FilterStatus:
@@ -46,6 +80,16 @@ class FilterStatus:
     name: str = ""              # 현재 필터 이름 (장비명 아님)
     names: list[str] = field(default_factory=list)
     device_name: str = ""
+
+    def snapshot(self) -> dict:
+        return {
+            "connected": self.connected, "position": self.position,
+            "name": self.name, "names": self.names,
+            "device_name": self.device_name,
+        }
+
+    def telemetry(self) -> dict:
+        return {}
 
 
 @dataclass
@@ -57,6 +101,18 @@ class FocuserStatus:
     max_position: int = 60000
     detail: str = ""
     device_name: str = ""
+
+    def snapshot(self) -> dict:
+        return {
+            "connected": self.connected, "name": self.device_name,
+            "position": self.position, "moving": self.moving,
+            "temperature": self.temperature, "max_position": self.max_position,
+            "detail": self.detail,
+        }
+
+    def telemetry(self) -> dict:
+        return {"focuser.position": self.position,
+                "focuser.temp": self.temperature}
 
 
 @dataclass
@@ -71,6 +127,20 @@ class WeatherStatus:
     rain: bool = False
     detail: str = ""
     device_name: str = ""
+
+    def snapshot(self) -> dict:
+        return {
+            "connected": self.connected, "name": self.device_name,
+            "temp": self.temp_c, "humidity": self.humidity,
+            "dew_point": self.dew_point_c, "wind": self.wind_ms,
+            "wind_dir": self.wind_dir_deg, "cloud": self.cloud_score,
+            "rain": self.rain,
+        }
+
+    def telemetry(self) -> dict:
+        return {"weather.temp": self.temp_c, "weather.humidity": self.humidity,
+                "weather.dew_point": self.dew_point_c, "weather.wind": self.wind_ms,
+                "weather.cloud": self.cloud_score}
 
 
 class MountDriver(abc.ABC):

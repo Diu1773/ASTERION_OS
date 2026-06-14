@@ -24,14 +24,26 @@ filterwheel = "ascom"   # real 모드에서: "ascom" | "sim"
 focuser = "ascom"       # real 모드에서: "ascom" | "sim"
 weather = "sim"         # 기상 장비 연결 전까지 sim
 
+# 자동 재연결 워치독 — 끊긴 장비를 백오프로 다시 붙인다 (운영자가 끈 건 제외)
+auto_reconnect = true
+watchdog_interval_s = 5      # 워치독 점검 주기
+reconnect_base_s = 5         # 첫 재시도 간격 (이후 2배씩 증가)
+reconnect_max_s = 60         # 재시도 간격 상한
+
 [drivers.pwi4]
 base_url = "http://127.0.0.1:8220"
 
+[drivers.davis]
+# Davis WeatherLink Live 로컬 API (LAN). real 모드 + drivers.weather="davis"일 때 사용
+base_url = "http://127.0.0.1"
+
 [drivers.ascom]
 # scripts/choose_ascom.py 실행 → ASCOM Chooser에서 선택 → 출력된 ProgID를 여기에 입력
-camera_progid = ""        # 예: "ASCOM.C3_61000.Camera"
+mount_progid = ""         # ASCOM Telescope (PWI4 대신 ASCOM 가대일 때. 예: RST-135)
+camera_progid = ""        # 예: "ASCOM.C3_61000.Camera" (ZWO 등)
 filterwheel_progid = ""
 focuser_progid = ""
+weather_progid = ""       # ASCOM ObservingConditions (Davis/AAG/Boltwood 등)
 
 [capture]
 # 수동 캡처 콘솔 기본값

@@ -13,9 +13,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+import math
+
 from .base import (
     CameraDriver, CameraStatus, FilterStatus, FilterWheelDriver,
-    FocuserDriver, FocuserStatus,
+    FocuserDriver, FocuserStatus, MountDriver, MountStatus,
+    WeatherDriver, WeatherStatus,
 )
 
 _HINT = "ASCOM ProgID 미설정 — asterion/scripts/choose_ascom.py 실행 후 config.toml에 입력"
@@ -27,6 +30,112 @@ def _com_executor() -> ThreadPoolExecutor:
         pythoncom.CoInitialize()
     return ThreadPoolExecutor(max_workers=1, initializer=_init,
                               thread_name_prefix="ascom")
+
+
+class AscomMount(MountDriver):
+    """ASCOM Telescope (ITelescopeV3) — RST-135 등 표준 가대.
+    PWI4가 아닌 ASCOM 마운트는 이 백엔드로 붙는다 (ProgID는 자동 발견)."""
+
+    def __init__(self, progid: str):
+        self._progid = progid
+        self._ex = _com_executor()
+        self._dev = None
+        self._name = ""
+
+    def _call(self, fn):
+        return self._ex.submit(fn).result()
+
+    def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
+        def _do():
+            import win32com.client
+            self._dev = win32com.client.Dispatch(self._progid)
+            self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)
+            except Exception:
+                self._name = self._progid
+        self._call(_do)
+
+    def status(self) -> MountStatus:
+        if self._dev is None:
+            return MountStatus(connected=False,
+                               detail=_HINT if not self._progid else "미연결",
+                               device_name=self._name)
+        def _do():
+            d = self._dev
+            def g(prop):
+                try:
+                    return float(getattr(d, prop))
+                except Exception:
+                    return None
+            def b(prop):
+                try:
+                    return bool(getattr(d, prop))
+                except Exception:
+                    return False
+            return MountStatus(
+                connected=bool(d.Connected),
+                ra_hours=g("RightAscension"), dec_degs=g("Declination"),
+                alt_degs=g("Altitude"), az_degs=g("Azimuth"),
+                slewing=b("Slewing"), tracking=b("Tracking"),
+                detail=self._progid, device_name=self._name)
+        try:
+            return self._call(_do)
+        except Exception as exc:
+            return MountStatus(connected=False, detail=f"ASCOM 오류: {exc}",
+                               device_name=self._name)
+
+    def goto_altaz(self, alt_deg: float, az_deg: float) -> None:
+        def _do():
+            d = self._dev
+            try:
+                d.SlewToAltAzAsync(az_deg, alt_deg)   # ASCOM 순서: (az, alt)
+            except Exception:
+                d.SlewToAltAz(az_deg, alt_deg)
+        self._call(_do)
+
+    def goto_radec(self, ra_hours: float, dec_degs: float) -> None:
+        def _do():
+            d = self._dev
+            try:
+                if getattr(d, "CanSetTracking", False) and not d.Tracking:
+                    d.Tracking = True
+            except Exception:
+                pass
+            try:
+                d.SlewToCoordinatesAsync(ra_hours, dec_degs)
+            except Exception:
+                d.SlewToCoordinates(ra_hours, dec_degs)
+        self._call(_do)
+
+    def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None:
+        def _do():
+            d = self._dev
+            ra = float(d.RightAscension)
+            dec = float(d.Declination)
+            cosd = max(0.1, math.cos(math.radians(dec)))
+            ra2 = (ra + (dra_arcsec / 3600.0) / 15.0 / cosd) % 24.0
+            dec2 = max(-89.9, min(89.9, dec + ddec_arcsec / 3600.0))
+            try:
+                d.SlewToCoordinatesAsync(ra2, dec2)
+            except Exception:
+                d.SlewToCoordinates(ra2, dec2)
+        self._call(_do)
+
+    def set_tracking(self, on: bool) -> None:
+        self._call(lambda: setattr(self._dev, "Tracking", bool(on)))
+
+    def stop(self) -> None:
+        self._call(lambda: self._dev.AbortSlew())
+
+    def close(self) -> None:
+        try:
+            if self._dev is not None:
+                self._call(lambda: setattr(self._dev, "Connected", False))
+        finally:
+            self._ex.shutdown(wait=False)
 
 
 class AscomCamera(CameraDriver):
@@ -229,6 +338,76 @@ class AscomFocuser(FocuserDriver):
 
     def move_to(self, position: int) -> None:
         self._call(lambda: self._dev.Move(int(position)))
+
+    def close(self) -> None:
+        try:
+            if self._dev is not None:
+                self._call(lambda: setattr(self._dev, "Connected", False))
+        finally:
+            self._ex.shutdown(wait=False)
+
+
+class AscomWeather(WeatherDriver):
+    """ASCOM ObservingConditions — 사실상 표준 기상 인터페이스.
+    Davis/AAG/Boltwood 등 다수가 이 드라이버를 제공하므로 ProgID만 바꾸면
+    코드 추가 없이 흡수된다. 단위는 ASCOM 규약(°C, %, m/s, deg, CloudCover %).
+    미지원 속성은 예외를 던지므로 None으로 정직 보고한다."""
+
+    def __init__(self, progid: str):
+        self._progid = progid
+        self._ex = _com_executor()
+        self._dev = None
+        self._name = ""
+
+    def _call(self, fn):
+        return self._ex.submit(fn).result()
+
+    def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
+        def _do():
+            import win32com.client
+            self._dev = win32com.client.Dispatch(self._progid)
+            self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)
+            except Exception:
+                self._name = self._progid
+        self._call(_do)
+
+    def read(self) -> WeatherStatus:
+        if self._dev is None:
+            return WeatherStatus(connected=False,
+                                 detail=_HINT if not self._progid else "미연결",
+                                 device_name=self._name)
+        def _do():
+            d = self._dev
+            try:
+                d.Refresh()  # 센서 값 갱신 (미지원이면 무시)
+            except Exception:
+                pass
+            def g(prop):
+                try:
+                    return float(getattr(d, prop))
+                except Exception:
+                    return None  # PropertyNotImplemented 등 → 없는 값
+            cloud = g("CloudCover")          # 0~100 %
+            rain_rate = g("RainRate")        # mm/hr
+            return WeatherStatus(
+                connected=bool(d.Connected),
+                temp_c=g("Temperature"),
+                humidity=g("Humidity"),
+                dew_point_c=g("DewPoint"),
+                wind_ms=g("WindSpeed"),
+                wind_dir_deg=g("WindDirection"),
+                cloud_score=None if cloud is None else max(0.0, min(1.0, cloud / 100.0)),
+                rain=bool(rain_rate and rain_rate > 0),
+                detail=self._progid, device_name=self._name)
+        try:
+            return self._call(_do)
+        except Exception as exc:
+            return WeatherStatus(connected=False, detail=f"ASCOM 오류: {exc}",
+                                 device_name=self._name)
 
     def close(self) -> None:
         try:

@@ -27,9 +27,10 @@ from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
 from .core.ontology import ActionLog, Db, Frame, ObservationSession, WeatherRecord
 from .core.preview import stretch_to_png
-from .drivers import build_drivers
+from .drivers import REGISTRY, ConnectionManager
 from .drivers.sim import TwilightSim
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
+from .watchtower.recovery import ConnectionWatchdog
 from .watchtower.status import StatusSampler
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -104,6 +105,17 @@ class AutosaveReq(BaseModel):
     on: bool
 
 
+class DeviceReq(BaseModel):
+    device: str   # REGISTRY 키: mount | camera | filterwheel | focuser | weather
+
+
+class DeviceConfigReq(BaseModel):
+    device: str
+    progid: str | None = None   # ASCOM ProgID
+    url: str | None = None      # PWI4 base URL
+    backend: str | None = None  # "sim" | "ascom" | "pwi4"
+
+
 def create_app() -> FastAPI:
     cfg = Config.load(os.environ.get("ASTERION_CONFIG"))
     lat = float(cfg.get("site.latitude", 36.6))
@@ -116,10 +128,15 @@ def create_app() -> FastAPI:
         return ephemeris.lst_hours(ephemeris.now_utc(), lon)
 
     twilight = TwilightSim(efold_s=float(cfg.get("sim.twilight_efold_s", 240.0)))
-    drivers = build_drivers(cfg, twilight, sun_alt_now, lst_now)
     events = EventHub()
+    # 연결 관리자가 레지스트리대로 드라이버를 빌드·소유한다. drivers dict는
+    # sampler/runner/capture가 공유하는 살아있는 단일 상태 (재빌드해도 같은 객체).
+    conn = ConnectionManager(cfg, twilight, sun_alt_now, lst_now, events)
+    drivers = conn.drivers
     db = Db(cfg.data_dir / "asterion.db")
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
+    # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
+    watchdog = ConnectionWatchdog(cfg, conn, sampler, events)
     bus = ActionBus(db, events, lambda: sampler.snapshot)
     # 프레임 미리보기 홀더 (캡처/플랫 직후 스트레치 PNG)
     frame_preview = {"png": b"", "token": 0, "meta": {}}
@@ -145,49 +162,27 @@ def create_app() -> FastAPI:
         preview_cb=publish_preview)
     sampler.capture_status = capture.status_dict
 
-    DEVICES = ("mount", "camera", "filterwheel", "focuser", "weather")
-
-    async def rebuild_drivers(target_mode: str) -> None:
-        """런타임 SIM↔REAL 전환. 새 드라이버를 먼저 만들고(실패 시 기존 유지),
-        연결 후 원자적으로 교체한다. real인데 ASCOM ProgID 미설정 등은 여기서
-        예외가 나며 전환이 취소된다(기존 드라이버 그대로)."""
-        new = build_drivers(cfg, twilight, sun_alt_now, lst_now, mode=target_mode)
-        for name in DEVICES:
-            try:
-                await asyncio.to_thread(new[name].connect)
-            except Exception as exc:
-                events.log("system", f"{name} 연결 경고({target_mode}): {exc}", "warn")
-        old = {name: drivers[name] for name in DEVICES}
-        drivers.clear()
-        drivers.update(new)  # 같은 dict 객체를 in-place 교체 → sampler/runner 즉시 반영
-        for drv in old.values():
-            try:
-                drv.close()
-            except Exception:
-                pass
-        events.log("system", f"드라이버 모드 전환 → {drivers['mode'].upper()}")
+    # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
+    def conn_preconditions() -> list[tuple[str, bool, str]]:
+        return [
+            ("autoflat_idle", not runner.running(),
+             "오토플랫 실행 중에는 연결 변경 불가"),
+            ("capture_idle", not capture.active(),
+             "캡처 실행 중에는 연결 변경 불가"),
+        ]
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         events.attach_loop(asyncio.get_running_loop())
-        for name in DEVICES:
-            drv = drivers[name]
-            try:
-                await asyncio.to_thread(drv.connect)
-                events.log("system", f"{name} 드라이버 연결 "
-                           f"({'SIM' if getattr(drv, 'is_sim', False) else type(drv).__name__})")
-            except Exception as exc:
-                events.log("system", f"{name} 연결 실패: {exc}", "error")
+        await conn.connect_all()
         sampler.start()
+        watchdog.start()
         events.log("system",
                    f"Asterion v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
         yield
+        await watchdog.stop()
         await sampler.stop()
-        for name in DEVICES:
-            try:
-                drivers[name].close()
-            except Exception:
-                pass
+        await conn.close_all()
 
     app = FastAPI(title="Asterion", version=__version__, lifespan=lifespan)
 
@@ -441,14 +436,65 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "mode는 sim 또는 real")
         await bus.run("dev_set_mode", actor="developer",
                       params={"mode": req.mode},
-                      func=lambda: rebuild_drivers(req.mode),
-                      preconditions=[
-                          ("autoflat_idle", not runner.running(),
-                           "오토플랫 실행 중에는 모드 전환 불가"),
-                          ("capture_idle", not capture.active(),
-                           "캡처 실행 중에는 모드 전환 불가"),
-                      ])
+                      func=lambda: conn.set_mode(req.mode),
+                      preconditions=conn_preconditions())
         return {"mode": drivers["mode"]}
+
+    # ---------- 시스템: 장비 연결 관리 (SYSTEM 탭) ----------
+
+    def _device_or_404(device: str) -> None:
+        if device not in REGISTRY:
+            raise HTTPException(404, f"알 수 없는 장비: {device}")
+
+    @app.get("/api/system/devices")
+    async def system_devices():
+        """장비별 백엔드/설정/역량. 실시간 연결상태·장비명은 /api/status에서."""
+        return conn.describe()
+
+    @app.get("/api/system/ascom")
+    async def system_ascom(device: str):
+        """이 장비 타입으로 등록된 ASCOM ProgID 목록 (드롭다운용)."""
+        _device_or_404(device)
+        return {"device": device,
+                "drivers": await asyncio.to_thread(conn.list_ascom, device)}
+
+    @app.post("/api/system/configure")
+    async def system_configure(req: DeviceConfigReq):
+        _device_or_404(req.device)
+        try:
+            conn.configure(req.device, progid=req.progid, url=req.url,
+                           backend=req.backend)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        events.log("system", f"{REGISTRY[req.device].label} 설정 저장")
+        return conn.describe()
+
+    @app.post("/api/system/connect")
+    async def system_connect(req: DeviceReq):
+        _device_or_404(req.device)
+        await bus.run("device_connect", actor="operator",
+                      params={"device": req.device},
+                      func=lambda: conn.connect(req.device),
+                      preconditions=conn_preconditions())
+        return conn.describe()
+
+    @app.post("/api/system/disconnect")
+    async def system_disconnect(req: DeviceReq):
+        _device_or_404(req.device)
+        await bus.run("device_disconnect", actor="operator",
+                      params={"device": req.device},
+                      func=lambda: conn.disconnect(req.device),
+                      preconditions=conn_preconditions())
+        return conn.describe()
+
+    @app.post("/api/system/reconnect")
+    async def system_reconnect(req: DeviceReq):
+        _device_or_404(req.device)
+        await bus.run("device_reconnect", actor="operator",
+                      params={"device": req.device},
+                      func=lambda: conn.reconnect(req.device),
+                      preconditions=conn_preconditions())
+        return conn.describe()
 
     @app.post("/api/sim/twilight")
     async def sim_twilight(req: TwilightReq):

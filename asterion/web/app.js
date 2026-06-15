@@ -122,6 +122,9 @@ function drawSpark(id, buf, color) {
 
 let skyTarget = null;   // {alt, az, ts} — 클릭으로 지정한 목표
 let skyGeom = null;     // {cx, cy, R} — 마지막 그리기 기하 (클릭 역변환용)
+// 돔 방위 반전 (SkyX/PWI처럼 E↔W, N↔S 뒤집기). proj·역투영·방위라벨에 반영.
+let skyFlip = (() => { try { return JSON.parse(localStorage.getItem("asterion.skyflip") || "{}") || {}; } catch (e) { return {}; } })();
+function saveSkyFlip() { try { localStorage.setItem("asterion.skyflip", JSON.stringify(skyFlip)); } catch (e) { /* noop */ } }
 
 function drawSky(s) {
   const cv = $("sky-canvas"); if (!cv) return;
@@ -140,11 +143,15 @@ function drawSky(s) {
   g.addColorStop(1, mix([5, 8, 16], [150, 110, 70], b * 0.7));
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fillStyle = g; ctx.fill();
 
+  const sx = skyFlip.ew ? -1 : 1, sy = skyFlip.ns ? -1 : 1;   // 방위 반전
   ctx.lineWidth = 1;
   [30, 60].forEach((alt) => {
     const r = (90 - alt) / 90 * R;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU);
     ctx.strokeStyle = "rgba(150,180,225,.14)"; ctx.stroke();
+    ctx.fillStyle = "rgba(150,180,225,.5)"; ctx.font = "9px monospace";
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(`${alt}°`, cx + 4, cy - r);                  // 고도선 숫자
   });
   ctx.strokeStyle = "rgba(150,180,225,.10)";
   ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
@@ -153,12 +160,14 @@ function drawSky(s) {
   ctx.strokeStyle = "rgba(150,180,225,.4)"; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.fillStyle = "rgba(190,210,240,.65)"; ctx.font = "11px monospace";
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("N", cx, cy - R + 11); ctx.fillText("S", cx, cy + R - 11);
-  ctx.fillText("E", cx + R - 11, cy); ctx.fillText("W", cx - R + 11, cy);
+  ctx.fillText(sy < 0 ? "S" : "N", cx, cy - R + 11);   // 반전 반영
+  ctx.fillText(sy < 0 ? "N" : "S", cx, cy + R - 11);
+  ctx.fillText(sx < 0 ? "W" : "E", cx + R - 11, cy);
+  ctx.fillText(sx < 0 ? "E" : "W", cx - R + 11, cy);
 
   const proj = (alt, az) => {
     const r = (90 - clamp(alt, 0, 90)) / 90 * R, a = az * D2R;
-    return [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+    return [cx + sx * r * Math.sin(a), cy - sy * r * Math.cos(a)];
   };
 
   // 태양
@@ -226,11 +235,12 @@ function skyClickHandler(ev) {
   const cv = $("sky-canvas");
   const rect = cv.getBoundingClientRect();
   const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+  const sx = skyFlip.ew ? -1 : 1, sy = skyFlip.ns ? -1 : 1;   // 반전 역적용
   const dx = px - skyGeom.cx, dy = py - skyGeom.cy;
   const r = Math.hypot(dx, dy);
   if (r > skyGeom.R) { hideSkyMenu(); return; }
   const alt = 90 - (r / skyGeom.R) * 90;
-  const az = ((Math.atan2(dx, -dy) / D2R) + 360) % 360;
+  const az = ((Math.atan2(sx * dx, -sy * dy) / D2R) + 360) % 360;
   const lat = lastStatus.geo?.lat ?? 36.6;
   const lstH = lastStatus.time?.lst_hours ?? 0;
   const [ra, dec] = altazToRadec(alt, az, lat, lstH);
@@ -1443,6 +1453,17 @@ $("btn-setpark").onclick = () => post("/api/actions/mount/setpark");
 
 // 하늘 돔 클릭
 $("sky-canvas").addEventListener("click", skyClickHandler);
+// 돔 방위 반전 버튼 (E↔W, N↔S)
+[["btn-flip-ew", "ew"], ["btn-flip-ns", "ns"]].forEach(([id, key]) => {
+  const b = $(id); if (!b) return;
+  b.classList.toggle("on", !!skyFlip[key]);
+  b.onclick = () => {
+    skyFlip[key] = !skyFlip[key];
+    b.classList.toggle("on", !!skyFlip[key]);
+    saveSkyFlip();
+    if (lastStatus) drawSky(lastStatus);
+  };
+});
 
 // 카메라 / 캡처
 $("btn-filter").onclick = () =>

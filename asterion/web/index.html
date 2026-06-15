@@ -4,16 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASTERION — 청람천문대 통합 관측 OS</title>
-<link rel="icon" href="data:,">
+<!-- 파비콘: /static/logo.png 교체 시 함께 바뀜 (버전 ?v= 올리면 캐시 갱신) -->
+<link rel="icon" href="/static/logo.png?v=2">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=063">
+<link rel="stylesheet" href="/static/style.css?v=066">
 </head>
 <body>
 
 <header class="topbar">
   <div class="brand">
-    <div class="brand-mark"><span class="ring"></span><span class="star"></span></div>
+    <!-- 로고 교체 방법: asterion/web/logo.png 파일을 덮어쓰면 끝. 파일이 없으면 아래 ring+star로 자동 폴백 -->
+    <img class="brand-logo" src="/static/logo.png?v=2" alt="ASTERION OS"
+         onerror="this.style.display='none';document.getElementById('brand-fallback').style.display='block'">
+    <div class="brand-mark" id="brand-fallback" style="display:none"><span class="ring"></span><span class="star"></span></div>
     <div>
       <div class="brand-name">ASTERION</div>
       <div class="brand-sub" id="site-name">청람천문대 통합 관측 OS</div>
@@ -53,15 +57,20 @@
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">Sky Panel</span><span class="card-tag">ALL-SKY</span></div>
         <div class="sky-wrap" id="sky-wrap">
-          <canvas id="sky-canvas"></canvas>
+          <canvas id="sky-canvas" title="돔을 클릭하면 그 지점으로 GoTo"></canvas>
           <div class="sky-menu" id="sky-menu"></div>
+          <div class="sky-flip">
+            <button id="btn-flip-ew" class="flip-btn" title="동-서 반전">E↔W</button>
+            <button id="btn-flip-ns" class="flip-btn" title="남-북 반전">N↔S</button>
+          </div>
         </div>
-        <div class="kv"><span>태양 고도</span><b class="accent" id="s-sunalt">—</b></div>
-        <div class="kv"><span>박명</span><b id="s-phase">—</b></div>
-        <div class="kv"><span>반태양 방위</span><b id="s-antisolar">—</b></div>
-        <div class="hint">돔을 클릭하면 그 지점으로 GoTo할 수 있습니다</div>
+        <div class="sky-stats">
+          <div class="sky-stat"><span>태양 고도</span><b class="accent" id="s-sunalt">—</b></div>
+          <div class="sky-stat"><span>박명</span><b id="s-phase">—</b></div>
+          <div class="sky-stat"><span>반태양 방위</span><b id="s-antisolar">—</b></div>
+        </div>
         <div class="ctrl-row" id="twilight-row">
-          <button id="btn-twilight" class="btn">☼ 황혼 시뮬</button>
+          <button id="btn-twilight" class="btn btn-sm">☼ 황혼 시뮬</button>
         </div>
       </section>
       </div>
@@ -516,6 +525,6 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=063"></script>
+<script src="/static/app.js?v=066"></script>
 </body>
 </html>

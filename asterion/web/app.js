@@ -630,6 +630,14 @@ function rowGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
     const r = els[i].getBoundingClientRect();
     w[i] = r.width; natH[i] = r.height;
   }
+  // 숨겨진 탭(폭 0)에서 레이아웃이 돌면 모든 카드가 0px로 측정돼 '0px' 강제로
+  // 찌부러진다. 그땐 높이를 건드리지 말고(=auto 유지) 빠져나간다. 탭이 보일 때
+  // 다시 레이아웃되며 정상 높이로 복구된다.
+  if (gridWidth < 1) {
+    grid._rowNat = []; grid._rowH = []; grid._rowY = [];
+    callback({ id: layoutId, items, slots: new Array(n * 2).fill(0), styles: {} });
+    return;
+  }
   // 폭으로 행을 나누고 각 행의 최대 높이를 구한다
   const rowOf = new Array(n), rowNat = [];
   let x = 0, row = 0;
@@ -729,8 +737,8 @@ function clearColW(tab, panel) {            // ⤢ 등으로 폭을 클래스로
 }
 function tileGrid(tab) {                    // 수동 폭·행높이 리사이즈 전부 해제 → 깔끔히 정렬
   const grid = grids[tab]; if (!grid) return;
-  saveColW(tab, {}); saveRowH(tab, {});
-  grid.getItems().forEach((it) => { it.getElement().style.width = ""; });
+  saveColW(tab, {}); saveRowH(tab, {}); grid._rowhLive = null;
+  grid.getItems().forEach((it) => { const el = it.getElement(); el.style.width = ""; el.style.height = ""; });
   grid.refreshItems().layout();             // 애니메이션과 함께 정렬
   syncColsToolbar(tab);
   positionDividers(tab);
@@ -774,8 +782,8 @@ function positionDividers(tab) {            // 나눔선을 경계에 재배치 
     for (let i = 0; i < row.length - 1; i++)                // 열 나눔선
       specs.push({ type: "col", left: row[i].right, top: Math.min(row[i].y, row[i + 1].y),
         len: Math.max(row[i].h, row[i + 1].h), l: row[i].panel, r: row[i + 1].panel });
-    if (ri < rowKeys.length - 1)                            // 행 나눔선 (마지막 행 제외)
-      specs.push({ type: "row", top: Math.max(...row.map((c) => c.bottom)), ri });
+    // 행 나눔선 — 각 행의 아래 경계마다(맨 아래 행 포함). 그 행(ri)을 위아래로 조절.
+    specs.push({ type: "row", top: Math.max(...row.map((c) => c.bottom)), ri });
   });
   const pool = [...layer.querySelectorAll(".divider")];     // 재사용 풀
   while (pool.length < specs.length) { const d = document.createElement("div"); d.className = "divider"; layer.appendChild(d); pool.push(d); }

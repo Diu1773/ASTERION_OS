@@ -41,6 +41,9 @@ class AscomMount(MountDriver):
         self._ex = _com_executor()
         self._dev = None
         self._name = ""
+        self._homing = False
+        self._motion_sample = None
+        self._motion_unchanged_since = None
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -52,6 +55,9 @@ class AscomMount(MountDriver):
             import win32com.client
             self._dev = win32com.client.Dispatch(self._progid)
             self._dev.Connected = True
+            self._homing = False
+            self._motion_sample = None
+            self._motion_unchanged_since = None
             try:
                 self._name = str(self._dev.Name)
             except Exception:
@@ -75,14 +81,43 @@ class AscomMount(MountDriver):
                     return bool(getattr(d, prop))
                 except Exception:
                     return False
+            connected = bool(d.Connected)
+            ra = g("RightAscension")
+            dec = g("Declination")
+            alt = g("Altitude")
+            az = g("Azimuth")
+            slewing = b("Slewing")
+            at_home = b("AtHome")
+            if self._homing and (at_home or not slewing):
+                self._homing = False
+
+            sample = (ra, dec, alt, az)
+            stale = False
+            now = time.monotonic()
+            if connected and slewing and all(v is not None for v in sample):
+                if sample == self._motion_sample:
+                    if self._motion_unchanged_since is None:
+                        self._motion_unchanged_since = now
+                    stale = now - self._motion_unchanged_since >= 5.0
+                else:
+                    self._motion_sample = sample
+                    self._motion_unchanged_since = now
+            else:
+                self._motion_sample = sample
+                self._motion_unchanged_since = None
+
+            detail = self._progid
+            if stale:
+                detail += " | 슬루 중 좌표가 5초 이상 갱신되지 않음"
             return MountStatus(
-                connected=bool(d.Connected),
-                ra_hours=g("RightAscension"), dec_degs=g("Declination"),
-                alt_degs=g("Altitude"), az_degs=g("Azimuth"),
-                slewing=b("Slewing"), tracking=b("Tracking"),
-                at_park=b("AtPark"), can_park=b("CanPark"),
-                can_home=b("CanFindHome"),
-                detail=self._progid, device_name=self._name)
+                connected=connected,
+                ra_hours=ra, dec_degs=dec,
+                alt_degs=alt, az_degs=az,
+                slewing=slewing, tracking=b("Tracking"),
+                at_park=b("AtPark"), at_home=at_home,
+                can_park=b("CanPark"), can_home=b("CanFindHome"),
+                homing=self._homing, stale=stale,
+                detail=detail, device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
@@ -92,6 +127,7 @@ class AscomMount(MountDriver):
     def goto_altaz(self, alt_deg: float, az_deg: float) -> None:
         def _do():
             d = self._dev
+            self._require_slew_ready(d)
             try:
                 d.SlewToAltAzAsync(az_deg, alt_deg)   # ASCOM 순서: (az, alt)
             except Exception:
@@ -101,6 +137,7 @@ class AscomMount(MountDriver):
     def goto_radec(self, ra_hours: float, dec_degs: float) -> None:
         def _do():
             d = self._dev
+            self._require_slew_ready(d)
             try:
                 if getattr(d, "CanSetTracking", False) and not d.Tracking:
                     d.Tracking = True
@@ -115,6 +152,7 @@ class AscomMount(MountDriver):
     def offset_arcsec(self, dra_arcsec: float, ddec_arcsec: float) -> None:
         def _do():
             d = self._dev
+            self._require_slew_ready(d)
             ra = float(d.RightAscension)
             dec = float(d.Declination)
             cosd = max(0.1, math.cos(math.radians(dec)))
@@ -139,10 +177,47 @@ class AscomMount(MountDriver):
         self._call(lambda: self._dev.Unpark())
 
     def find_home(self) -> None:
-        self._call(lambda: self._dev.FindHome())
+        def _do():
+            self._require_slew_ready(self._dev)
+            self._homing = True
+            try:
+                self._dev.FindHome()
+            except Exception:
+                self._homing = False
+                raise
+        self._call(_do)
 
     def set_park(self) -> None:
         self._call(lambda: self._dev.SetPark())   # 현재 위치를 파킹 위치로 저장
+
+    def _require_slew_ready(self, d) -> None:
+        if d is None or not bool(d.Connected):
+            raise RuntimeError("가대가 연결되지 않았습니다")
+        try:
+            if bool(d.AtPark):
+                raise RuntimeError("가대가 파킹 상태입니다. 먼저 Unpark 하세요")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        try:
+            if bool(d.Slewing):
+                # 좌표가 5초+ 고착(phantom slew) → AbortSlew 후 통과
+                stale = (
+                    self._motion_unchanged_since is not None
+                    and time.monotonic() - self._motion_unchanged_since >= 5.0
+                )
+                if stale:
+                    try:
+                        d.AbortSlew()
+                    except Exception:
+                        pass
+                else:
+                    raise RuntimeError("가대가 이미 슬루/홈 탐색 중입니다. 먼저 정지하세요")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
 
     def close(self) -> None:
         try:
@@ -241,12 +316,17 @@ class AscomCamera(CameraDriver):
 
 
 class AscomFilterWheel(FilterWheelDriver):
-    def __init__(self, progid: str, fallback_names: list[str] | None = None):
+    def __init__(self, progid: str, fallback_names: list[str] | None = None,
+                 init_timeout_s: float = 20.0, move_timeout_s: float = 20.0):
         self._progid = progid
         self._fallback = fallback_names or []
+        self._init_timeout_s = max(1.0, float(init_timeout_s))
+        self._move_timeout_s = max(1.0, float(move_timeout_s))
         self._ex = _com_executor()
         self._dev = None
         self._name = ""
+        self._fault = ""
+        self.reconnect_blocked = False
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -256,18 +336,40 @@ class AscomFilterWheel(FilterWheelDriver):
             raise RuntimeError(_HINT)
         def _do():
             import win32com.client
+            self._fault = ""
+            self.reconnect_blocked = False
             self._dev = win32com.client.Dispatch(self._progid)
             self._dev.Connected = True
             try:
                 self._name = str(self._dev.Name)
             except Exception:
                 self._name = self._progid
+            deadline = time.monotonic() + self._init_timeout_s
+            while True:
+                try:
+                    position = int(self._dev.Position)
+                except Exception:
+                    position = -1
+                if position >= 0:
+                    break
+                if time.monotonic() >= deadline:
+                    self._fault = (
+                        f"EFW 초기화가 {self._init_timeout_s:.0f}초 안에 "
+                        "끝나지 않았습니다. 휠 고정 나사/회전판 간섭과 "
+                        "USB 전원을 확인하세요")
+                    self.reconnect_blocked = True
+                    try:
+                        self._dev.Connected = False
+                    except Exception:
+                        pass
+                    raise RuntimeError(self._fault)
+                time.sleep(0.2)
         self._call(_do)
 
     def status(self) -> FilterStatus:
         if self._dev is None:
             return FilterStatus(connected=False, names=list(self._fallback),
-                                device_name=self._name)
+                                detail=self._fault, device_name=self._name)
         def _do():
             d = self._dev
             connected = bool(d.Connected)   # 연결 여부를 독립적으로 — 이동/호밍 중
@@ -283,19 +385,39 @@ class AscomFilterWheel(FilterWheelDriver):
             name = "" if moving or not (0 <= pos < len(names)) else names[pos]
             return FilterStatus(connected=connected,
                                 position=(None if moving else pos),
-                                name=name, names=names, device_name=self._name)
+                                name=name, names=names, moving=moving,
+                                detail=(self._fault or
+                                        ("초기화/이동 중" if moving else "")),
+                                device_name=self._name)
         try:
             return self._call(_do)
-        except Exception:
+        except Exception as exc:
             return FilterStatus(connected=False, names=list(self._fallback),
+                                detail=self._fault or f"ASCOM 오류: {exc}",
                                 device_name=self._name)
 
     def set_position(self, index: int) -> None:
         def _do():
+            if self._dev is None or not bool(self._dev.Connected):
+                raise RuntimeError("필터휠이 연결되지 않았습니다")
+            if int(self._dev.Position) == -1:
+                raise RuntimeError("필터휠이 이미 초기화/이동 중입니다")
             self._dev.Position = index
             # ASCOM 규약: 이동 중 Position == -1
+            deadline = time.monotonic() + self._move_timeout_s
             while int(self._dev.Position) == -1:
+                if time.monotonic() >= deadline:
+                    self._fault = (
+                        f"EFW 이동이 {self._move_timeout_s:.0f}초 안에 "
+                        "끝나지 않았습니다")
+                    self.reconnect_blocked = True
+                    try:
+                        self._dev.Connected = False
+                    except Exception:
+                        pass
+                    raise TimeoutError(self._fault)
                 time.sleep(0.2)
+            self._fault = ""
         self._call(_do)
 
     def close(self) -> None:

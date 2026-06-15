@@ -28,10 +28,15 @@ class ConnectionWatchdog:
         self.interval = float(cfg.get("drivers.watchdog_interval_s", 5.0))
         self.base = float(cfg.get("drivers.reconnect_base_s", 5.0))
         self.cap = float(cfg.get("drivers.reconnect_max_s", 60.0))
+        # 연결 직후 유예 — 방금 (재)연결한 장비는 이 시간 동안 재연결하지 않는다.
+        # ZWO EFW 등은 연결되면 호밍/캘리브레이션을 도는데 그동안 status가 잠깐
+        # '끊김'으로 보일 수 있다. 유예가 없으면 '재연결→재호밍'을 무한 반복한다.
+        self.grace = float(cfg.get("drivers.reconnect_grace_s", 30.0))
         # 끊김을 몇 번 연속 관측해야 '진짜 끊김'으로 보고 재연결할지 (디바운스).
         # 1회 오탐(예: ZWO EFW가 호밍 중 잠깐 Connected=False/속성 오류)으로
         # 재연결→슬롯 재생성→Connected=True 재설정→재호밍 무한반복을 막는다.
         self.fail_threshold = max(1, int(cfg.get("drivers.reconnect_fail_threshold", 2)))
+        self.max_attempts = max(1, int(cfg.get("drivers.reconnect_max_attempts", 3)))
         self._attempts: dict[str, int] = {}   # key -> 연속 실패 횟수
         self._next: dict[str, float] = {}      # key -> 다음 시도 가능 시각
         self._fails: dict[str, int] = {}       # key -> 연속 끊김 관측 횟수 (디바운스)
@@ -71,14 +76,21 @@ class ConnectionWatchdog:
         for key, spec in REGISTRY.items():
             if not self.conn.desired.get(key, False):
                 continue                                  # 운영자가 끈 장비
+            if getattr(self.conn.drivers.get(key),
+                       "reconnect_blocked", False):
+                continue                                  # 장비 점검이 필요한 고착
             if spec.snap_key not in snapshot:
                 continue                                  # 아직 관측 안 됨 → 판단 보류
             if snapshot[spec.snap_key].get("connected"):
                 continue                                  # 정상
+            if now - self.conn.connected_at.get(key, 0.0) < self.grace:
+                continue                                  # 방금 (재)연결 — 호밍 끝낼 시간을 준다
             if self._fails.get(key, 0) < self.fail_threshold:
                 continue                                  # 디바운스 — 일시 끊김(호밍 등)은 무시
             if now < self._next.get(key, 0.0):
                 continue                                  # 백오프 대기 중
+            if self._attempts.get(key, 0) >= self.max_attempts:
+                continue                                  # 최대 재시도 횟수 초과 — 수동 연결 필요
             out.append(key)
         return out
 
@@ -103,12 +115,17 @@ class ConnectionWatchdog:
         # 끊긴 장비 복구 시도 (디바운스 통과한 것만)
         for key in self.due_for_recovery(snap, now):
             attempts = self._attempts.get(key, 0)
-            if attempts == 0:   # 끊김 첫 감지에만 경고 (재시도 로그 도배 방지)
+            if attempts == 0:
                 self.events.log("system",
                                 f"{REGISTRY[key].label} 연결 끊김 — 자동 재연결 시작",
                                 "warn")
             await self.conn.reconnect(key)
             self._attempts[key] = attempts + 1
+            if self._attempts[key] >= self.max_attempts:
+                self.events.log("system",
+                                f"{REGISTRY[key].label} 자동 재연결 {self._attempts[key]}회 실패 "
+                                "— 수동으로 연결하세요",
+                                "error")
             self._next[key] = now + self._backoff(attempts)
             self._fails[key] = 0   # 디바운스 리셋 — 재연결 직후 호밍/초기화 시간 확보
 

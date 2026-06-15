@@ -595,17 +595,15 @@ function addPanelTools(item, tab) {
   const tools = document.createElement("div");
   tools.className = "panel-tools";
   tools.innerHTML =
-    `<button class="pt-btn pt-size" title="크기 변경">⤢</button>` +
+    `<button class="pt-btn pt-size" title="전체폭(모든 열) 토글">⤢</button>` +
     `<button class="pt-btn pt-collapse" title="접기/펼치기">▾</button>`;
   head.appendChild(tools);
   tools.querySelector(".pt-size").onclick = (e) => {
     e.stopPropagation();
-    const cur = widthClass(item);
-    setWidth(item, WIDTHS[(WIDTHS.indexOf(cur) + 1) % WIDTHS.length]);
-    clearColW(tab, item.dataset.panel);   // 나눔선 폭(인라인 %) 해제 → 클래스 폭 적용
-    grids[tab].refreshItems([item]).layout(true);
+    setWidth(item, item.classList.contains("w12") ? "w6" : "w12");   // 전체폭 토글
+    grids[tab].refreshItems().layout();
     saveLayout(tab);
-    syncColsToolbar(tab);
+    positionDividers(tab);
     relayoutAfter(tab);
   };
   tools.querySelector(".pt-collapse").onclick = (e) => {
@@ -622,81 +620,83 @@ function addPanelTools(item, tab) {
 // 행을 나눈 뒤 (2) 각 행 카드를 그 행 최대 높이로 늘려(.muuri-item-content
 // height:100%) 빈공간을 없앤다. 위치/높이만 다루므로 Muuri의 드래그·재배치
 // 애니메이션은 그대로 유지된다.
-function rowGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
+// ===== 컬럼 masonry 레이아웃 =====
+// 카드를 N개 열에 순서대로 분배. 각 카드는 제 높이 그대로라 빈칸이 없다.
+// 전체폭(w12) 카드는 모든 열을 가로지른다. 열 폭은 colfr(비율), 카드 높이는
+// cellh(px override)로 조절. 모두 PPT식으로 나눔선 드래그 + 스냅.
+const colsKey  = (t) => `asterion.cols.${t}.v2`;
+const colfrKey = (t) => `asterion.colfr.${t}.v2`;
+const cellhKey = (t) => `asterion.cellh.${t}.v2`;
+const _rd = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } };
+const _wr = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* noop */ } };
+function colCount(tab) { return Math.max(1, Math.round(_rd(colsKey(tab), 2) || 2)); }
+function saveCols(tab, n) { _wr(colsKey(tab), n); }
+function loadCellH(tab) { return _rd(cellhKey(tab), {}); }
+function saveCellH(tab, m) { _wr(cellhKey(tab), m); }
+function normFr(arr, N) {
+  if (!Array.isArray(arr) || arr.length !== N) return new Array(N).fill(1 / N);
+  const s = arr.reduce((a, b) => a + (+b || 0), 0) || 1;
+  return arr.map((x) => (+x || 0) / s);
+}
+function loadColFr(tab, N) { return normFr(_rd(colfrKey(tab), null), N); }
+function saveColFr(tab, fr) { _wr(colfrKey(tab), fr); }
+
+function colGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
   const n = items.length;
-  const els = new Array(n), w = new Array(n), natH = new Array(n);
-  for (let i = 0; i < n; i++) { els[i] = items[i].getElement(); els[i].style.height = ""; }
-  for (let i = 0; i < n; i++) {            // 강제높이 해제 상태의 자연 폭/높이 (단일 리플로)
-    const r = els[i].getBoundingClientRect();
-    w[i] = r.width; natH[i] = r.height;
-  }
-  // 숨겨진 탭(폭 0)에서 레이아웃이 돌면 모든 카드가 0px로 측정돼 '0px' 강제로
-  // 찌부러진다. 그땐 높이를 건드리지 말고(=auto 유지) 빠져나간다. 탭이 보일 때
-  // 다시 레이아웃되며 정상 높이로 복구된다.
-  if (gridWidth < 1) {
-    grid._rowNat = []; grid._rowH = []; grid._rowY = [];
+  const els = items.map((it) => it.getElement());
+  if (gridWidth < 1) {                        // 숨겨진 탭 — 0px 찌부러짐 방지
+    els.forEach((el) => { el.style.height = ""; });
     callback({ id: layoutId, items, slots: new Array(n * 2).fill(0), styles: {} });
     return;
   }
-  // 폭으로 행을 나누고 각 행의 최대 높이를 구한다
-  const rowOf = new Array(n), rowNat = [];
-  let x = 0, row = 0;
+  const tab = grid._tab || "";
+  const N = colCount(tab);
+  const fr = grid._frLive || loadColFr(tab, N);
+  const colX = [], colW = []; let ax = 0;
+  for (let c = 0; c < N; c++) { colX[c] = ax; colW[c] = fr[c] * gridWidth; ax += colW[c]; }
+  // 1) 각 카드를 열에 배정하고 그 열 폭으로 설정 → 자연 높이 측정 (단일 리플로)
+  const colOf = new Array(n), isFull = new Array(n);
+  let rr = 0;
   for (let i = 0; i < n; i++) {
-    if (x > 0 && x + w[i] > gridWidth + 1) { row++; x = 0; }   // 다음 줄로
-    rowOf[i] = row;
-    rowNat[row] = Math.max(rowNat[row] || 0, natH[i]);          // 행 자연(내용) 높이
-    x += w[i];
+    const el = els[i], full = el.classList.contains("w12");
+    isFull[i] = full;
+    const c = full ? 0 : (rr % N); if (!full) rr++;
+    colOf[i] = c;
+    el.style.width = (full ? gridWidth : colW[c]) + "px";
+    el.style.height = "";
   }
-  // 행 높이 override(수동 행 리사이즈) — 내용 높이보다 키울 때만 적용. 드래그 중엔
-  // 메모리(_rowhLive), 평소엔 저장값(asterion.rowh.<tab>)을 본다.
-  const rowhMap = grid._rowhLive || (grid._tab ? loadRowH(grid._tab) : {});
-  // override가 있으면 그대로(내용보다 작아도) — 줄어든 행은 카드가 스크롤된다.
-  const rowH = rowNat.map((h, r) => (rowhMap[r] != null ? rowhMap[r] : h));
-  const rowY = []; let acc = 0;            // 행 y 누적
-  for (let r = 0; r < rowH.length; r++) { rowY[r] = acc; acc += rowH[r]; }
-  // 슬롯(x,y) 계산 + 같은 행 카드를 행 높이로 강제 → 빈공간 제거
-  const slots = []; x = 0; let cur = 0;
+  const natH = els.map((el) => el.getBoundingClientRect().height);
+  // 2) 높이(cellh override) 적용 + column-major 배치
+  const cellh = grid._cellhLive || loadCellH(tab);
+  const colY = new Array(N).fill(0), slots = [];
   for (let i = 0; i < n; i++) {
-    if (rowOf[i] !== cur) { cur = rowOf[i]; x = 0; }
-    els[i].style.height = rowH[rowOf[i]] + "px";
-    // 행이 내용보다 작게 줄었으면 그 카드만 스크롤(평소엔 스크롤바 없음)
-    els[i].classList.toggle("row-clipped", rowH[rowOf[i]] < rowNat[rowOf[i]] - 0.5);
-    slots.push(x, rowY[rowOf[i]]);
-    x += w[i];
+    const panel = els[i].dataset.panel;
+    const h = cellh[panel] != null ? cellh[panel] : natH[i];
+    els[i].style.height = h + "px";
+    els[i].classList.toggle("row-clipped", h < natH[i] - 0.5);   // 내용보다 작으면 스크롤
+    if (isFull[i]) { const y = Math.max(...colY, 0); slots.push(0, y); for (let c = 0; c < N; c++) colY[c] = y + h; }
+    else { const c = colOf[i]; slots.push(colX[c], colY[c]); colY[c] += h; }
   }
-  grid._rowNat = rowNat; grid._rowH = rowH; grid._rowY = rowY;  // 행 드래그/스냅용 스냅샷
-  callback({ id: layoutId, items, slots, styles: { height: acc + "px" } });
+  grid._cols = N; grid._colX = colX; grid._colW = colW; grid._fr = fr;
+  grid._colOf = colOf; grid._isFull = isFull; grid._natH = natH;
+  callback({ id: layoutId, items, slots, styles: { height: Math.max(...colY, 0) + "px" } });
 }
 
 // ---- 탭별 격자 열 수 (관제 2열 · 기상 3열 등) — 탭 상단 컨트롤 ----
-// 버튼을 누르면 그 탭 모든 카드를 균일 폭으로(1→w12, 2→w6, 3→w4, 4→w3) 맞춘다.
 function setCols(tab, n) {
+  saveCols(tab, n);
+  saveColFr(tab, new Array(n).fill(1 / n));   // 균등 폭으로 리셋
   const grid = grids[tab]; if (!grid) return;
-  const pct = 100 / n;
-  const map = {};
-  grid.getItems().forEach((it) => {
-    const el = it.getElement();
-    el.style.width = pct + "%";              // 균일 폭(인라인) → 나눔선으로 미세조정 가능
-    map[el.dataset.panel] = pct;
-  });
-  saveColW(tab, map);
+  grid._frLive = null;
   grid.refreshItems().layout(true);
-  syncColsToolbar(tab);
-  positionDividers(tab);
-  relayoutAfter(tab);
+  syncColsToolbar(tab); positionDividers(tab); relayoutAfter(tab);
 }
 function syncColsToolbar(tab) {
   const pane = document.querySelector(`.tab-pane[data-pane="${tab}"]`);
   const bar = pane && pane.querySelector(".grid-toolbar");
-  const grid = grids[tab];
-  if (!bar || !grid) return;
-  const cont = document.getElementById(`grid-${tab}`);
-  const cw = cont.getBoundingClientRect().width;
-  const ws = grid.getItems().map((it) => it.getElement().getBoundingClientRect().width);
-  const uniform = cw > 0 && ws.length && ws.every((w) => Math.abs(w - ws[0]) < 2);
-  const activeN = uniform ? Math.round(cw / ws[0]) : 0;   // 균일할 때만 해당 열수 활성
-  bar.querySelectorAll(".gt-btn").forEach((b) =>
-    b.classList.toggle("active", Number(b.dataset.cols) === activeN));
+  if (!bar) return;
+  const N = colCount(tab);
+  bar.querySelectorAll(".gt-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.cols) === N));
 }
 function injectGridToolbar(tab) {
   const pane = document.querySelector(`.tab-pane[data-pane="${tab}"]`);
@@ -706,56 +706,30 @@ function injectGridToolbar(tab) {
   bar.className = "grid-toolbar";
   bar.innerHTML = `<span class="gt-label">격자 열</span><div class="gt-cols">` +
     [1, 2, 3, 4].map((n) => `<button class="gt-btn" data-cols="${n}">${n}</button>`).join("") +
-    `</div><button class="gt-tile" title="수동 폭·행높이 리사이즈를 해제하고 깔끔히 정렬">⊞ 정렬</button>`;
+    `</div><button class="gt-tile" title="수동 폭·높이 리사이즈를 해제하고 깔끔히 정렬">⊞ 정렬</button>`;
   pane.insertBefore(bar, gridEl);
-  bar.querySelectorAll(".gt-btn").forEach((b) =>
-    (b.onclick = () => setCols(tab, Number(b.dataset.cols))));
+  bar.querySelectorAll(".gt-btn").forEach((b) => (b.onclick = () => setCols(tab, Number(b.dataset.cols))));
   bar.querySelector(".gt-tile").onclick = () => tileGrid(tab);
   syncColsToolbar(tab);
 }
-
-// ---- 나눔선(컬럼 폭 · 행 높이 리사이즈) ----
-// 폭은 인라인 %(asterion.colw.<tab>), 행 높이는 px(asterion.rowh.<tab>)로 저장.
-// rowGridLayout이 실제 측정 폭/저장 행높이를 쓰므로 그대로 반영되고 정렬·합은 유지.
-const colwKey = (tab) => `asterion.colw.${tab}.v1`;
-const rowhKey = (tab) => `asterion.rowh.${tab}.v1`;
-const _readMap = (k) => { try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch (e) { return {}; } };
-const _writeMap = (k, m) => { try { localStorage.setItem(k, JSON.stringify(m)); } catch (e) { /* noop */ } };
-function loadColW(tab) { return _readMap(colwKey(tab)); }
-function saveColW(tab, m) { _writeMap(colwKey(tab), m); }
-function loadRowH(tab) { return _readMap(rowhKey(tab)); }
-function saveRowH(tab, m) { _writeMap(rowhKey(tab), m); }
-function applyColW(tab) {                   // 저장된 인라인 % 폭 복원 (wN 위에 덮음)
+function tileGrid(tab) {                       // 수동 폭·높이 리사이즈 해제 → 깔끔히 정렬
   const grid = grids[tab]; if (!grid) return;
-  const map = loadColW(tab);
-  grid.getItems().forEach((it) => {
-    const el = it.getElement();
-    const pct = map[el.dataset.panel];
-    el.style.width = (pct != null) ? pct + "%" : "";
-  });
-}
-function clearColW(tab, panel) {            // ⤢ 등으로 폭을 클래스로 되돌릴 때
-  const map = loadColW(tab);
-  if (panel in map) { delete map[panel]; saveColW(tab, map); }
-}
-function tileGrid(tab) {                    // 수동 폭·행높이 리사이즈 전부 해제 → 깔끔히 정렬
-  const grid = grids[tab]; if (!grid) return;
-  saveColW(tab, {}); saveRowH(tab, {}); grid._rowhLive = null;
-  grid.getItems().forEach((it) => { const el = it.getElement(); el.style.width = ""; el.style.height = ""; });
-  grid.refreshItems().layout();             // 애니메이션과 함께 정렬
-  syncColsToolbar(tab);
-  positionDividers(tab);
-  relayoutAfter(tab);
+  const N = colCount(tab);
+  saveColFr(tab, new Array(N).fill(1 / N)); saveCellH(tab, {});
+  grid._cellhLive = null; grid._frLive = null;
+  grid.getItems().forEach((it) => { const el = it.getElement(); el.style.height = ""; });
+  grid.refreshItems().layout(true);
+  syncColsToolbar(tab); positionDividers(tab); relayoutAfter(tab);
 }
 
-const SNAP_PX = 7;                          // 스냅 거리
-function showGuide(tab, vertical, pos, len) {   // PPT식 정렬 가이드선
+const SNAP_PX = 7;                             // 스냅 거리
+function showGuide(tab, vertical, pos, len, off) {   // PPT식 정렬 가이드선
   const cont = document.getElementById(`grid-${tab}`);
   let g = cont.querySelector(":scope > .snap-guide");
   if (!g) { g = document.createElement("div"); g.className = "snap-guide"; cont.appendChild(g); }
   g.classList.toggle("horizontal", !vertical);
   if (vertical) { g.style.left = pos + "px"; g.style.top = "0px"; g.style.height = len + "px"; g.style.width = ""; }
-  else { g.style.top = pos + "px"; g.style.left = "0px"; g.style.width = len + "px"; g.style.height = ""; }
+  else { g.style.top = pos + "px"; g.style.left = (off || 0) + "px"; g.style.width = len + "px"; g.style.height = ""; }
   g.style.display = "block";
 }
 function hideGuide(tab) {
@@ -764,125 +738,125 @@ function hideGuide(tab) {
   if (g) g.style.display = "none";
 }
 
-function positionDividers(tab) {            // 나눔선을 경계에 재배치 (DOM 재사용 → 깜빡임 X)
+function positionDividers(tab) {               // 세로선(열 폭) + 가로선(한 열 안 카드 높이)
   const grid = grids[tab]; if (!grid) return;
   const cont = document.getElementById(`grid-${tab}`);
   const cr = cont.getBoundingClientRect();
-  if (cr.width === 0) return;               // 숨겨진 탭
+  if (cr.width === 0) return;                  // 숨겨진 탭
   let layer = cont.querySelector(":scope > .divider-layer");
   if (!layer) { layer = document.createElement("div"); layer.className = "divider-layer"; cont.appendChild(layer); }
-  const items = grid.getItems().map((it) => {
-    const el = it.getElement(); const r = el.getBoundingClientRect();
-    return { panel: el.dataset.panel, x: r.left - cr.left, y: r.top - cr.top,
-      h: r.height, right: r.right - cr.left, bottom: r.bottom - cr.top };
-  });
-  const rowsMap = {};
-  items.forEach((it) => { const k = Math.round(it.y); (rowsMap[k] = rowsMap[k] || []).push(it); });
-  const rowKeys = Object.keys(rowsMap).map(Number).sort((a, b) => a - b);
+  const N = grid._cols || 1;
+  const totalH = parseFloat(cont.style.height) || cr.height;
+  const colX = grid._colX || [], colW = grid._colW || [], colOf = grid._colOf || [], isFull = grid._isFull || [];
   const specs = [];
-  rowKeys.forEach((k, ri) => {
-    const row = rowsMap[k].sort((a, b) => a.x - b.x);
-    for (let i = 0; i < row.length - 1; i++)                // 열 나눔선
-      specs.push({ type: "col", left: row[i].right, top: Math.min(row[i].y, row[i + 1].y),
-        len: Math.max(row[i].h, row[i + 1].h), l: row[i].panel, r: row[i + 1].panel });
-    // 행 나눔선 — 각 행의 아래 경계마다(맨 아래 행 포함). 그 행(ri)을 위아래로 조절.
-    specs.push({ type: "row", top: Math.max(...row.map((c) => c.bottom)), ri });
+  for (let c = 0; c < N - 1; c++)              // 세로선: 열 사이 경계, 전체 높이
+    specs.push({ type: "col", left: colX[c] + colW[c], c });
+  const colCards = {};                         // 열별 카드(순서대로) — 가로선용
+  grid.getItems().forEach((it, idx) => {
+    if (isFull[idx]) return;                    // 전체폭 카드는 열 분할 제외
+    const r = it.getElement().getBoundingClientRect();
+    (colCards[colOf[idx]] = colCards[colOf[idx]] || []).push(
+      { panel: it.getElement().dataset.panel, y: r.top - cr.top, bottom: r.bottom - cr.top });
   });
-  const pool = [...layer.querySelectorAll(".divider")];     // 재사용 풀
+  Object.keys(colCards).forEach((ck) => {
+    const c = +ck, list = colCards[c].sort((a, b) => a.y - b.y);
+    for (let j = 0; j < list.length; j++)      // 가로선: 카드 아래 경계마다(맨 아래 포함)
+      specs.push({ type: "cell", top: list[j].bottom, left: colX[c], width: colW[c],
+        up: list[j].panel, down: list[j + 1] ? list[j + 1].panel : null });
+  });
+  const pool = [...layer.querySelectorAll(".divider")];   // DOM 재사용 → 깜빡임 X
   while (pool.length < specs.length) { const d = document.createElement("div"); d.className = "divider"; layer.appendChild(d); pool.push(d); }
   while (pool.length > specs.length) { layer.removeChild(pool.pop()); }
   specs.forEach((s, i) => {
     const d = pool[i];
     if (s.type === "col") {
-      d.className = "divider col-divider"; d.title = "드래그해 좌우 폭 조절";
-      d.style.left = s.left + "px"; d.style.top = s.top + "px"; d.style.height = s.len + "px"; d.style.width = "";
-      d.onmousedown = (e) => startColDrag(tab, s.l, s.r, e);
+      d.className = "divider col-divider"; d.title = "드래그해 열 폭 조절";
+      d.style.left = s.left + "px"; d.style.top = "0px"; d.style.height = totalH + "px"; d.style.width = "";
+      d.onmousedown = (e) => startColDrag(tab, s.c, e);
     } else {
-      d.className = "divider row-divider"; d.title = "드래그해 위 행 높이 조절";
-      d.style.top = s.top + "px"; d.style.left = "0px"; d.style.width = cr.width + "px"; d.style.height = "";
-      d.onmousedown = (e) => startRowDrag(tab, s.ri, e);
+      d.className = "divider row-divider"; d.title = "드래그해 위아래 카드 높이 조절";
+      d.style.top = s.top + "px"; d.style.left = s.left + "px"; d.style.width = s.width + "px"; d.style.height = "";
+      d.onmousedown = (e) => startCellDrag(tab, s.up, s.down, e);
     }
   });
 }
 
-function startColDrag(tab, leftPanel, rightPanel, e) {
-  e.preventDefault(); e.stopPropagation();   // Muuri 헤더 드래그와 충돌 방지
+// 열 폭 리사이즈 — 인접 두 열 비율(fr) 재분배 (합 보존)
+function startColDrag(tab, c, e) {
+  e.preventDefault(); e.stopPropagation();
   const grid = grids[tab]; if (!grid) return;
   const cont = document.getElementById(`grid-${tab}`);
-  const cr = cont.getBoundingClientRect(), cw = cr.width;
-  const elOf = (p) => { const it = grid.getItems().find((g) => g.getElement().dataset.panel === p); return it ? it.getElement() : null; };
-  const lEl = elOf(leftPanel), rEl = elOf(rightPanel);
-  if (!lEl || !rEl) return;
-  const lr = lEl.getBoundingClientRect(), rr = rEl.getBoundingClientRect();
-  const pairLeft = lr.left - cr.left, pairRight = rr.right - cr.left, lw0 = lr.width, minPx = 150;
-  const startX = e.clientX, origBoundary = pairLeft + lw0;
-  // 스냅 타깃: 원래 위치 · 쌍의 중앙 · 컨테이너 균등 비율 · 다른 나눔선과 정렬
-  const targets = [origBoundary, (pairLeft + pairRight) / 2];
-  [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4].forEach((f) => targets.push(cw * f));
-  cont.querySelectorAll(".col-divider").forEach((d) => { const v = parseFloat(d.style.left); if (!Number.isNaN(v)) targets.push(v); });
+  const cw = cont.getBoundingClientRect().width;
+  const fr = (grid._fr || []).slice();
+  const lFr0 = fr[c], rFr0 = fr[c + 1], sum = lFr0 + rFr0;
+  const pairLeftX = (grid._colX || [])[c] || 0, minFr = 0.12, startX = e.clientX;
   document.body.style.cursor = "col-resize";
   const apply = (ev) => {
-    let b = pairLeft + (lw0 + (ev.clientX - startX));
-    b = Math.max(pairLeft + minPx, Math.min(pairRight - minPx, b));
+    let lFr = Math.max(minFr, Math.min(sum - minFr, lFr0 + (ev.clientX - startX) / cw));
     let snap = null;
-    for (const t of targets) if (t > pairLeft + minPx && t < pairRight - minPx && Math.abs(b - t) <= SNAP_PX) { b = t; snap = t; break; }
-    lEl.style.width = ((b - pairLeft) / cw * 100) + "%";
-    rEl.style.width = ((pairRight - b) / cw * 100) + "%";
+    for (const t of [lFr0, sum / 2]) if (Math.abs(lFr - t) <= SNAP_PX / cw) { lFr = t; snap = pairLeftX + t * cw; break; }
+    fr[c] = lFr; fr[c + 1] = sum - lFr;
+    grid._frLive = fr.slice();
     grid.layout(true);
     if (snap != null) showGuide(tab, true, Math.round(snap), cont.getBoundingClientRect().height); else hideGuide(tab);
   };
-  const onMove = apply;   // 직접 적용 (DOM 재사용 + 경량 layout이라 깜빡임 없음)
+  const onMove = apply;
   const onUp = () => {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     document.body.style.cursor = ""; hideGuide(tab);
-    const map = loadColW(tab);
-    map[leftPanel] = +(lEl.getBoundingClientRect().width / cw * 100).toFixed(3);
-    map[rightPanel] = +(rEl.getBoundingClientRect().width / cw * 100).toFixed(3);
-    saveColW(tab, map); syncColsToolbar(tab); positionDividers(tab);
+    grid._frLive = null; saveColFr(tab, fr);
+    grid.refreshItems().layout(true); positionDividers(tab);
   };
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
 }
 
-function startRowDrag(tab, rowIndex, e) {
+// 카드 높이 리사이즈 — 한 열 안 인접 두 카드 높이 재분배 (합 보존). 맨 아래는 단독.
+function startCellDrag(tab, upPanel, downPanel, e) {
   e.preventDefault(); e.stopPropagation();
   const grid = grids[tab]; if (!grid) return;
   const cont = document.getElementById(`grid-${tab}`);
-  const rowH = grid._rowH || [], rowNat = grid._rowNat || [], rowY = grid._rowY || [];
-  const up = rowIndex, lo = rowIndex + 1, hasLo = lo < rowH.length;   // 맨 아래 나눔선은 lo 없음
-  const upH0 = rowH[up] || 0, loH0 = hasLo ? (rowH[lo] || 0) : 0;
-  const MIN = 90, startY = e.clientY, topY = rowY[up] || 0;
-  const working = Object.assign({}, loadRowH(tab));
+  const cr = cont.getBoundingClientRect();
+  const items = grid.getItems();
+  const natOf = {}, idxOf = {};
+  items.forEach((it, idx) => { const p = it.getElement().dataset.panel; natOf[p] = (grid._natH || [])[idx]; idxOf[p] = idx; });
+  const upEl = items[idxOf[upPanel]].getElement();
+  const ur = upEl.getBoundingClientRect();
+  const topY = ur.top - cr.top, upH0 = ur.height;
+  const c = (grid._colOf || [])[idxOf[upPanel]] || 0;
+  const gX = (grid._colX || [])[c] || 0, gW = (grid._colW || [])[c] || cr.width;
+  const hasDown = !!downPanel;
+  const downH0 = hasDown ? items[idxOf[downPanel]].getElement().getBoundingClientRect().height : 0;
+  const MIN = 90, startY = e.clientY;
+  const working = Object.assign({}, loadCellH(tab));
   document.body.style.cursor = "row-resize";
   const apply = (ev) => {
     const d = ev.clientY - startY;
     let snap = null;
-    if (hasLo) {
-      // 인접 두 행 높이 재분배 (합 보존) — 열 나눔선이 폭을 나누듯
-      const sum = upH0 + loH0;
+    if (hasDown) {
+      const sum = upH0 + downH0;
       let upH = Math.min(sum - MIN, Math.max(MIN, upH0 + d));
-      const boundary = topY + upH;   // 스냅: 원래 경계·균등 분할·위/아래 내용 높이
-      for (const s of [topY + upH0, topY + sum / 2, topY + (rowNat[up] || 0), topY + sum - (rowNat[lo] || 0)])
+      const boundary = topY + upH;
+      for (const s of [topY + upH0, topY + sum / 2, topY + (natOf[upPanel] || 0), topY + sum - (natOf[downPanel] || 0)])
         if (s > topY + MIN && s < topY + sum - MIN && Math.abs(boundary - s) <= SNAP_PX) { upH = s - topY; snap = s; break; }
-      working[up] = Math.round(upH); working[lo] = Math.round(sum - upH);
+      working[upPanel] = Math.round(upH); working[downPanel] = Math.round(sum - upH);
     } else {
-      // 맨 아래 행: 그 행만 키우거나(빈칸) 내용 높이까지 줄임
       let h = Math.max(MIN, upH0 + d);
-      const nat = rowNat[up] || 0;
+      const nat = natOf[upPanel] || 0;
       if (Math.abs(h - nat) <= SNAP_PX) { h = nat; snap = topY + nat; }
-      if (Math.abs(h - nat) < 0.5) delete working[up]; else working[up] = Math.round(h);
+      if (Math.abs(h - nat) < 0.5) delete working[upPanel]; else working[upPanel] = Math.round(h);
     }
-    grid._rowhLive = working;
+    grid._cellhLive = working;
     grid.layout(true);
-    if (snap != null) showGuide(tab, false, Math.round(snap), cont.getBoundingClientRect().width); else hideGuide(tab);
+    if (snap != null) showGuide(tab, false, Math.round(snap), gW, gX); else hideGuide(tab);
   };
-  const onMove = apply;   // 직접 적용 (DOM 재사용 + 경량 layout이라 깜빡임 없음)
+  const onMove = apply;
   const onUp = () => {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     document.body.style.cursor = ""; hideGuide(tab);
-    grid._rowhLive = null; saveRowH(tab, working);
+    grid._cellhLive = null; saveCellH(tab, working);
     grid.layout(true); positionDividers(tab);
   };
   document.addEventListener("mousemove", onMove);
@@ -898,7 +872,7 @@ function ensureGrid(tab) {
     dragEnabled: true,
     dragHandle: ".card-head",
     dragContainer: document.body,
-    layout: rowGridLayout,   // 행 단위 정렬 격자 (masonry 계단현상 제거)
+    layout: colGridLayout,   // 컬럼 masonry (각 열 독립 높이, 빈칸 0)
     layoutDuration: 300,
     layoutEasing: "cubic-bezier(.2,.8,.2,1)",
     dragStartPredicate: (item, e) => {
@@ -909,9 +883,8 @@ function ensureGrid(tab) {
     dragRelease: { duration: 300, easing: "cubic-bezier(.2,.8,.2,1)" },
   });
   grids[tab] = grid;
-  grid._tab = tab;                              // rowGridLayout이 탭별 행높이 override를 읽음
-  applySavedLayout(tab, grid);                  // 폭·접힘·고정·순서를 먼저 적용
-  applyColW(tab);                               // 저장된 나눔선 폭(인라인 %) 복원
+  grid._tab = tab;                              // colGridLayout이 탭별 열수·비율·높이를 읽음
+  applySavedLayout(tab, grid);                  // 접힘·고정·순서·전체폭(w12)을 먼저 적용
   grid.getItems().forEach((it) => addPanelTools(it.getElement(), tab));
   injectGridToolbar(tab);                       // 탭 상단 격자 열수 컨트롤
   grid.on("layoutEnd", () => positionDividers(tab));   // 레이아웃 후 나눔선 재배치

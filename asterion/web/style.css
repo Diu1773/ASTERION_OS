@@ -188,6 +188,8 @@ body { padding-bottom: 38px; }
 /* height:100% — rowGridLayout이 .muuri-item에 행 높이를 강제하면 카드가 그 칸을
    꽉 채워 같은 행 빈공간을 없앤다 (item 높이가 auto일 땐 자연 높이로 동작). */
 .muuri-item-content { position: relative; width: 100%; height: 100%; }
+/* 행 나눔선으로 내용보다 작게 줄인 행의 카드만 스크롤 (평소엔 스크롤바 없음) */
+.muuri-item.row-clipped > .muuri-item-content { overflow: auto; }
 /* Muuri 상태 클래스 — 드래그/릴리스 중 위로, 숨김은 아래로 */
 .muuri-item.muuri-item-dragging { z-index: 3; cursor: grabbing; }
 .muuri-item.muuri-item-releasing { z-index: 2; }

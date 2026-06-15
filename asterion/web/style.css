@@ -150,6 +150,19 @@ body { padding-bottom: 38px; }
 .gt-btn:hover { color: var(--text); }
 .gt-btn.active { background: var(--accent-soft); color: var(--accent); }
 
+/* 열 나눔선 — 같은 행 인접 카드 경계. 평소 옅은 선, 호버 시 강조, 드래그로 폭 조절 */
+.divider-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.col-divider {
+  position: absolute; width: 11px; transform: translateX(-50%);
+  pointer-events: auto; cursor: col-resize; z-index: 4;
+}
+.col-divider::before {
+  content: ""; position: absolute; left: 50%; top: 10px; bottom: 10px; width: 2px;
+  transform: translateX(-50%); background: var(--edge); border-radius: 2px;
+  transition: background .12s, box-shadow .12s;
+}
+.col-divider:hover::before { background: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+
 /* ---------------- muuri grid (갭 없는 12열 팩킹) ---------------- */
 .muuri { position: relative; }
 .muuri-item {

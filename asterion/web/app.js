@@ -530,6 +530,7 @@ function widthClass(item) {
 function setWidth(item, w) {
   WIDTHS.forEach((c) => item.classList.remove(c));
   item.classList.add(w);
+  item.style.width = "";   // 인라인 % 폭(나눔선 조절) 해제 → 클래스 폭으로 복귀
 }
 
 function saveLayout(tab) {
@@ -601,8 +602,10 @@ function addPanelTools(item, tab) {
     e.stopPropagation();
     const cur = widthClass(item);
     setWidth(item, WIDTHS[(WIDTHS.indexOf(cur) + 1) % WIDTHS.length]);
+    clearColW(tab, item.dataset.panel);   // 나눔선 폭(인라인 %) 해제 → 클래스 폭 적용
     grids[tab].refreshItems([item]).layout(true);
     saveLayout(tab);
+    syncColsToolbar(tab);
     relayoutAfter(tab);
   };
   tools.querySelector(".pt-collapse").onclick = (e) => {
@@ -653,11 +656,17 @@ function rowGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
 // 버튼을 누르면 그 탭 모든 카드를 균일 폭으로(1→w12, 2→w6, 3→w4, 4→w3) 맞춘다.
 function setCols(tab, n) {
   const grid = grids[tab]; if (!grid) return;
-  const wcls = "w" + (12 / n);
-  grid.getItems().forEach((it) => setWidth(it.getElement(), wcls));
+  const pct = 100 / n;
+  const map = {};
+  grid.getItems().forEach((it) => {
+    const el = it.getElement();
+    el.style.width = pct + "%";              // 균일 폭(인라인) → 나눔선으로 미세조정 가능
+    map[el.dataset.panel] = pct;
+  });
+  saveColW(tab, map);
   grid.refreshItems().layout(true);
-  saveLayout(tab);
   syncColsToolbar(tab);
+  positionDividers(tab);
   relayoutAfter(tab);
 }
 function syncColsToolbar(tab) {
@@ -665,9 +674,11 @@ function syncColsToolbar(tab) {
   const bar = pane && pane.querySelector(".grid-toolbar");
   const grid = grids[tab];
   if (!bar || !grid) return;
-  const ws = grid.getItems().map((it) => widthClass(it.getElement()));
-  const uniform = ws.length && ws.every((w) => w === ws[0]) ? ws[0] : null;
-  const activeN = uniform ? 12 / Number(uniform.slice(1)) : 0;   // 균일할 때만 활성
+  const cont = document.getElementById(`grid-${tab}`);
+  const cw = cont.getBoundingClientRect().width;
+  const ws = grid.getItems().map((it) => it.getElement().getBoundingClientRect().width);
+  const uniform = cw > 0 && ws.length && ws.every((w) => Math.abs(w - ws[0]) < 2);
+  const activeN = uniform ? Math.round(cw / ws[0]) : 0;   // 균일할 때만 해당 열수 활성
   bar.querySelectorAll(".gt-btn").forEach((b) =>
     b.classList.toggle("active", Number(b.dataset.cols) === activeN));
 }
@@ -684,6 +695,97 @@ function injectGridToolbar(tab) {
   bar.querySelectorAll(".gt-btn").forEach((b) =>
     (b.onclick = () => setCols(tab, Number(b.dataset.cols))));
   syncColsToolbar(tab);
+}
+
+// ---- 열 나눔선(컬럼 리사이즈) — 같은 행 인접 카드 경계를 드래그해 폭 조절 ----
+// 폭은 인라인 %로 저장(asterion.colw.<tab>)되어 wN 클래스 위에 덮이고, rowGridLayout이
+// 실제 측정 폭을 쓰므로 그대로 반영된다. 합은 보존되어 그 행만 바뀐다.
+const colwKey = (tab) => `asterion.colw.${tab}.v1`;
+function loadColW(tab) {
+  try { return JSON.parse(localStorage.getItem(colwKey(tab)) || "{}") || {}; }
+  catch (e) { return {}; }
+}
+function saveColW(tab, map) {
+  try { localStorage.setItem(colwKey(tab), JSON.stringify(map)); } catch (e) { /* noop */ }
+}
+function applyColW(tab) {                  // 저장된 인라인 % 폭 복원 (wN 위에 덮음)
+  const grid = grids[tab]; if (!grid) return;
+  const map = loadColW(tab);
+  grid.getItems().forEach((it) => {
+    const el = it.getElement();
+    const pct = map[el.dataset.panel];
+    el.style.width = (pct != null) ? pct + "%" : "";
+  });
+}
+function clearColW(tab, panel) {           // ⤢ 등으로 폭을 클래스로 되돌릴 때
+  const map = loadColW(tab);
+  if (panel in map) { delete map[panel]; saveColW(tab, map); }
+}
+
+function positionDividers(tab) {           // 매 layoutEnd마다 나눔선을 경계에 재배치
+  const grid = grids[tab]; if (!grid) return;
+  const cont = document.getElementById(`grid-${tab}`);
+  const cr = cont.getBoundingClientRect();
+  if (cr.width === 0) return;              // 숨겨진 탭 — 측정 불가
+  let layer = cont.querySelector(":scope > .divider-layer");
+  if (!layer) { layer = document.createElement("div"); layer.className = "divider-layer"; cont.appendChild(layer); }
+  const items = grid.getItems().map((it) => {
+    const el = it.getElement(); const r = el.getBoundingClientRect();
+    return { panel: el.dataset.panel, x: r.left - cr.left, y: r.top - cr.top, h: r.height, right: r.right - cr.left };
+  });
+  const rows = {};
+  items.forEach((it) => { const k = Math.round(it.y); (rows[k] = rows[k] || []).push(it); });
+  layer.innerHTML = "";
+  Object.values(rows).forEach((row) => {
+    row.sort((a, b) => a.x - b.x);
+    for (let i = 0; i < row.length - 1; i++) {
+      const L = row[i], R = row[i + 1];
+      const d = document.createElement("div");
+      d.className = "col-divider";
+      d.title = "드래그해 좌우 폭 조절";
+      d.style.left = L.right + "px";
+      d.style.top = Math.min(L.y, R.y) + "px";
+      d.style.height = Math.max(L.h, R.h) + "px";
+      d.addEventListener("mousedown", (e) => startColDrag(tab, L.panel, R.panel, e));
+      layer.appendChild(d);
+    }
+  });
+}
+
+function startColDrag(tab, leftPanel, rightPanel, e) {
+  e.preventDefault(); e.stopPropagation();   // Muuri 헤더 드래그와 충돌 방지
+  const grid = grids[tab]; if (!grid) return;
+  const cont = document.getElementById(`grid-${tab}`);
+  const cw = cont.getBoundingClientRect().width;
+  const elOf = (p) => {
+    const it = grid.getItems().find((g) => g.getElement().dataset.panel === p);
+    return it ? it.getElement() : null;
+  };
+  const lEl = elOf(leftPanel), rEl = elOf(rightPanel);
+  if (!lEl || !rEl) return;
+  const lw0 = lEl.getBoundingClientRect().width, rw0 = rEl.getBoundingClientRect().width;
+  const startX = e.clientX, minPx = 150;     // 양쪽 최소 폭
+  document.body.style.cursor = "col-resize";
+  const onMove = (ev) => {
+    let dx = ev.clientX - startX;
+    dx = Math.max(-(lw0 - minPx), Math.min(rw0 - minPx, dx));
+    lEl.style.width = ((lw0 + dx) / cw * 100) + "%";
+    rEl.style.width = ((rw0 - dx) / cw * 100) + "%";
+    grid.refreshItems().layout(true);        // 즉시(무애니메이션) 반영
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    const map = loadColW(tab);
+    map[leftPanel] = +(lEl.getBoundingClientRect().width / cw * 100).toFixed(3);
+    map[rightPanel] = +(rEl.getBoundingClientRect().width / cw * 100).toFixed(3);
+    saveColW(tab, map);
+    syncColsToolbar(tab);
+    positionDividers(tab);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 function ensureGrid(tab) {
@@ -707,8 +809,10 @@ function ensureGrid(tab) {
   });
   grids[tab] = grid;
   applySavedLayout(tab, grid);                  // 폭·접힘·고정·순서를 먼저 적용
+  applyColW(tab);                               // 저장된 나눔선 폭(인라인 %) 복원
   grid.getItems().forEach((it) => addPanelTools(it.getElement(), tab));
   injectGridToolbar(tab);                       // 탭 상단 격자 열수 컨트롤
+  grid.on("layoutEnd", () => positionDividers(tab));   // 레이아웃 후 나눔선 재배치
   grid.on("dragInit", () => { grid._dragging = true; });
   grid.on("dragReleaseEnd", () => {
     grid._dragging = false; saveLayout(tab); relayoutAfter(tab);

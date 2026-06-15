@@ -174,6 +174,22 @@ body { padding-bottom: 38px; }
 .snap-guide:not(.horizontal) { width: 2px; transform: translateX(-50%); }
 .snap-guide.horizontal { height: 2px; transform: translateY(-50%); }
 
+/* ---------------- 카드 크게 보기(확대 오버레이) ---------------- */
+.max-backdrop { position: fixed; inset: 0; z-index: 90; display: none;
+  background: rgba(0, 0, 0, .6); backdrop-filter: blur(3px); }
+.muuri-item.maximized {
+  position: fixed !important; inset: 4vh 4vw !important;
+  width: auto !important; height: auto !important; transform: none !important;
+  z-index: 95; padding: 0;
+}
+.muuri-item.maximized > .muuri-item-content { height: 100%; }
+.muuri-item.maximized .card { height: 100%; overflow: auto; }
+/* 크게 볼 때 주요 시각 요소가 카드를 채우게 */
+.muuri-item.maximized #sky-canvas { max-width: min(74vh, 100%); }
+.muuri-item.maximized .frame-view,
+.muuri-item.maximized .embed-view { aspect-ratio: auto; min-height: 64vh; }
+.muuri-item.maximized #timeline-canvas { min-height: 40vh; }
+
 /* ---------------- muuri grid (갭 없는 12열 팩킹) ---------------- */
 .muuri { position: relative; }
 .muuri-item {

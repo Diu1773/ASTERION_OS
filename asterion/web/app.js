@@ -577,6 +577,21 @@ function relayoutAfter(tab) {
   });
 }
 
+// 카드 '크게 보기' — 그 카드만 큰 오버레이로 띄운다(격자는 안 건드림). 다시 누르거나
+// 배경 클릭으로 닫힘. 캔버스(돔·게이지·차트)는 새 크기로 다시 그린다.
+function toggleMaximize(item) {
+  const on = item.classList.toggle("maximized");
+  let bd = document.querySelector(".max-backdrop");
+  if (on) {
+    if (!bd) { bd = document.createElement("div"); bd.className = "max-backdrop"; document.body.appendChild(bd); }
+    bd.onclick = () => toggleMaximize(item);
+    bd.style.display = "block";
+  } else if (bd) {
+    bd.style.display = "none";
+  }
+  setTimeout(() => { if (lastStatus) applyStatus(lastStatus); drawTimeline(); drawAllCharts(); }, 30);
+}
+
 function addPanelTools(item, tab) {
   const card = item.querySelector(".card");
   const head = card.querySelector(".card-head");
@@ -595,9 +610,11 @@ function addPanelTools(item, tab) {
   const tools = document.createElement("div");
   tools.className = "panel-tools";
   tools.innerHTML =
+    `<button class="pt-btn pt-max" title="크게 보기">⛶</button>` +
     `<button class="pt-btn pt-size" title="전체폭(모든 열) 토글">⤢</button>` +
     `<button class="pt-btn pt-collapse" title="접기/펼치기">▾</button>`;
   head.appendChild(tools);
+  tools.querySelector(".pt-max").onclick = (e) => { e.stopPropagation(); toggleMaximize(item); };
   tools.querySelector(".pt-size").onclick = (e) => {
     e.stopPropagation();
     setWidth(item, item.classList.contains("w12") ? "w6" : "w12");   // 전체폭 토글

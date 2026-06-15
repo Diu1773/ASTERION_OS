@@ -531,10 +531,15 @@ select { color-scheme: dark; }
   background: rgba(12, 15, 22, 0.93);
   backdrop-filter: blur(14px);
   border-top: 1px solid var(--edge-strong);
-  max-height: 46vh;
+  max-height: 280px;
   transition: max-height .24s cubic-bezier(.2, .8, .2, 1);
 }
 .log-dock.collapsed { max-height: 38px; }
+/* 시스템 탭 로그 패널 — 카드를 꽉 채운다 (긴 connections 옆에서 높이 활용, 빈칸 없음).
+   로그를 absolute로 감싸 콘텐츠가 자연 높이를 끌어올리지 않게 → 행 높이만큼만 채우고 스크롤. */
+.muuri-item[data-panel="log-sys"] > .card { display: flex; flex-direction: column; }
+.log-fill { flex: 1; min-height: 200px; position: relative; }
+#log-sys { position: absolute; inset: 0; max-height: none; min-height: 0; border: none; }
 .log-dock-head {
   display: flex; align-items: center; gap: 12px;
   height: 38px; flex: none; padding: 0 18px;

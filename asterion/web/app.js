@@ -81,14 +81,17 @@ function fmtDec(d) {
 
 // ---------- 라이브 로그 ----------
 
-const logEl = $("log");
 function logLine(e) {
-  const div = document.createElement("div");
-  div.className = `l-${e.level || "info"}`;
-  div.innerHTML = `<span class="l-ts">${e.ts}</span> <span class="l-src">[${e.source}]</span> ${escapeHtml(e.msg)}`;
-  logEl.appendChild(div);
-  while (logEl.childNodes.length > 300) logEl.removeChild(logEl.firstChild);
-  logEl.scrollTop = logEl.scrollHeight;
+  // 모든 .log 컨테이너에 추가 — 전역 독(#log)과 시스템 탭 패널(#log-sys) 동기화
+  const html = `<span class="l-ts">${e.ts}</span> <span class="l-src">[${e.source}]</span> ${escapeHtml(e.msg)}`;
+  document.querySelectorAll(".log").forEach((logEl) => {
+    const div = document.createElement("div");
+    div.className = `l-${e.level || "info"}`;
+    div.innerHTML = html;
+    logEl.appendChild(div);
+    while (logEl.childNodes.length > 300) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  });
   const peek = document.getElementById("log-dock-peek");   // 접힘 상태 미리보기(최신 1줄)
   if (peek) peek.textContent = `${e.ts} [${e.source}] ${e.msg}`;
 }
@@ -533,7 +536,7 @@ function currentTab() {
   const b = document.querySelector(".tab.active");
   return b ? b.dataset.tab : "control";
 }
-function layoutKey(tab) { return `asterion.layout.${tab}.v4`; }
+function layoutKey(tab) { return `asterion.layout.${tab}.v5`; }
 function widthClass(item) {
   return WIDTHS.find((w) => item.classList.contains(w)) || "w4";
 }
@@ -895,6 +898,7 @@ function showTab(tab) {
   }
   ensureGrid(tab);                 // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
+  if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }
 
@@ -1547,11 +1551,20 @@ $("btn-layout-reset").onclick = () => {
 
 // 전역 로그 독 — 헤더 클릭으로 펼치기/접기, 상태를 localStorage에 저장
 const LOGDOCK_KEY = "asterion.logdock";
+function updateLogDock() {
+  const dock = $("log-dock"); if (!dock) return;
+  const sys = currentTab() === "system";        // 시스템 탭엔 로그가 패널로 있으니 독 숨김
+  dock.style.display = sys ? "none" : "";
+  const open = !dock.classList.contains("collapsed");
+  // 펼치면 콘텐츠가 독 위로 스크롤되도록 body 하단 여백 확보 (안 가리게)
+  document.body.style.paddingBottom = sys ? "0px" : (open ? "286px" : "38px");
+}
 function setLogDock(open) {
   const dock = $("log-dock"); if (!dock) return;
   dock.classList.toggle("collapsed", !open);
   try { localStorage.setItem(LOGDOCK_KEY, open ? "1" : "0"); } catch (e) { /* noop */ }
-  if (open) logEl.scrollTop = logEl.scrollHeight;
+  updateLogDock();
+  if (open) { const l = $("log"); if (l) l.scrollTop = l.scrollHeight; }
 }
 $("log-dock-head").onclick = () =>
   setLogDock($("log-dock").classList.contains("collapsed"));

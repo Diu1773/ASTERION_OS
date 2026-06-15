@@ -8,7 +8,7 @@
 <link rel="icon" href="/static/logo.png?v=2">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=066">
+<link rel="stylesheet" href="/static/style.css?v=069">
 </head>
 <body>
 
@@ -456,8 +456,16 @@
       </section>
       </div>
 
+      <!-- 라이브 로그 (패널) — 긴 connections 옆에 두어 높이를 채운다 (전역 독은 시스템 탭에선 숨김) -->
+      <div class="muuri-item w4" data-panel="log-sys">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">라이브 로그</span><span class="card-tag">LIVE LOG</span></div>
+        <div class="log-fill"><div class="log" id="log-sys"></div></div>
+      </section>
+      </div>
+
       <!-- 드라이버 모드 + 사이트 정보 -->
-      <div class="muuri-item w4" data-panel="sysinfo">
+      <div class="muuri-item w12" data-panel="sysinfo">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">시스템</span><span class="card-tag">RUNTIME</span></div>
         <div class="devmode-only">
@@ -525,6 +533,6 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=066"></script>
+<script src="/static/app.js?v=069"></script>
 </body>
 </html>

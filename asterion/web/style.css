@@ -138,6 +138,18 @@ body { padding-bottom: 38px; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 
+/* 탭 상단 격자 열수 컨트롤 (관제 2열 · 기상 3열 등) */
+.grid-toolbar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 0 8px; }
+.gt-label { color: var(--dim); font-size: 11px; letter-spacing: .5px; }
+.gt-cols { display: inline-flex; gap: 2px; padding: 2px; background: var(--panel-2); border: 1px solid var(--edge); border-radius: 8px; }
+.gt-btn {
+  background: none; border: none; cursor: pointer; color: var(--dim);
+  font-family: var(--mono); font-size: 12px; padding: 4px 11px; border-radius: 6px;
+  transition: color .12s, background .12s;
+}
+.gt-btn:hover { color: var(--text); }
+.gt-btn.active { background: var(--accent-soft); color: var(--accent); }
+
 /* ---------------- muuri grid (갭 없는 12열 팩킹) ---------------- */
 .muuri { position: relative; }
 .muuri-item {
@@ -149,7 +161,9 @@ body { padding-bottom: 38px; }
 .muuri-item.w6  { width: 50%; }
 .muuri-item.w8  { width: 66.666%; }
 .muuri-item.w12 { width: 100%; }
-.muuri-item-content { position: relative; width: 100%; }
+/* height:100% — rowGridLayout이 .muuri-item에 행 높이를 강제하면 카드가 그 칸을
+   꽉 채워 같은 행 빈공간을 없앤다 (item 높이가 auto일 땐 자연 높이로 동작). */
+.muuri-item-content { position: relative; width: 100%; height: 100%; }
 /* Muuri 상태 클래스 — 드래그/릴리스 중 위로, 숨김은 아래로 */
 .muuri-item.muuri-item-dragging { z-index: 3; cursor: grabbing; }
 .muuri-item.muuri-item-releasing { z-index: 2; }

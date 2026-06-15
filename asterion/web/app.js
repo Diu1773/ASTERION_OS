@@ -613,22 +613,77 @@ function addPanelTools(item, tab) {
   };
 }
 
-// 행(row) 기준 격자 레이아웃 — Muuri 기본은 masonry라 높이로 패킹해, 같은 줄
-// 카드 높이가 다르면 계단처럼 어긋난다. 이 레이아웃은 폭(wN)을 보고 한 줄을
-// 채우되 그 줄의 모든 카드를 같은 y(이전 줄의 최대 높이 아래)에 정렬해, 진짜
-// 격자(2열 2행 등)로 보이게 한다. 드래그 재배치/리사이즈는 그대로 동작.
+// 행(row) 기준 격자 + 같은 행 높이 맞춤. Muuri 기본 masonry는 높이로 패킹해
+// 같은 줄 카드 높이가 다르면 계단처럼 어긋나고, 행을 맞춰도 짧은 카드 밑에
+// 빈공간이 남는다. 이 레이아웃은 (1) 강제높이를 풀어 자연 높이를 재고 폭(wN)으로
+// 행을 나눈 뒤 (2) 각 행 카드를 그 행 최대 높이로 늘려(.muuri-item-content
+// height:100%) 빈공간을 없앤다. 위치/높이만 다루므로 Muuri의 드래그·재배치
+// 애니메이션은 그대로 유지된다.
 function rowGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
-  const slots = [];
-  let x = 0, y = 0, rowH = 0;
-  for (let i = 0; i < items.length; i++) {
-    const w = items[i].getWidth();    // 마진 포함 외곽 폭 (여기선 마진 0)
-    const h = items[i].getHeight();
-    if (x > 0 && x + w > gridWidth + 1) { x = 0; y += rowH; rowH = 0; }  // 다음 줄로
-    slots.push(x, y);
-    x += w;
-    if (h > rowH) rowH = h;
+  const n = items.length;
+  const els = new Array(n), w = new Array(n), natH = new Array(n);
+  for (let i = 0; i < n; i++) { els[i] = items[i].getElement(); els[i].style.height = ""; }
+  for (let i = 0; i < n; i++) {            // 강제높이 해제 상태의 자연 폭/높이 (단일 리플로)
+    const r = els[i].getBoundingClientRect();
+    w[i] = r.width; natH[i] = r.height;
   }
-  callback({ id: layoutId, items, slots, styles: { height: (y + rowH) + "px" } });
+  // 폭으로 행을 나누고 각 행의 최대 높이를 구한다
+  const rowOf = new Array(n), rowMax = [];
+  let x = 0, row = 0;
+  for (let i = 0; i < n; i++) {
+    if (x > 0 && x + w[i] > gridWidth + 1) { row++; x = 0; }   // 다음 줄로
+    rowOf[i] = row;
+    rowMax[row] = Math.max(rowMax[row] || 0, natH[i]);
+    x += w[i];
+  }
+  const rowY = []; let acc = 0;            // 행 y 누적 (= 위 행들의 최대 높이 합)
+  for (let r = 0; r < rowMax.length; r++) { rowY[r] = acc; acc += rowMax[r]; }
+  // 슬롯(x,y) 계산 + 같은 행 카드를 행 최대 높이로 강제 → 빈공간 제거
+  const slots = []; x = 0; let cur = 0;
+  for (let i = 0; i < n; i++) {
+    if (rowOf[i] !== cur) { cur = rowOf[i]; x = 0; }
+    els[i].style.height = rowMax[rowOf[i]] + "px";
+    slots.push(x, rowY[rowOf[i]]);
+    x += w[i];
+  }
+  callback({ id: layoutId, items, slots, styles: { height: acc + "px" } });
+}
+
+// ---- 탭별 격자 열 수 (관제 2열 · 기상 3열 등) — 탭 상단 컨트롤 ----
+// 버튼을 누르면 그 탭 모든 카드를 균일 폭으로(1→w12, 2→w6, 3→w4, 4→w3) 맞춘다.
+function setCols(tab, n) {
+  const grid = grids[tab]; if (!grid) return;
+  const wcls = "w" + (12 / n);
+  grid.getItems().forEach((it) => setWidth(it.getElement(), wcls));
+  grid.refreshItems().layout(true);
+  saveLayout(tab);
+  syncColsToolbar(tab);
+  relayoutAfter(tab);
+}
+function syncColsToolbar(tab) {
+  const pane = document.querySelector(`.tab-pane[data-pane="${tab}"]`);
+  const bar = pane && pane.querySelector(".grid-toolbar");
+  const grid = grids[tab];
+  if (!bar || !grid) return;
+  const ws = grid.getItems().map((it) => widthClass(it.getElement()));
+  const uniform = ws.length && ws.every((w) => w === ws[0]) ? ws[0] : null;
+  const activeN = uniform ? 12 / Number(uniform.slice(1)) : 0;   // 균일할 때만 활성
+  bar.querySelectorAll(".gt-btn").forEach((b) =>
+    b.classList.toggle("active", Number(b.dataset.cols) === activeN));
+}
+function injectGridToolbar(tab) {
+  const pane = document.querySelector(`.tab-pane[data-pane="${tab}"]`);
+  const gridEl = document.getElementById(`grid-${tab}`);
+  if (!pane || !gridEl || pane.querySelector(".grid-toolbar")) return;
+  const bar = document.createElement("div");
+  bar.className = "grid-toolbar";
+  bar.innerHTML = `<span class="gt-label">격자 열</span><div class="gt-cols">` +
+    [1, 2, 3, 4].map((n) => `<button class="gt-btn" data-cols="${n}">${n}</button>`).join("") +
+    `</div>`;
+  pane.insertBefore(bar, gridEl);
+  bar.querySelectorAll(".gt-btn").forEach((b) =>
+    (b.onclick = () => setCols(tab, Number(b.dataset.cols))));
+  syncColsToolbar(tab);
 }
 
 function ensureGrid(tab) {
@@ -653,6 +708,7 @@ function ensureGrid(tab) {
   grids[tab] = grid;
   applySavedLayout(tab, grid);                  // 폭·접힘·고정·순서를 먼저 적용
   grid.getItems().forEach((it) => addPanelTools(it.getElement(), tab));
+  injectGridToolbar(tab);                       // 탭 상단 격자 열수 컨트롤
   grid.on("dragInit", () => { grid._dragging = true; });
   grid.on("dragReleaseEnd", () => {
     grid._dragging = false; saveLayout(tab); relayoutAfter(tab);

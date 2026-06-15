@@ -263,7 +263,9 @@ function skyClickHandler(ev) {
     hideSkyMenu();
     skyTarget = { alt, az, ts: Date.now() };
     kickSky();
-    try { await post("/api/actions/mount/goto", { alt, az }); }
+    // RA/DEC로 슬루 (SlewToCoordinatesAsync) — AltAz 슬루 미지원 적도의도 동작.
+    // 엔드포인트(GotoRaDecReq)는 ra/dec를 문자열로 받는다 → 문자열로 보냄.
+    try { await post("/api/actions/mount/goto_radec", { ra: ra.toFixed(5), dec: dec.toFixed(4) }); }
     catch (e) { skyTarget = null; }
   };
   $("sm-close").onclick = hideSkyMenu;

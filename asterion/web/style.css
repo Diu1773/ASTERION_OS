@@ -149,19 +149,30 @@ body { padding-bottom: 38px; }
 }
 .gt-btn:hover { color: var(--text); }
 .gt-btn.active { background: var(--accent-soft); color: var(--accent); }
-
-/* 열 나눔선 — 같은 행 인접 카드 경계. 평소 옅은 선, 호버 시 강조, 드래그로 폭 조절 */
-.divider-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
-.col-divider {
-  position: absolute; width: 11px; transform: translateX(-50%);
-  pointer-events: auto; cursor: col-resize; z-index: 4;
+.gt-tile {
+  background: none; border: 1px solid var(--edge); color: var(--dim);
+  border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 11.5px;
+  font-family: var(--sans); transition: color .12s, border-color .12s;
 }
-.col-divider::before {
-  content: ""; position: absolute; left: 50%; top: 10px; bottom: 10px; width: 2px;
-  transform: translateX(-50%); background: var(--edge); border-radius: 2px;
+.gt-tile:hover { color: var(--text); border-color: var(--edge-strong); }
+
+/* 나눔선 — 행/열 경계. 평소 옅은 선, 호버 시 강조, 드래그로 리사이즈 */
+.divider-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.divider { position: absolute; pointer-events: auto; z-index: 4; }
+.divider::before {
+  content: ""; position: absolute; background: var(--edge); border-radius: 2px;
   transition: background .12s, box-shadow .12s;
 }
-.col-divider:hover::before { background: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.col-divider { width: 11px; transform: translateX(-50%); cursor: col-resize; }
+.col-divider::before { left: 50%; top: 10px; bottom: 10px; width: 2px; transform: translateX(-50%); }
+.row-divider { height: 11px; transform: translateY(-50%); cursor: row-resize; }
+.row-divider::before { top: 50%; left: 10px; right: 10px; height: 2px; transform: translateY(-50%); }
+.divider:hover::before { background: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+/* PPT식 정렬 가이드선 (스냅 시 표시) */
+.snap-guide { position: absolute; z-index: 5; pointer-events: none; display: none;
+  background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.snap-guide:not(.horizontal) { width: 2px; transform: translateX(-50%); }
+.snap-guide.horizontal { height: 2px; transform: translateY(-50%); }
 
 /* ---------------- muuri grid (갭 없는 12열 팩킹) ---------------- */
 .muuri { position: relative; }
@@ -358,6 +369,8 @@ select { color-scheme: dark; }
   margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--edge);
   display: flex; flex-direction: column; gap: 8px;
 }
+/* hidden 속성이 위 display:flex를 이기도록 — 없으면 에디터가 항상 떠 있고 ⚙ 토글이 안 먹힘 */
+.embed-editor[hidden] { display: none; }
 .embed-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
 .embed-field input, .embed-field select {
   background: rgba(255,255,255,.04); color: var(--text); border: 1px solid var(--edge);

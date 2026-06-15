@@ -651,27 +651,36 @@ function colGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
   const fr = grid._frLive || loadColFr(tab, N);
   const colX = [], colW = []; let ax = 0;
   for (let c = 0; c < N; c++) { colX[c] = ax; colW[c] = fr[c] * gridWidth; ax += colW[c]; }
-  // 1) 각 카드를 열에 배정하고 그 열 폭으로 설정 → 자연 높이 측정 (단일 리플로)
-  const colOf = new Array(n), isFull = new Array(n);
-  let rr = 0;
+  // 1) 행 배정(가로 정렬): 카드를 왼→오로 채우고 N개 차면 다음 행. 전체폭(w12)은 한 행 독차지.
+  const rowOf = new Array(n), colOf = new Array(n), isFull = new Array(n);
+  let row = 0, col = 0;
   for (let i = 0; i < n; i++) {
     const el = els[i], full = el.classList.contains("w12");
-    isFull[i] = full;
-    const c = full ? 0 : (rr % N); if (!full) rr++;
-    colOf[i] = c;
-    el.style.width = (full ? gridWidth : colW[c]) + "px";
+    if (full) {
+      if (col > 0) { row++; col = 0; }       // 진행 중인 행 닫기
+      isFull[i] = true; rowOf[i] = row; colOf[i] = 0;
+      el.style.width = gridWidth + "px";
+      row++; col = 0;                          // 전체폭 다음은 새 행
+    } else {
+      isFull[i] = false; rowOf[i] = row; colOf[i] = col;
+      el.style.width = colW[col] + "px";
+      col++; if (col >= N) { row++; col = 0; }
+    }
     el.style.height = "";
   }
-  const natH = els.map((el) => el.getBoundingClientRect().height);   // 항상 자연 높이
-  // 2) column-major 배치 — 각 카드는 제 높이 그대로 (빈칸/잘림 없음). 높이 강제 안 함.
-  const colY = new Array(N).fill(0), slots = [];
+  // 2) 행별 최대 높이로 같은 행 카드를 정렬(대칭) → 가로줄이 맞는다
+  const natH = els.map((el) => el.getBoundingClientRect().height);
+  const rowMax = [];
+  for (let i = 0; i < n; i++) rowMax[rowOf[i]] = Math.max(rowMax[rowOf[i]] || 0, natH[i]);
+  const rowY = []; let acc = 0;
+  for (let r = 0; r < rowMax.length; r++) { rowY[r] = acc; acc += (rowMax[r] || 0); }
+  const slots = [];
   for (let i = 0; i < n; i++) {
-    if (isFull[i]) { const y = Math.max(...colY, 0); slots.push(0, y); for (let c = 0; c < N; c++) colY[c] = y + natH[i]; }
-    else { const c = colOf[i]; slots.push(colX[c], colY[c]); colY[c] += natH[i]; }
+    els[i].style.height = rowMax[rowOf[i]] + "px";   // 같은 행 = 같은 높이
+    slots.push(isFull[i] ? 0 : colX[colOf[i]], rowY[rowOf[i]]);
   }
   grid._cols = N; grid._colX = colX; grid._colW = colW; grid._fr = fr;
-  grid._colOf = colOf; grid._isFull = isFull;
-  callback({ id: layoutId, items, slots, styles: { height: Math.max(...colY, 0) + "px" } });
+  callback({ id: layoutId, items, slots, styles: { height: acc + "px" } });
 }
 
 // ---- 탭별 격자 열 수 (관제 2열 · 기상 3열 등) — 탭 상단 컨트롤 ----

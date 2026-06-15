@@ -293,8 +293,7 @@ select { color-scheme: dark; }
 
 /* ---------------- sky dome ---------------- */
 .sky-wrap { display: flex; justify-content: center; margin-bottom: 12px; position: relative; }
-/* 돔은 열 폭에 맞춰 커진다 (열을 넓히면 크게 보기). 캡 없음. */
-#sky-canvas { width: 100%; max-width: 100%; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
+#sky-canvas { width: 100%; max-width: 340px; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
 .hint { color: var(--faint); font-size: 10.5px; margin-top: 6px; text-align: center; }
 .sky-menu {
   display: none; position: absolute; z-index: 6; min-width: 168px;

@@ -539,7 +539,8 @@ function saveLayout(tab) {
   const els = grid.getItems().map((it) => it.getElement());
   const layout = {
     order: els.map((el) => el.dataset.panel),
-    widths: Object.fromEntries(els.map((el) => [el.dataset.panel, widthClass(el)])),
+    spans: Object.fromEntries(els.map((el) =>   // 카드가 차지하는 열 수 (키워 보기)
+      [el.dataset.panel, parseInt(el.dataset.span) || (el.classList.contains("w12") ? 99 : 1)])),
     collapsed: Object.fromEntries(els.map((el) =>
       [el.dataset.panel, el.querySelector(".card").classList.contains("collapsed")])),
     pinned: Object.fromEntries(els.map((el) =>
@@ -556,7 +557,7 @@ function applySavedLayout(tab, grid) {
   if (!layout) return;
   grid.getItems().forEach((it) => {
     const el = it.getElement(), pid = el.dataset.panel;
-    if (layout.widths && layout.widths[pid]) setWidth(el, layout.widths[pid]);
+    if (layout.spans && layout.spans[pid]) { el.dataset.span = layout.spans[pid]; el.classList.remove("w12"); }
     if (layout.collapsed && layout.collapsed[pid])
       el.querySelector(".card").classList.add("collapsed");
     if (layout.pinned && layout.pinned[pid]) el.classList.add("pinned");
@@ -610,14 +611,17 @@ function addPanelTools(item, tab) {
   const tools = document.createElement("div");
   tools.className = "panel-tools";
   tools.innerHTML =
-    `<button class="pt-btn pt-max" title="크게 보기">⛶</button>` +
-    `<button class="pt-btn pt-size" title="전체폭(모든 열) 토글">⤢</button>` +
+    `<button class="pt-btn pt-max" title="크게 보기(오버레이)">⛶</button>` +
+    `<button class="pt-btn pt-size" title="칸 수 늘리기 (격자 안에서 크게)">⤢</button>` +
     `<button class="pt-btn pt-collapse" title="접기/펼치기">▾</button>`;
   head.appendChild(tools);
   tools.querySelector(".pt-max").onclick = (e) => { e.stopPropagation(); toggleMaximize(item); };
   tools.querySelector(".pt-size").onclick = (e) => {
     e.stopPropagation();
-    setWidth(item, item.classList.contains("w12") ? "w6" : "w12");   // 전체폭 토글
+    const N = (grids[tab] && grids[tab]._cols) || colCount(tab);   // 차지할 칸 수 순환 1→2→…→N→1
+    const cur = Math.min(N, Math.max(1, parseInt(item.dataset.span) || (item.classList.contains("w12") ? N : 1)));
+    item.dataset.span = cur >= N ? 1 : cur + 1;
+    item.classList.remove("w12");                                   // 이제 dataset.span이 기준
     grids[tab].refreshItems().layout();
     saveLayout(tab);
     positionDividers(tab);
@@ -668,22 +672,20 @@ function colGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
   const fr = grid._frLive || loadColFr(tab, N);
   const colX = [], colW = []; let ax = 0;
   for (let c = 0; c < N; c++) { colX[c] = ax; colW[c] = fr[c] * gridWidth; ax += colW[c]; }
-  // 1) 행 배정(가로 정렬): 카드를 왼→오로 채우고 N개 차면 다음 행. 전체폭(w12)은 한 행 독차지.
-  const rowOf = new Array(n), colOf = new Array(n), isFull = new Array(n);
+  // 1) 행 배정(가로 정렬): 카드를 왼→오로 채우되 각 카드는 span개 열을 차지(키워 보기).
+  //    현재 행에 안 들어가면 다음 행. → 더 큰 패널도 격자가 정렬된 채 비율 맞춰 커진다.
+  const rowOf = new Array(n), colOf = new Array(n);
   let row = 0, col = 0;
   for (let i = 0; i < n; i++) {
-    const el = els[i], full = el.classList.contains("w12");
-    if (full) {
-      if (col > 0) { row++; col = 0; }       // 진행 중인 행 닫기
-      isFull[i] = true; rowOf[i] = row; colOf[i] = 0;
-      el.style.width = gridWidth + "px";
-      row++; col = 0;                          // 전체폭 다음은 새 행
-    } else {
-      isFull[i] = false; rowOf[i] = row; colOf[i] = col;
-      el.style.width = colW[col] + "px";
-      col++; if (col >= N) { row++; col = 0; }
-    }
+    const el = els[i];
+    let span = parseInt(el.dataset.span) || (el.classList.contains("w12") ? N : 1);
+    span = Math.min(N, Math.max(1, span));
+    if (col > 0 && col + span > N) { row++; col = 0; }   // 이 행에 안 들어가면 다음 행
+    rowOf[i] = row; colOf[i] = col;
+    let wpx = 0; for (let k = col; k < col + span; k++) wpx += (colW[k] || 0);
+    el.style.width = wpx + "px";
     el.style.height = "";
+    col += span; if (col >= N) { row++; col = 0; }
   }
   // 2) 행별 최대 높이로 같은 행 카드를 정렬(대칭) → 가로줄이 맞는다
   const natH = els.map((el) => el.getBoundingClientRect().height);
@@ -694,7 +696,7 @@ function colGridLayout(grid, layoutId, items, gridWidth, gridHeight, callback) {
   const slots = [];
   for (let i = 0; i < n; i++) {
     els[i].style.height = rowMax[rowOf[i]] + "px";   // 같은 행 = 같은 높이
-    slots.push(isFull[i] ? 0 : colX[colOf[i]], rowY[rowOf[i]]);
+    slots.push(colX[colOf[i]], rowY[rowOf[i]]);
   }
   grid._cols = N; grid._colX = colX; grid._colW = colW; grid._fr = fr;
   callback({ id: layoutId, items, slots, styles: { height: acc + "px" } });

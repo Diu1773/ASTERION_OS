@@ -21,9 +21,6 @@ from ..core import ephemeris
 from ..core.events import EventHub
 from ..core.ontology import Db, WeatherRecord
 from ..drivers import REGISTRY
-from ..drivers.base import (
-    CameraStatus, FilterStatus, FocuserStatus, MountStatus, WeatherStatus,
-)
 from ..drivers.sim import TwilightSim
 
 KST = timezone(timedelta(hours=9))
@@ -32,14 +29,8 @@ TELEMETRY_MAXLEN = 3600  # 1 Hz × 1시간
 STATUS_TIMEOUT_S = 3.0   # 장비 status()가 이 시간 안에 안 오면 응답없음 처리
 STUCK_RETRY_S = 4.0      # 멈춘 장비를 백그라운드로 다시 떠보는 최소 간격
 
-# 응답 없는 장비용 오프라인 상태 (멈춘 COM 호출이 대시보드를 얼리지 않게)
-_OFFLINE = {
-    "mount": lambda: MountStatus(connected=False, detail="응답 없음 (시간 초과)"),
-    "camera": lambda: CameraStatus(connected=False, detail="응답 없음 (시간 초과)"),
-    "filterwheel": lambda: FilterStatus(connected=False),
-    "focuser": lambda: FocuserStatus(connected=False, detail="응답 없음 (시간 초과)"),
-    "weather": lambda: WeatherStatus(connected=False, detail="응답 없음 (시간 초과)"),
-}
+# 응답 없는 장비의 오프라인 상태는 각 DeviceSpec.offline_factory가 제공한다
+# (멈춘 COM 호출이 대시보드를 얼리지 않게). 키 하드코딩 제거 — 새 장비는 REGISTRY만.
 
 
 class StatusSampler:
@@ -181,7 +172,7 @@ class StatusSampler:
             if stuck is drv:
                 # 멈춘 인스턴스 → 폴링은 건너뛰되, 호밍 등으로 '잠깐' 멈춘 거라면
                 # 재연결 없이 스스로 회복하도록 백그라운드로 다시 떠본다.
-                st = self._recover_stuck(key, spec, drv, now_mono) or _OFFLINE[key]()
+                st = self._recover_stuck(key, spec, drv, now_mono) or spec.offline_factory()
             else:
                 try:
                     st = await asyncio.wait_for(
@@ -194,13 +185,15 @@ class StatusSampler:
                     self._stuck[key] = drv
                     self.events.log("status", f"{spec.label} 응답 없음 — 폴링 보류 "
                                     "(회복 시 자동 재개)", "warn")
-                    st = _OFFLINE[key]()
+                    st = spec.offline_factory()
                 except Exception:
-                    st = _OFFLINE[key]()
+                    st = spec.offline_factory()
             statuses[key] = st
 
-        mount, camera, weather = (statuses["mount"], statuses["camera"],
-                                  statuses["weather"])
+        # 가대 좌표 보완은 가대 고유라 직접 참조. 안전/기상은 아래 safety_role 기반.
+        mount = statuses["mount"]
+        weather = next((statuses[k] for k, s in REGISTRY.items()
+                        if s.safety_role == "weather"), None)
 
         now = datetime.now(timezone.utc)
         sun_alt, sun_az = ephemeris.sun_altaz(now, self._lat, self._lon)
@@ -230,19 +223,23 @@ class StatusSampler:
                            or bool(orchestrator.get("running")))
         # 기상 텔레메트리 신선도 — 연결+유효값을 받은 마지막 시각을 기억한다.
         # 끊기거나 멈추면 경과시간이 늘어 fail-closed stale 판정이 작동한다(§6.5).
-        if weather.connected and any(
+        if weather is not None and weather.connected and any(
                 v is not None for v in (weather.humidity, weather.wind_ms,
                                         weather.cloud_score, weather.temp_c,
                                         weather.dew_point_c)):
             self._last_weather_ok = time.monotonic()
         weather_age = (None if self._last_weather_ok is None
                        else time.monotonic() - self._last_weather_ok)
+        # 안전 관련 장비는 REGISTRY의 safety_role로 찾는다 (키 하드코딩 제거).
+        missing_required = [s.label for k, s in REGISTRY.items()
+                            if s.safety_role == "required"
+                            and not statuses[k].connected]
+        weather_data = (None if weather is None else
+                        {"rain": weather.rain, "wind": weather.wind_ms,
+                         "humidity": weather.humidity, "cloud": weather.cloud_score})
         saf = safety.evaluate(
-            mount_connected=mount.connected,
-            camera_connected=camera.connected,
-            weather={"rain": weather.rain, "wind": weather.wind_ms,
-                     "humidity": weather.humidity,
-                     "cloud": weather.cloud_score},
+            missing_required=missing_required,
+            weather=weather_data,
             sun_alt=sun_alt,
             session_running=session_running,
             weather_age_s=weather_age,

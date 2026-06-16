@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..config import Config
+from .base import (
+    CameraStatus, FilterStatus, FocuserStatus, MountStatus, WeatherStatus,
+)
 from .sim import (
     SimCamera, SimFilterWheel, SimFocuser, SimMount, SimWeather, TwilightSim,
 )
@@ -83,6 +87,16 @@ def _ascom_camera(ctx: DriverContext):
                        saturation=int(ctx.cfg.get("camera.saturation_adu", 65535)))
 
 
+def _zwo_camera(ctx: DriverContext):
+    from .zwo import ZwoCamera
+    return ZwoCamera(
+        lib_path=str(ctx.cfg.get("drivers.zwo.lib_path", "")),
+        camera_index=int(ctx.cfg.get("drivers.zwo.camera_index", 0)),
+        gain=int(ctx.cfg.get("drivers.zwo.gain", 0)),
+        saturation=int(ctx.cfg.get("camera.saturation_adu", 65535)),
+    )
+
+
 def _sim_filterwheel(ctx: DriverContext):
     return SimFilterWheel(ctx.filter_names)
 
@@ -91,7 +105,11 @@ def _ascom_filterwheel(ctx: DriverContext):
     from .ascom import AscomFilterWheel
     return AscomFilterWheel(
         str(ctx.cfg.get("drivers.ascom.filterwheel_progid", "")),
-        fallback_names=ctx.filter_names)
+        fallback_names=ctx.filter_names,
+        init_timeout_s=float(ctx.cfg.get(
+            "drivers.filterwheel_init_timeout_s", 20.0)),
+        move_timeout_s=float(ctx.cfg.get(
+            "drivers.filterwheel_move_timeout_s", 20.0)))
 
 
 def _sim_focuser(ctx: DriverContext):
@@ -130,6 +148,8 @@ class DeviceSpec:
     progid_key: str | None = None           # ASCOM ProgID를 담는 config 경로
     url_key: str | None = None              # PWI4 URL을 담는 config 경로
     snapshot_key: str | None = None         # 스냅샷 공개 키 (기본 = key). 필터휠→"filter"
+    offline_factory: Callable[[], Any] | None = None  # 타임아웃/무응답 시 오프라인 Status
+    safety_role: str | None = None          # None | "required" | "weather" (확장: "shutter")
 
     @property
     def real_kinds(self) -> list[str]:
@@ -140,30 +160,55 @@ class DeviceSpec:
         return self.snapshot_key or self.key
 
 
+_OFFLINE_DETAIL = "응답 없음 (시간 초과)"
+
 REGISTRY: dict[str, DeviceSpec] = {
     "mount": DeviceSpec(
         "mount", "마운트", "status", _sim_mount,
         {"pwi4": _pwi4_mount, "ascom": _ascom_mount},
         ascom_type="Telescope",
         progid_key="drivers.ascom.mount_progid",
-        url_key="drivers.pwi4.base_url"),
+        url_key="drivers.pwi4.base_url",
+        offline_factory=lambda: MountStatus(connected=False, detail=_OFFLINE_DETAIL),
+        safety_role="required"),
     "camera": DeviceSpec(
-        "camera", "카메라", "status", _sim_camera, {"ascom": _ascom_camera},
-        ascom_type="Camera", progid_key="drivers.ascom.camera_progid"),
+        "camera", "카메라", "status", _sim_camera,
+        {"ascom": _ascom_camera, "zwo": _zwo_camera},
+        ascom_type="Camera", progid_key="drivers.ascom.camera_progid",
+        offline_factory=lambda: CameraStatus(connected=False, detail=_OFFLINE_DETAIL),
+        safety_role="required"),
     "filterwheel": DeviceSpec(
         "filterwheel", "필터휠", "status", _sim_filterwheel,
         {"ascom": _ascom_filterwheel},
         ascom_type="FilterWheel", progid_key="drivers.ascom.filterwheel_progid",
-        snapshot_key="filter"),
+        snapshot_key="filter",
+        offline_factory=lambda: FilterStatus(connected=False)),
     "focuser": DeviceSpec(
         "focuser", "포커서", "status", _sim_focuser, {"ascom": _ascom_focuser},
-        ascom_type="Focuser", progid_key="drivers.ascom.focuser_progid"),
+        ascom_type="Focuser", progid_key="drivers.ascom.focuser_progid",
+        offline_factory=lambda: FocuserStatus(connected=False, detail=_OFFLINE_DETAIL)),
     "weather": DeviceSpec(
         "weather", "기상", "read", _sim_weather,
         {"ascom": _ascom_weather, "davis": _davis_weather},
         ascom_type="ObservingConditions",
         progid_key="drivers.ascom.weather_progid",
-        url_key="drivers.davis.base_url"),
+        url_key="drivers.davis.base_url",
+        offline_factory=lambda: WeatherStatus(connected=False, detail=_OFFLINE_DETAIL),
+        safety_role="weather"),
+}
+
+
+# 백엔드 kind가 요구하는 운영자 설정의 *종류*. describe()/UI가 이걸 보고
+# 현재 선택된 백엔드에 맞는 입력 필드만 그린다 — ASCOM=ProgID, PWI4/Davis=URL,
+# ZWO=자동탐색(설정 없음), sim=설정 없음. 새 백엔드는 여기 한 줄로 흡수된다.
+#   progid → ASCOM ProgID 드롭다운    url → URL/IP 입력
+#   auto   → 자동 연결 안내(필드 없음)  none → 설정 없음
+BACKEND_CONFIG: dict[str, str] = {
+    "sim": "none",
+    "ascom": "progid",
+    "pwi4": "url",
+    "davis": "url",
+    "zwo": "auto",
 }
 
 
@@ -222,6 +267,13 @@ class ConnectionManager:
         # desired[key] = "이 장비는 연결돼 있어야 한다"는 운영자 의도. 워치독이
         # desired=True인데 끊긴 장비만 자동 복구한다 (운영자가 끈 건 안 건드림).
         self.desired: dict[str, bool] = {k: True for k in REGISTRY}
+        # connected_at[key] = 마지막으로 연결에 성공한 시각. 워치독이 방금 (재)연결한
+        # 장비는 호밍/캘리브레이션을 끝낼 때까지 재연결 후보에서 빼는 데 쓴다 — ZWO EFW
+        # 등은 연결 직후 호밍 중 잠깐 응답을 못 줘 '끊김'으로 오인되기 쉽다.
+        self.connected_at: dict[str, float] = {}
+        self._op_locks: dict[str, asyncio.Lock] = {
+            key: asyncio.Lock() for key in REGISTRY
+        }
 
     def _log(self, msg: str, level: str = "info") -> None:
         if self.events is not None:
@@ -233,14 +285,20 @@ class ConnectionManager:
     def master_mode(self) -> str:
         return str(self.cfg.get("drivers.mode", "sim"))
 
-    def backend(self, key: str) -> str:
-        """이 장비가 현재 쓰는 백엔드 kind. sim 모드면 무조건 sim,
-        real 모드면 config drivers.{key} (real_factories에 있을 때만)."""
+    def selected_backend(self, key: str) -> str:
+        """운영자가 REAL용으로 골라둔 백엔드 kind (마스터가 sim이어도 유지).
+        설정 UI가 어느 입력 필드(ProgID/URL/자동)를 보일지 정하는 근거다 —
+        sim 모드에서 미리 백엔드/설정을 잡아두고 REAL로 전환하는 흐름을 지원한다."""
         spec = REGISTRY[key]
-        if self.master_mode == "sim":
-            return "sim"
         kind = str(self.cfg.get(f"drivers.{key}", "sim"))
         return kind if kind in spec.real_factories else "sim"
+
+    def backend(self, key: str) -> str:
+        """이 장비가 *지금 실제로* 쓰는 백엔드 kind. sim 모드면 무조건 sim,
+        real 모드면 운영자가 고른 백엔드(real_factories에 있을 때만)."""
+        if self.master_mode == "sim":
+            return "sim"
+        return self.selected_backend(key)
 
     def _make(self, key: str) -> Any:
         spec = REGISTRY[key]
@@ -280,33 +338,50 @@ class ConnectionManager:
             old = self.drivers.get(key)
             self.drivers[key] = self._make(key)
             self.drivers["mode"] = self._derive_mode()
+            self.connected_at.pop(key, None)
         return old
 
-    async def connect(self, key: str) -> None:
+    async def _connect_unlocked(self, key: str,
+                                *, propagate: bool = False) -> None:
         """슬롯의 드라이버를 연결. 실패는 미연결로 보고 (예외 삼킴 + 로그)."""
         self.desired[key] = True
         drv = self.drivers[key]
         try:
             await asyncio.to_thread(drv.connect)
+            self.connected_at[key] = time.time()  # 연결 직후 호밍 유예의 기준 시각
             self._log(f"{REGISTRY[key].label} 연결 "
                       f"({'SIM' if getattr(drv, 'is_sim', False) else type(drv).__name__})")
         except Exception as exc:  # noqa: BLE001
             self._log(f"{REGISTRY[key].label} 연결 실패: {exc}", "warn")
+            if getattr(drv, "reconnect_blocked", False):
+                self.desired[key] = False
+                self._log(f"{REGISTRY[key].label} 자동 재연결 중지: "
+                          "장비 점검 후 수동 연결 필요", "error")
+            if propagate:
+                raise
+
+    async def connect(self, key: str, *, propagate: bool = False) -> None:
+        async with self._op_locks[key]:
+            await self._connect_unlocked(key, propagate=propagate)
 
     async def disconnect(self, key: str) -> None:
         """연결 해제 = 닫고 같은 백엔드의 새(미연결) 인스턴스로 교체.
         운영자 의도를 '해제'로 기록 → 워치독이 자동 재연결하지 않는다."""
-        self.desired[key] = False
-        old = self._rebuild_slot(key)
-        await asyncio.to_thread(_safe_close, old)
-        self._log(f"{REGISTRY[key].label} 연결 해제")
+        async with self._op_locks[key]:
+            if not self.desired.get(key, True):
+                return
+            self.desired[key] = False
+            old = self._rebuild_slot(key)
+            await asyncio.to_thread(_safe_close, old)
+            self._log(f"{REGISTRY[key].label} 연결 해제")
 
-    async def reconnect(self, key: str) -> None:
+    async def reconnect(self, key: str, *, propagate: bool = False) -> None:
         """재연결 = 새 인스턴스로 교체 후 연결. desired는 True 유지(자동복구 포함)."""
-        self.desired[key] = True
-        old = self._rebuild_slot(key)
-        await asyncio.to_thread(_safe_close, old)
-        await self.connect(key)
+        async with self._op_locks[key]:
+            self.desired[key] = True
+            old = self._rebuild_slot(key)
+            await asyncio.to_thread(_safe_close, old)
+            await self._connect_unlocked(key, propagate=propagate)
 
     async def set_mode(self, mode: str) -> str:
         """마스터 SIM↔REAL 전환 — 전부 재빌드 후 연결. 실패는 미연결로."""
@@ -390,16 +465,23 @@ class ConnectionManager:
 
     def describe(self) -> dict[str, Any]:
         """SYSTEM 탭용 장비 설정/역량 목록. 실시간 연결상태·장비명은
-        /api/status 스냅샷에서 가져온다 (여기선 COM을 건드리지 않음)."""
+        /api/status 스냅샷에서 가져온다 (여기선 COM을 건드리지 않음).
+
+        설정 필드는 *현재 선택된 백엔드*가 요구하는 것만 노출한다(config_kind).
+        그래서 카메라를 zwo로 잡으면 ASCOM ProgID 줄이 사라지고 '자동연결'로 뜬다."""
         devices = []
         for key, spec in REGISTRY.items():
+            selected = self.selected_backend(key)
+            cfg_kind = BACKEND_CONFIG.get(selected, "none")
             devices.append({
                 "key": key, "label": spec.label,
-                "backend": self.backend(key),
+                "backend": self.backend(key),     # 지금 실제 구동 중 백엔드 (칩)
+                "selected": selected,             # 운영자가 REAL용으로 고른 백엔드
                 "real_kinds": spec.real_kinds,
                 "ascom_type": spec.ascom_type,
-                "has_progid": bool(spec.progid_key),
-                "has_url": bool(spec.url_key),
+                "config_kind": cfg_kind,          # progid | url | auto | none
+                "has_progid": cfg_kind == "progid" and bool(spec.progid_key),
+                "has_url": cfg_kind == "url" and bool(spec.url_key),
                 "progid": str(self.cfg.get(spec.progid_key, "")) if spec.progid_key else "",
                 "url": str(self.cfg.get(spec.url_key, "")) if spec.url_key else "",
             })

@@ -183,7 +183,7 @@ function drawSky(s) {
     ctx.shadowBlur = 0;
   }
 
-  const hasMount = m.alt != null && m.az != null &&
+  const hasMount = !m.stale && m.alt != null && m.az != null &&
                    !Number.isNaN(m.alt) && !Number.isNaN(m.az);
   const md = hasMount ? { alt: m.alt, az: m.az } : null;  // 라이브 위치(실시간, 보간 없음)
 
@@ -530,9 +530,101 @@ function drawAllCharts() { charts.forEach(drawChart); }
 // ---------- 워크스페이스 탭 + Muuri 패널 매니저 (갭 없는 팩킹) ----------
 
 const WIDTHS = ["w3", "w4", "w6", "w8", "w12"];
-const TABS = ["control", "env", "plan", "analysis", "system"];
+const TABS = ["control", "devices", "env", "plan", "analysis", "system"];
 const ACTIVE_TAB_KEY = "asterion.activetab";
 const grids = {};   // tab -> Muuri 인스턴스 (탭별 독립 그리드)
+
+// ── Gridstack 프로토타입 (?proto=<tab> | ?proto=1 → devices) ──────────────
+// 기존 Muuri 경로는 그대로 두고, 지정 탭만 자유배치·리사이즈 그리드로 띄운다.
+// Gridstack 인스턴스는 grids[]가 아니라 gstacks[]에 둔다 — 리사이즈 핸들러 등
+// 기존 코드가 grids[tab]에 Muuri 메서드를 호출하므로 섞이면 안 된다.
+const gstacks = {};
+// 기본 레이아웃 = Gridstack 자유배치 MCT (관제 탭은 ＋패널 구성 기능 위해 Muuri 유지).
+//   기본(파라미터 없음) → 관제 제외 전 탭 MCT
+//   ?classic=1 또는 ?proto=off → 전 탭 옛 Muuri
+//   ?proto=all|1 → 관제 포함 전 탭 MCT
+//   ?proto=devices,env → 지정 탭만 MCT
+const PROTO_TABS = (() => {
+  const params = new URLSearchParams(location.search);
+  if (params.has("classic")) return new Set();
+  const p = params.get("proto");
+  if (p === "0" || p === "off") return new Set();
+  if (p === "1" || p === "all") return new Set(TABS);
+  if (p) return new Set(p.split(",").map((s) => s.trim()).filter((t) => TABS.includes(t)));
+  return new Set(TABS);   // 기본: 관제 포함 전 탭 MCT (관제는 미러 조합을 Gridstack에서)
+})();
+// 패널별 초기 높이(격자 칸 수). 사용자가 드래그/리사이즈하면 그 값이 저장된다.
+const PROTO_GS_H = {
+  sky: 9, skyflat: 9, mount: 6, camera: 6, focuser: 5, image: 7,
+  safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
+  timeline: 6, plots: 9, frames: 7, actions: 7,
+  connections: 7, "log-sys": 7, sysinfo: 5,
+};
+// devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
+// 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
+const PROTO_GS_LAYOUT = {
+  // 장비(devices) — 컴팩트. 상단 [Sky | 오토플랫] (큰 viz), 중단 [마운트|카메라|포커서]
+  // 좁은 3열(readout이 space-between으로 폭 채워 narrow가 딱 맞음), 하단 Imaging 풀폭.
+  sky:     { x: 0, y: 0,  w: 6, h: 11 },
+  skyflat: { x: 6, y: 0,  w: 6, h: 11 },
+  mount:   { x: 0, y: 11, w: 4, h: 14 },
+  camera:  { x: 4, y: 11, w: 4, h: 11 },
+  focuser: { x: 8, y: 11, w: 4, h: 6  },
+  image:   { x: 8, y: 17, w: 4, h: 8  },
+  // 기상(env) — 좌측 안전·기상(바닥 y18), 우측 위성·CCTV 와이드(바닥 y18)
+  safety:       { x: 0, y: 0, w: 4, h: 8  },
+  weather:      { x: 0, y: 8, w: 4, h: 10 },
+  "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
+  "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
+  // 계획(plan)
+  timeline: { x: 0, y: 0, w: 12, h: 9 },
+  // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
+  plots:   { x: 0, y: 0,  w: 12, h: 10 },
+  frames:  { x: 0, y: 10, w: 6,  h: 8  },
+  actions: { x: 6, y: 10, w: 6,  h: 8  },
+  // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
+  connections: { x: 0, y: 0,  w: 8,  h: 10 },
+  "log-sys":   { x: 8, y: 0,  w: 4,  h: 10 },
+  sysinfo:     { x: 0, y: 10, w: 12, h: 6  },
+};
+
+// 패널별 sizing 정의 — 비율잠금은 viz만(폼은 내용이 안 늘어나 무의미), control은 min/max로
+// '내용 이상 못 늘어나게' 막아 여백 제거. ar=[w,h]는 viz의 박스 목표비(잠금/스냅 대상).
+// fills: true=viz채움, 'gauge'/'scroll'=부분채움, false=폼. (defH는 라이브 측정 반영)
+const PANEL_DEF = {
+  sky:          { klass: "viz",     fills: true,     ar: [6, 7],  minW: 4, minH: 9,  defW: 6,  defH: 14, maxW: 9 },
+  skyflat:      { klass: "mixed",   fills: "gauge",  ar: null,    minW: 6, minH: 9,  defW: 6,  defH: 10, maxW: 8 },
+  mount:        { klass: "control", fills: false,    ar: null,    minW: 4, minH: 12, defW: 6,  defH: 13, maxW: 6, maxH: 15 },
+  camera:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 10, defW: 6,  defH: 11, maxW: 6, maxH: 13 },
+  focuser:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 5,  defW: 6,  defH: 6,  maxW: 8, maxH: 7 },
+  image:        { klass: "viz",     fills: true,     ar: [3, 2],  minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
+  safety:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 5,  defH: 8,  maxW: 6, maxH: 8 },
+  weather:      { klass: "mixed",   fills: false,    ar: null,    minW: 4, minH: 9,  defW: 5,  defH: 11, maxW: 7 },
+  "embed-sat":  { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
+  "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
+  timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
+  plots:        { klass: "viz",     fills: true,     ar: [12, 5], minW: 7, minH: 6,  defW: 12, defH: 9,  maxW: 12 },
+  frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
+  actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
+  connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 10, maxW: 12 },
+  "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 10, maxW: 12 },
+  sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 6,  maxW: 12, maxH: 6 },
+};
+
+// 리사이즈 시 viz 패널을 정의된 비율(ar)로 스냅 (높이를 폭에 맞춤). control/mixed는 제외.
+// min/max가 비율보다 우선. _arLock: grid.update→change→resize 재귀 루프 방지.
+let _arLock = false;
+function aspectSnap(grid, el) {
+  if (_arLock || !el) return;
+  const id = el.getAttribute("gs-id") || el.dataset.panel;
+  const sp = PANEL_DEF[id];
+  if (!sp || sp.klass !== "viz" || !sp.ar) return;
+  const n = el.gridstackNode; if (!n) return;
+  const colPx = grid.cellWidth(), rowPx = 40 + 5;       // 컬럼 px / (cellHeight+margin)
+  let h = Math.round((n.w * colPx) / (sp.ar[0] / sp.ar[1]) / rowPx);
+  h = Math.max(sp.minH, sp.maxH ? Math.min(sp.maxH, h) : h);
+  if (h !== n.h) { _arLock = true; grid.update(el, { h }); _arLock = false; }
+}
 
 function currentTab() {
   const b = document.querySelector(".tab.active");
@@ -748,6 +840,15 @@ function injectGridToolbar(tab) {
   bar.querySelector(".gt-tile:not(.gt-newwin)").onclick = () => tileGrid(tab);
   bar.querySelector(".gt-newwin").onclick = () =>
     window.open(`${location.origin}/?tab=${tab}&solo=1`, "_blank", "noopener");
+  // 관제 탭만 자유 구성 — 다른 탭 패널을 라이브 미러로 가져오는 '+ 패널' 팔레트
+  if (tab === "control") {
+    const add = document.createElement("button");
+    add.className = "gt-tile gt-addpanel";
+    add.title = "다른 탭의 패널을 관제 탭으로 가져오기 (라이브 미러)";
+    add.textContent = "＋ 패널";
+    bar.appendChild(add);
+    add.onclick = () => openPanelPalette(tab, add);
+  }
   syncColsToolbar(tab);
 }
 function tileGrid(tab) {                       // 열 폭을 균등으로 되돌려 깔끔히 정렬
@@ -849,6 +950,7 @@ function ensureGrid(tab) {
   if (grids[tab]) { grids[tab].refreshItems().layout(true); return grids[tab]; }
   const el = document.getElementById(`grid-${tab}`);
   if (!el || typeof Muuri === "undefined") return null;
+  if (tab === "control") injectMirrors(el);   // 저장된 미러 타일을 먼저 DOM에 → Muuri가 흡수
   const grid = new Muuri(el, {
     items: ".muuri-item",
     dragEnabled: true,
@@ -868,6 +970,7 @@ function ensureGrid(tab) {
   grid._tab = tab;                              // colGridLayout이 탭별 열수·비율·높이를 읽음
   applySavedLayout(tab, grid);                  // 접힘·고정·순서·전체폭(w12)을 먼저 적용
   grid.getItems().forEach((it) => addPanelTools(it.getElement(), tab));
+  grid.getItems().forEach((it) => wireMirrorRemove(it.getElement(), tab));  // 미러 타일 ✕
   injectGridToolbar(tab);                       // 탭 상단 격자 열수 컨트롤
   grid.on("layoutEnd", () => positionDividers(tab));   // 레이아웃 후 나눔선 재배치
   grid.on("dragInit", () => { grid._dragging = true; });
@@ -888,6 +991,111 @@ function ensureGrid(tab) {
   return grid;
 }
 
+// ── Gridstack 프로토타입 구현 ────────────────────────────────────────────
+function gsKey(tab) { return `asterion.gslayout.${tab}.v3`; }
+
+function saveGSLayout(tab, grid) {
+  try {
+    const out = grid.getGridItems().map((el) => {
+      const n = el.gridstackNode || {};
+      return { p: el.getAttribute("gs-id") || el.dataset.panel,
+               x: n.x, y: n.y, w: n.w, h: n.h };
+    });
+    localStorage.setItem(gsKey(tab), JSON.stringify(out));
+  } catch (e) { /* noop */ }
+}
+
+function applyGSLayout(tab, grid) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(gsKey(tab)) || "null"); }
+  catch (e) { return; }
+  if (!Array.isArray(saved)) return;
+  const by = {}; saved.forEach((s) => { by[s.p] = s; });
+  grid.batchUpdate();
+  grid.getGridItems().forEach((el) => {
+    const s = by[el.getAttribute("gs-id") || el.dataset.panel];
+    if (s) grid.update(el, { x: s.x, y: s.y, w: s.w, h: s.h });
+  });
+  grid.commit();
+}
+
+function injectProtoBanner(tab) {
+  const pane = document.querySelector(`.tab-pane[data-pane="${tab}"]`);
+  if (!pane || pane.querySelector(".proto-banner")) return;
+  const b = document.createElement("div");
+  b.className = "proto-banner";
+  b.innerHTML =
+    (tab === "control" ? `<button class="pb-add" title="다른 탭 패널을 관제에 추가">＋ 패널</button>` : "") +
+    `<button class="pb-reset" title="이 탭 패널 배치를 기본값으로">↺ 배치 초기화</button>`;
+  pane.insertBefore(b, pane.firstChild);
+  b.querySelector(".pb-reset").onclick = () => {
+    try { localStorage.removeItem(gsKey(tab)); } catch (e) { /* noop */ }
+    location.reload();
+  };
+  const add = b.querySelector(".pb-add");
+  if (add) add.onclick = () => openPanelPalette(tab, add);
+}
+
+// 한 탭의 Muuri 카드를 Gridstack 위젯으로 변환하고 그리드를 띄운다 (탭이 보일 때 1회).
+function ensureGridStack(tab) {
+  if (gstacks[tab]) return gstacks[tab];
+  const el = document.getElementById(`grid-${tab}`);
+  if (!el || typeof GridStack === "undefined") return null;
+  if (tab === "control") injectMirrors(el);   // 저장된 미러를 DOM에 먼저 → 아래서 위젯으로 흡수
+  const items = [...el.querySelectorAll(":scope > .muuri-item")];
+  items.forEach((it) => {
+    const pid = it.dataset.panel;
+    const pos = PROTO_GS_LAYOUT[pid];
+    const w = pos ? pos.w : (it.classList.contains("w12") ? 12 : it.classList.contains("w8") ? 8
+            : it.classList.contains("w4") ? 4 : 6);
+    const h = pos ? pos.h : (PROTO_GS_H[pid] || 6);
+    WIDTHS.forEach((c) => it.classList.remove(c));
+    it.classList.remove("muuri-item");
+    it.classList.add("grid-stack-item");
+    it.setAttribute("gs-id", pid);
+    it.setAttribute("gs-w", w);
+    it.setAttribute("gs-h", h);
+    const sp = PANEL_DEF[pid] || { minW: 3, minH: 2 };
+    it.setAttribute("gs-min-w", sp.minW);
+    it.setAttribute("gs-min-h", sp.minH);
+    if (sp.maxW) it.setAttribute("gs-max-w", sp.maxW);
+    if (sp.maxH) it.setAttribute("gs-max-h", sp.maxH);
+    if (sp.fills) it.classList.add("gs-fill");   // viz-fill CSS 대상 표시
+    if (pos) { it.setAttribute("gs-x", pos.x); it.setAttribute("gs-y", pos.y); }
+    else { it.setAttribute("gs-auto-position", "true"); }
+    const c = it.querySelector(":scope > .muuri-item-content");
+    if (c) { c.classList.remove("muuri-item-content"); c.classList.add("grid-stack-item-content"); }
+  });
+  el.classList.remove("muuri");
+  el.classList.add("grid-stack");
+  const BASE_CELL = 40;
+  const grid = GridStack.init({
+    column: 12, cellHeight: BASE_CELL, margin: 5, float: false,
+    handle: ".card-head", draggable: { handle: ".card-head" },
+    resizable: { handles: "all" },
+  }, el);
+  gstacks[tab] = grid;
+  applyGSLayout(tab, grid);
+  if (tab === "control") grid.getGridItems().forEach((gel) => wireGSMirrorRemove(gel, tab));
+  // 폭은 12열로 자동 반응(컬럼 %), 높이(cellHeight)는 고정. 컨테이너 크기 변화 시
+  // 캔버스(돔·게이지)만 다시 그린다. (비율 스케일은 콘텐츠 높이와 충돌해 보류 — 후속)
+  let roT = 0;
+  const ro = new ResizeObserver(() => {
+    clearTimeout(roT);
+    roT = setTimeout(() => { if (lastStatus) applyStatus(lastStatus); }, 80);
+  });
+  ro.observe(el);
+  // 저장은 드롭/리사이즈 종료 시 1회만 (연속 drag 이벤트엔 저장 금지 → thrashing 방지)
+  let st = 0;
+  grid.on("change", () => { clearTimeout(st); st = setTimeout(() => saveGSLayout(tab, grid), 200); });
+  grid.on("resizestop dragstop", () => { if (lastStatus) applyStatus(lastStatus); drawAllCharts(); });
+  grid.on("resize", () => { if (lastStatus) applyStatus(lastStatus); });
+  grid.on("resize resizestop", (ev, el) => aspectSnap(grid, el));   // viz 패널 비율 유지
+  injectProtoBanner(tab);
+  relayoutAfter(tab);
+  return grid;
+}
+
 function showTab(tab) {
   if (!TABS.includes(tab)) tab = "control";
   document.querySelectorAll(".tab").forEach((b) =>
@@ -898,27 +1106,263 @@ function showTab(tab) {
   if (!document.body.classList.contains("solo")) {
     try { localStorage.setItem(ACTIVE_TAB_KEY, tab); } catch (e) { /* noop */ }
   }
-  ensureGrid(tab);                 // 표시된 뒤에야 폭을 측정할 수 있다
+  if (PROTO_TABS.has(tab) && typeof GridStack !== "undefined") ensureGridStack(tab);
+  else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }
 
+// 단일 패널 임베드(?panel=<key>) — 관제 탭이 다른 패널을 라이브 미러(iframe)로
+// 가져올 때 그 iframe이 여는 화면. 대상 패널 하나만 꺼내 전체화면 호스트에 올리고
+// 나머지 크롬(탭바·로그독·다른 패널)은 숨긴다. 핵심: 다른 패널 요소는 DOM에 남겨둔다
+// (숨김만) — applyStatus가 전역 id로 접근하므로 제거하면 throw한다. 대상 패널은
+// 자기 전역 id를 그대로 쓴다(이 문서엔 패널이 하나뿐이라 충돌 없음).
+function mountPanelSolo(key) {
+  document.body.classList.add("solo", "panel-solo");
+  const panel = document.querySelector(`.muuri-item[data-panel="${key}"]`);
+  if (!panel) {
+    const msg = document.createElement("div");
+    msg.className = "panel-solo-missing";
+    msg.textContent = `알 수 없는 패널: ${key}`;
+    document.body.appendChild(msg);
+    return;
+  }
+  const host = document.createElement("div");
+  host.id = "panel-solo-host";
+  document.body.appendChild(host);
+  panel.removeAttribute("style");          // Muuri 인라인 절대배치 흔적 제거
+  panel.classList.add("solo-panel-item");
+  host.appendChild(panel);
+
+  // 미러(임베드)면: 카드를 자연 높이로 두고(.mirror-embed CSS) 콘텐츠 높이를 부모에
+  // 보고해 iframe 높이를 맞춘다 → 고정 높이/내부 스크롤바 제거.
+  if (window.parent !== window) {
+    document.body.classList.add("mirror-embed");
+    const report = () => {
+      try {
+        window.parent.postMessage(
+          { __asterionPanelHeight: Math.ceil(panel.getBoundingClientRect().height) + 12 },
+          location.origin);
+      } catch (e) { /* noop */ }
+    };
+    new ResizeObserver(() => requestAnimationFrame(report)).observe(panel);
+    requestAnimationFrame(report);
+    setTimeout(report, 300); setTimeout(report, 1200);  // 부모 리스너 준비 전 유실 대비 재보고
+  }
+}
+
 function initWorkspace() {
+  const params = new URLSearchParams(location.search);
+  // 단일 패널 임베드 모드면 전체 탭/그리드 초기화를 건너뛴다(상태 파이프라인은 별도 부팅).
+  if (params.get("panel")) { mountPanelSolo(params.get("panel")); return; }
+
   document.querySelectorAll(".tab").forEach((b) => {
     b.onclick = () => showTab(b.dataset.tab);
   });
   // 듀얼모니터: ?tab=<탭>으로 특정 탭만, ?solo=1이면 탭바 숨겨 단일탭 전용 창
-  const params = new URLSearchParams(location.search);
   const urlTab = params.get("tab");
   if (params.has("solo")) document.body.classList.add("solo");
-  let active = "control";
+  let active = "devices";   // 관제 탭은 빈 캔버스 → 첫 진입은 장비 탭(MCT 콕핏)
   if (urlTab && TABS.includes(urlTab)) {
     active = urlTab;
   } else {
-    try { active = localStorage.getItem(ACTIVE_TAB_KEY) || "control"; } catch (e) { /* noop */ }
+    try { active = localStorage.getItem(ACTIVE_TAB_KEY) || "devices"; } catch (e) { /* noop */ }
   }
   showTab(active);
+}
+
+// ---------- 관제 탭: 다른 패널 라이브 미러(iframe 복제) ----------
+// 사용자 결정: 관제 탭만 자유 구성하되, 같은 패널을 홈 탭과 관제에 *동시에* 띄움(복제식).
+// 복제는 iframe(?panel=<key>)으로 — 별도 문서라 전역 id 충돌 없이 원본과 동시에 라이브.
+// 미러 타일은 data-panel="mirror:<key>"라 기존 span/순서/접기 저장(saveLayout)을 그대로 탄다.
+const MIRRORS_KEY = "asterion.control.mirrors.v3";   // v3 — 잔존 미러 폐기(빈 캔버스 시작)
+// 관제 탭 첫 실행 기본 구성 — 장비 콕핏을 미러로 시드(빈 화면 방지). 사용자가 ✕/추가하면
+// 그 시점부터 저장값을 따른다. 장비 패널의 진짜 홈은 '장비' 탭(네이티브, 빠름)이다.
+const DEFAULT_CONTROL_MIRRORS = [];   // 빈 캔버스 시작 — 사용자가 ＋ 패널로 직접 구성
+
+function mirrorList() {
+  const raw = localStorage.getItem(MIRRORS_KEY);
+  if (raw === null) return DEFAULT_CONTROL_MIRRORS.slice();   // 미설정 = 첫 실행 → 기본 콕핏
+  try { return JSON.parse(raw) || []; } catch (e) { return []; }
+}
+function saveMirrors(keys) {
+  try { localStorage.setItem(MIRRORS_KEY, JSON.stringify(keys)); } catch (e) { /* noop */ }
+}
+
+// 미러로 가져올 수 있는 패널 목록을 DOM에서 1회 수집 (key→{title, homeTab}).
+// 관제 탭 자신의 네이티브 패널은 이미 있으므로 제외한다.
+let PANEL_REGISTRY = null;
+function panelRegistry() {
+  if (PANEL_REGISTRY) return PANEL_REGISTRY;
+  PANEL_REGISTRY = {};
+  document.querySelectorAll(".tab-pane[data-pane] [data-panel]").forEach((el) => {
+    const pane = el.closest(".tab-pane")?.dataset.pane;
+    const key = el.dataset.panel;
+    if (!key || key.startsWith("mirror:") || pane === "control") return;
+    PANEL_REGISTRY[key] = {
+      title: el.querySelector(".card-title")?.textContent?.trim() || key,
+      homeTab: pane,
+    };
+  });
+  return PANEL_REGISTRY;
+}
+
+function makeMirrorTile(key) {
+  const reg = panelRegistry()[key];
+  const title = reg ? reg.title : key;
+  const el = document.createElement("div");
+  el.className = "muuri-item w6 panel-mirror";
+  el.dataset.panel = `mirror:${key}`;
+  el.dataset.mirror = key;
+  el.innerHTML =
+    `<div class="muuri-item-content card">` +
+      `<div class="card-head">` +
+        `<span class="card-title">${escapeHtml(title)}</span>` +
+        `<span class="card-tag">미러</span>` +
+      `</div>` +
+      `<div class="mirror-body">` +
+        `<iframe class="mirror-frame" src="/?panel=${encodeURIComponent(key)}" ` +
+        `title="${escapeHtml(title)} 라이브 미러" loading="lazy"></iframe>` +
+      `</div>` +
+    `</div>`;
+  return el;
+}
+
+// 저장된 미러 타일을 그리드 컨테이너에 미리 삽입 (Muuri 생성 전 호출 → 네이티브 아이템처럼 흡수).
+function injectMirrors(container) {
+  mirrorList().forEach((key) => {
+    if (!container.querySelector(`.muuri-item[data-mirror="${key}"]`))
+      container.appendChild(makeMirrorTile(key));
+  });
+}
+
+// 미러 타일 헤더에 ✕(제거) 버튼을 단다 (addPanelTools가 만든 panel-tools 앞).
+function wireMirrorRemove(el, tab) {
+  if (!el.classList.contains("panel-mirror")) return;
+  const head = el.querySelector(".card-head");
+  if (head.querySelector(".pt-mirror-x")) return;
+  const x = document.createElement("button");
+  x.className = "pt-btn pt-mirror-x"; x.title = "미러 제거"; x.textContent = "✕";
+  const tools = head.querySelector(".panel-tools");
+  if (tools) tools.insertBefore(x, tools.firstChild); else head.appendChild(x);
+  x.onclick = (e) => {
+    e.stopPropagation();
+    const key = el.dataset.mirror, grid = grids[tab];
+    saveMirrors(mirrorList().filter((k) => k !== key));
+    const item = grid && grid.getItems().find((it) => it.getElement() === el);
+    if (item) grid.remove([item], { removeElements: true, layout: true });
+    saveLayout(tab); relayoutAfter(tab);
+  };
+}
+
+// 미러 타일을 Gridstack 위젯 구조로 변환 (muuri-item → grid-stack-item).
+function gsifyMirror(el) {
+  const sp = PANEL_DEF[el.dataset.mirror] || { defW: 5, defH: 8, minW: 3, minH: 3 };
+  el.classList.remove("muuri-item", "w6");
+  el.classList.add("grid-stack-item");
+  el.setAttribute("gs-id", el.dataset.panel);
+  el.setAttribute("gs-w", sp.defW);
+  el.setAttribute("gs-h", sp.defH);
+  el.setAttribute("gs-min-w", sp.minW);
+  el.setAttribute("gs-min-h", sp.minH);
+  if (sp.maxW) el.setAttribute("gs-max-w", sp.maxW);
+  if (sp.maxH) el.setAttribute("gs-max-h", sp.maxH);
+  const c = el.querySelector(":scope > .muuri-item-content");
+  if (c) { c.classList.remove("muuri-item-content"); c.classList.add("grid-stack-item-content"); }
+}
+
+// 미러(iframe)가 보고하는 콘텐츠 높이에 맞춰 Gridstack 위젯 높이를 자동 조정 → 잘림 방지.
+window.addEventListener("message", (e) => {
+  if (e.origin !== location.origin) return;
+  const ph = e.data && e.data.__asterionPanelHeight;
+  if (!ph) return;
+  document.querySelectorAll(".panel-mirror iframe").forEach((f) => {
+    if (f.contentWindow !== e.source) return;
+    const el = f.closest(".grid-stack-item");
+    const pane = el && el.closest(".tab-pane");
+    const gs = pane && gstacks[pane.dataset.pane];
+    if (gs && el.gridstackNode) {
+      const rows = Math.max(3, Math.ceil((ph + 34) / 45));   // +미러헤더, /(cellHeight+margin)
+      // rAF 지연 — 레이아웃 도중 update 시 렌더 desync(노드만 바뀌고 높이 안따라옴) 방지
+      if (rows !== el.gridstackNode.h) requestAnimationFrame(() => {
+        if (el.gridstackNode && rows !== el.gridstackNode.h) gs.update(el, { h: rows });
+      });
+    }
+  });
+});
+
+// Gridstack 미러 타일에 ✕(제거) 버튼.
+function wireGSMirrorRemove(el, tab) {
+  if (!el.classList.contains("panel-mirror")) return;
+  const head = el.querySelector(".card-head");
+  if (!head || head.querySelector(".pt-mirror-x")) return;
+  const x = document.createElement("button");
+  x.className = "pt-btn pt-mirror-x"; x.title = "미러 제거"; x.textContent = "✕";
+  head.appendChild(x);
+  x.onclick = (e) => {
+    e.stopPropagation();
+    const key = el.dataset.mirror, gs = gstacks[tab];
+    saveMirrors(mirrorList().filter((k) => k !== key));
+    if (gs) gs.removeWidget(el, true);
+    if (gs) saveGSLayout(tab, gs);
+  };
+}
+
+// 팔레트에서 패널을 골라 관제 탭에 미러 추가 (Gridstack/Muuri 양쪽 지원)
+function addMirror(tab, key) {
+  if (mirrorList().includes(key)) return;
+  const gs = gstacks[tab];
+  if (gs) {                                   // Gridstack(MCT) 경로
+    const el = makeMirrorTile(key);
+    gsifyMirror(el);
+    document.getElementById(`grid-${tab}`).appendChild(el);
+    gs.makeWidget(el);
+    wireGSMirrorRemove(el, tab);
+    saveMirrors([...mirrorList(), key]);
+    saveGSLayout(tab, gs);
+    if (lastStatus) applyStatus(lastStatus);
+    return;
+  }
+  const grid = grids[tab];                    // Muuri(구) 경로
+  if (!grid) return;
+  const el = makeMirrorTile(key);
+  document.getElementById(`grid-${tab}`).appendChild(el);
+  grid.add(el, { layout: false });
+  addPanelTools(el, tab);
+  wireMirrorRemove(el, tab);
+  saveMirrors([...mirrorList(), key]);
+  saveLayout(tab);
+  grid.refreshItems().layout(true);
+  relayoutAfter(tab);
+}
+
+// '+ 패널' 드롭다운 — 아직 미러하지 않은 패널을 홈 탭과 함께 나열
+function openPanelPalette(tab, anchor) {
+  document.querySelector(".panel-palette")?.remove();
+  const have = new Set(mirrorList());
+  const items = Object.entries(panelRegistry()).filter(([k]) => !have.has(k));
+  const menu = document.createElement("div");
+  menu.className = "panel-palette";
+  menu.innerHTML = items.length
+    ? items.map(([k, v]) =>
+        `<button class="pp-item" data-key="${k}"><span class="pp-t">${escapeHtml(v.title)}</span>` +
+        `<span class="pp-sub">${v.homeTab}</span></button>`).join("")
+    : `<div class="pp-empty">추가할 패널이 없습니다</div>`;
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
+  menu.querySelectorAll(".pp-item").forEach((b) =>
+    (b.onclick = () => { addMirror(tab, b.dataset.key); menu.remove(); }));
+  setTimeout(() => {
+    const close = (ev) => {
+      if (!menu.contains(ev.target) && ev.target !== anchor) {
+        menu.remove(); document.removeEventListener("mousedown", close);
+      }
+    };
+    document.addEventListener("mousedown", close);
+  }, 0);
 }
 
 // ---------- 시스템 탭: 장비 연결 (ASCOM / PWI4) ----------
@@ -949,7 +1393,12 @@ function connDevHtml(dev) {
       `<input data-cfg="url" data-dev="${dev.key}" value="${escapeHtml(dev.url || "")}" placeholder="http://…">` +
       `<button class="btn" data-act="save" data-dev="${dev.key}">저장</button></div>`;
   }
-  if (!cfg) cfg = `<div class="conn-dev-cfg"><span class="cfg-lbl">시뮬레이터 전용 — 설정 없음</span></div>`;
+  if (!cfg) {
+    if (dev.config_kind === "auto")
+      cfg = `<div class="conn-dev-cfg"><span class="cfg-lbl">자동 연결 — SDK·장비 자동 탐색 (설정 불필요)</span></div>`;
+    else
+      cfg = `<div class="conn-dev-cfg"><span class="cfg-lbl">시뮬레이터 전용 — 설정 없음</span></div>`;
+  }
   const backend = dev.real_kinds.length
     ? `<div class="conn-dev-cfg devmode-only"><span class="cfg-lbl">백엔드 (REAL 모드) · DEV</span>` +
       `<select data-cfg="backend" data-dev="${dev.key}">` +
@@ -961,11 +1410,10 @@ function connDevHtml(dev) {
     <div class="conn-dev-top">
       <span class="cd-dot" data-role="dot"></span>
       <span class="cd-label">${escapeHtml(dev.label)}</span>
-      <span class="cd-backend" data-role="backend" title="프로토콜/어댑터">${dev.backend}</span>
       <span class="cd-name" data-role="name" title="장비명"></span>
       <span class="cd-state off" data-role="state">미연결</span>
     </div>
-    ${backend}${cfg}
+    <div class="devmode-only">${backend}${cfg}</div>
     <div class="conn-dev-actions">
       <button class="btn btn-go" data-act="connect" data-dev="${dev.key}">연결</button>
       <button class="btn" data-act="reconnect" data-dev="${dev.key}">재연결</button>
@@ -980,7 +1428,8 @@ async function wireConnDev(dev) {
   if (!root) return;
   const bsel = root.querySelector('[data-cfg="backend"]');
   if (bsel) {
-    bsel.value = dev.backend === "sim" ? "sim" : dev.backend;
+    // 마스터가 sim이어도 운영자가 고른 REAL 백엔드를 보인다(dev.selected).
+    bsel.value = dev.selected || "sim";
     bsel.onchange = () => saveDeviceCfg(dev.key, { backend: bsel.value });
   }
   const psel = root.querySelector('[data-cfg="progid"]');
@@ -1018,24 +1467,40 @@ async function saveDeviceCfg(key, body) {
   } catch (e) { /* post()가 이미 로그 */ }
 }
 
+const deviceActionsPending = new Set();
+
 async function deviceAction(key, act, root) {
-  if (act === "save") {
-    const psel = root.querySelector('[data-cfg="progid"]');
-    const uinp = root.querySelector('[data-cfg="url"]');
-    const body = {};
-    if (psel) body.progid = psel.value;
-    if (uinp) body.url = uinp.value.trim();
-    return saveDeviceCfg(key, body);
-  }
-  if (act === "setup") {   // 드라이버 설정창(모달) — 응답은 {ok}, 목록 갱신만
-    try { await post("/api/system/setup", { device: key }); refreshDevices(); }
-    catch (e) { /* post()가 이미 로그 */ }
-    return;
-  }
-  try {   // connect / disconnect / reconnect → describe() 반환
-    deviceConfig = await post(`/api/system/${act}`, { device: key });
-    renderConnList();
+  if (deviceActionsPending.has(key)) return;
+  deviceActionsPending.add(key);
+  const controls = [...root.querySelectorAll("button, select, input")].map(
+    (el) => [el, el.disabled],
+  );
+  controls.forEach(([el]) => {
+    el.disabled = true;
+  });
+  try {
+    if (act === "save") {
+      const psel = root.querySelector('[data-cfg="progid"]');
+      const uinp = root.querySelector('[data-cfg="url"]');
+      const body = {};
+      if (psel) body.progid = psel.value;
+      if (uinp) body.url = uinp.value.trim();
+      await saveDeviceCfg(key, body);
+    } else if (act === "setup") {
+      await post("/api/system/setup", { device: key });
+      await refreshDevices();
+    } else {
+      deviceConfig = await post(`/api/system/${act}`, { device: key });
+      renderConnList();
+    }
   } catch (e) { /* post()가 이미 로그 */ }
+  finally {
+    deviceActionsPending.delete(key);
+    controls.forEach(([el, wasDisabled]) => {
+      if (el.isConnected) el.disabled = wasDisabled;
+    });
+    renderConnLive();
+  }
 }
 
 function renderConnList() {
@@ -1065,6 +1530,11 @@ function renderConnLive() {
     // 명시적 상태 — 연결됨 / 미연결 / 연결됨·응답대기 (드라이버만 붙고 실제 데이터 없음)
     const st = root.querySelector('[data-role="state"]');
     if (!on) { st.textContent = "미연결"; st.className = "cd-state off"; }
+    else if (dev.key === "mount" && d.stale) {
+      st.textContent = "좌표 갱신 정지"; st.className = "cd-state warn";
+    } else if (dev.key === "filterwheel" && d.moving) {
+      st.textContent = "초기화/이동 중"; st.className = "cd-state warn";
+    }
     else if (deviceResponding(dev.key, d)) { st.textContent = "연결됨"; st.className = "cd-state on"; }
     else { st.textContent = "연결됨 · 응답대기"; st.className = "cd-state warn"; }
     root.querySelector('[data-role="detail"]').textContent = d.detail || "";
@@ -1079,7 +1549,8 @@ function renderConnLive() {
 // 드라이버는 connected라는데 실제 데이터가 오는지 — 가대 물리연결 안 됐는데
 // 드라이버만 붙어 connected로 뜨는 경우를 노란 '응답대기'로 구분.
 function deviceResponding(key, d) {
-  if (key === "mount") return d.alt != null || d.az != null || d.ra_hours != null;
+  if (key === "mount") return !d.stale &&
+    (d.alt != null || d.az != null || d.ra_hours != null);
   if (key === "weather") return d.temp != null;
   if (key === "focuser") return d.position != null;
   return true;  // 카메라/필터휠 등은 connected로 충분
@@ -1088,7 +1559,7 @@ function deviceResponding(key, d) {
 // ---------- 상태 반영 ----------
 
 let lastStatus = null;
-let filterOptionsReady = false;
+let filterOptionsSignature = "";
 
 function applyStatus(s) {
   lastStatus = s;
@@ -1121,15 +1592,25 @@ function applyStatus(s) {
   $("m-dec").textContent = m.dec_str || "—";
   $("m-track").classList.toggle("on", !!m.tracking);
   $("m-slew").classList.toggle("on", !!m.slewing);
+  $("m-slew").textContent = m.homing ? "HOMING" : (m.stale ? "STALE" : "SLEWING");
+  $("m-slew").title = m.detail || "";
   $("m-park").classList.toggle("on", !!m.at_park);
+  const mountBusy = !m.connected || !!m.slewing || !!m.homing || !!m.stale;
+  $("btn-goto").disabled = mountBusy;
+  $("btn-goto-radec").disabled = mountBusy;
+  $("btn-tracking").disabled = !m.connected || !!m.homing || !!m.stale;
+  $("btn-stop").disabled = !m.connected || (!m.slewing && !m.homing);
+  document.querySelectorAll(".jog-pad [data-jog]").forEach((b) => {
+    b.disabled = mountBusy;
+  });
   // 파킹/홈 — 드라이버가 지원할 때만 노출, 상태에 맞게 버튼 활성화
   const parkRow = $("park-row");
   if (parkRow) {
     parkRow.style.display = (m.can_park || m.can_home) ? "" : "none";
-    $("btn-park").disabled = !m.can_park || !!m.at_park;
+    $("btn-park").disabled = !m.can_park || !!m.at_park || mountBusy;
     $("btn-unpark").disabled = !m.can_park || !m.at_park;
-    $("btn-home").disabled = !m.can_home || !!m.at_park;
-    $("btn-setpark").disabled = !m.can_park;
+    $("btn-home").disabled = !m.can_home || !!m.at_park || mountBusy;
+    $("btn-setpark").disabled = !m.can_park || mountBusy;
   }
 
   // 카메라 + 캡처
@@ -1138,12 +1619,15 @@ function applyStatus(s) {
     (c.cooler_on ? " ❄" : "");
   $("c-state").textContent = c.state || "—";
   const f = s.filter || {};
-  $("c-filter").textContent = f.name || "—";
-  if (!filterOptionsReady && Array.isArray(f.names) && f.names.length) {
+  $("c-filter").textContent = f.moving ? "초기화/이동 중…" : (f.name || "—");
+  const filterSignature = JSON.stringify(f.names || []);
+  if (filterSignature !== filterOptionsSignature &&
+      Array.isArray(f.names) && f.names.length) {
     $("sel-filter").innerHTML = f.names.map((n, i) =>
       `<option value="${i}">${n}</option>`).join("");
-    filterOptionsReady = true;
+    filterOptionsSignature = filterSignature;
   }
+  $("btn-filter").disabled = !f.connected || !!f.moving;
   const cap = s.capture || {};
   const capCount = cap.count ? `/${cap.count}` : "";
   $("cap-state").textContent = cap.active
@@ -1312,6 +1796,23 @@ function prependRow(tableId, html, max = 40) {
 
 // ---------- WebSocket ----------
 
+// WS 메시지 한 건 처리 — 실제 WS와 (미러용) 부모 전달 postMessage가 공유한다.
+function handleWSData(data) {
+  if (data.type === "status") applyStatus(data.status);
+  else if (data.type === "log") logLine(data);
+  else if (data.type === "frame") prependRow("tbl-frames", frameRow(data.frame));
+  else if (data.type === "action") prependRow("tbl-actions", actionRow(data.action));
+  else if (data.type === "preview") updatePreview(data.token, data.meta);
+}
+
+// 부모(메인 창)는 자기 WS 원문을 모든 미러 iframe에 전달 — 미러는 자기 WS를 안 연다.
+function broadcastToMirrors(raw) {
+  document.querySelectorAll(".mirror-frame").forEach((f) => {
+    try { f.contentWindow && f.contentWindow.postMessage({ __asterionWS: raw }, location.origin); }
+    catch (e) { /* noop */ }
+  });
+}
+
 function connectWS() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => $("ws-dot").classList.add("on");
@@ -1319,14 +1820,51 @@ function connectWS() {
     $("ws-dot").classList.remove("on");
     setTimeout(connectWS, 2000);
   };
-  ws.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    if (data.type === "status") applyStatus(data.status);
-    else if (data.type === "log") logLine(data);
-    else if (data.type === "frame") prependRow("tbl-frames", frameRow(data.frame));
-    else if (data.type === "action") prependRow("tbl-actions", actionRow(data.action));
-    else if (data.type === "preview") updatePreview(data.token, data.meta);
-  };
+  ws.onmessage = (ev) => { handleWSData(JSON.parse(ev.data)); broadcastToMirrors(ev.data); };
+}
+
+// 이 문서가 다른 창에 임베드된 미러(iframe)인가 (?panel= + 부모 존재).
+function isMirrorEmbed() {
+  try { return !!new URLSearchParams(location.search).get("panel") && window.parent !== window; }
+  catch (e) { return false; }
+}
+
+// 미러(자식): 자기 WS 대신 부모가 전달하는 WS 원문을 받아 처리 + 즉시 1회 스냅샷 요청.
+function setupMirrorReceive() {
+  window.addEventListener("message", (ev) => {
+    if (ev.origin !== location.origin) return;
+    const m = ev.data;
+    if (m && typeof m.__asterionWS === "string") {
+      try { handleWSData(JSON.parse(m.__asterionWS)); } catch (e) { /* noop */ }
+    }
+  });
+  try { window.parent.postMessage({ __asterionMirrorReady: true }, location.origin); } catch (e) { /* noop */ }
+}
+
+// 부모(메인 창): 미러의 준비신호엔 현재 스냅샷을 즉시 보내고, 높이 보고엔 iframe을 맞춘다.
+function setupMirrorParent() {
+  window.addEventListener("message", (ev) => {
+    if (ev.origin !== location.origin) return;
+    const d = ev.data || {};
+    if (d.__asterionMirrorReady) {
+      if (lastStatus && ev.source)
+        ev.source.postMessage(
+          { __asterionWS: JSON.stringify({ type: "status", status: lastStatus }) },
+          location.origin);
+    } else if (typeof d.__asterionPanelHeight === "number") {
+      const f = [...document.querySelectorAll(".mirror-frame")]
+        .find((x) => x.contentWindow === ev.source);
+      if (!f) return;
+      const h = Math.max(120, Math.min(2000, d.__asterionPanelHeight));
+      if (Math.abs((parseInt(f.style.height) || 0) - h) > 2) {
+        f.style.height = h + "px";          // iframe을 콘텐츠 높이에 맞춤 (내부 스크롤바 제거)
+        clearTimeout(window.__mirrorRelayout);
+        window.__mirrorRelayout = setTimeout(() => {
+          if (grids.control) grids.control.refreshItems().layout(true);
+        }, 120);
+      }
+    }
+  });
 }
 
 // ---------- 프레임 미리보기 ----------
@@ -1366,6 +1904,9 @@ function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }
 // ---------- 초기 로드 ----------
 
 async function init() {
+  // 부모 리스너를 그리드/iframe 생성보다 먼저 붙인다 — 시드된 미러가 보내는
+  // 높이/준비 메시지가 리스너 부착 전에 발사돼 유실되는 것을 막는다.
+  if (!isMirrorEmbed()) setupMirrorParent();
   initWorkspace();
   try {
     const [status, logs, frames, actions] = await Promise.all([
@@ -1398,7 +1939,9 @@ async function init() {
     logLine({ ts: nowts(), source: "ui", level: "error",
               msg: `초기 로드 실패: ${e}` });
   }
-  connectWS();
+  // 미러 iframe은 자기 WS를 안 열고 부모 전달을 받는다(WS N개 방지). 메인 창은
+  // WS를 열고 + 미러의 준비/높이 메시지를 처리한다.
+  if (isMirrorEmbed()) setupMirrorReceive(); else connectWS();
   fetchTimeline();
   setInterval(fetchTimeline, 600000);  // 10분마다 갱신
   initTelemetry();
@@ -1412,14 +1955,21 @@ async function init() {
 $("btn-goto").onclick = () => {
   const alt = Number($("in-alt").value), az = Number($("in-az").value);
   if (Number.isNaN(alt) || $("in-alt").value === "") return;
+  $("btn-goto").disabled = true;
   skyTarget = { alt, az: az % 360, ts: Date.now() };
   kickSky();
-  post("/api/actions/mount/goto", { alt, az }).catch(() => { skyTarget = null; });
+  post("/api/actions/mount/goto", { alt, az }).catch(() => {
+    skyTarget = null;
+    $("btn-goto").disabled = false;
+  });
 };
 $("btn-goto-radec").onclick = () => {
   const ra = $("in-ra").value.trim(), dec = $("in-dec").value.trim();
   if (!ra || !dec) return;
-  post("/api/actions/mount/goto_radec", { ra, dec });
+  $("btn-goto-radec").disabled = true;
+  post("/api/actions/mount/goto_radec", { ra, dec }).catch(() => {
+    $("btn-goto-radec").disabled = false;
+  });
 };
 $("btn-resolve").onclick = async () => {
   const name = $("in-target").value.trim();
@@ -1454,7 +2004,11 @@ $("btn-tracking").onclick = () =>
 $("btn-stop").onclick = () => { skyTarget = null; post("/api/actions/mount/stop"); };
 $("btn-park").onclick = () => { skyTarget = null; post("/api/actions/mount/park"); };
 $("btn-unpark").onclick = () => post("/api/actions/mount/unpark");
-$("btn-home").onclick = () => { skyTarget = null; post("/api/actions/mount/home"); };
+$("btn-home").onclick = () => {
+  skyTarget = null;
+  $("btn-home").disabled = true;
+  post("/api/actions/mount/home").catch(() => { $("btn-home").disabled = false; });
+};
 $("btn-setpark").onclick = () => post("/api/actions/mount/setpark");
 
 // 하늘 돔 클릭
@@ -1472,8 +2026,12 @@ $("sky-canvas").addEventListener("click", skyClickHandler);
 });
 
 // 카메라 / 캡처
-$("btn-filter").onclick = () =>
-  post("/api/actions/filter", { position: Number($("sel-filter").value) });
+$("btn-filter").onclick = () => {
+  $("btn-filter").disabled = true;
+  post("/api/actions/filter", {
+    position: Number($("sel-filter").value),
+  }).catch(() => { $("btn-filter").disabled = false; });
+};
 $("btn-cooler").onclick = () => {
   const sp = $("c-setpoint").value;
   post("/api/actions/camera/cooler", {

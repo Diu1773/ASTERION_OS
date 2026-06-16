@@ -8,7 +8,9 @@
 <link rel="icon" href="/static/logo.png?v=2">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=069">
+<link rel="stylesheet" href="/static/style.css?v=082">
+<!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
 <body>
 
@@ -40,6 +42,7 @@
 <!-- 워크스페이스 탭 (관제·환경·계획·분석·시스템) -->
 <nav class="tabbar" id="tabbar">
   <button class="tab active" data-tab="control">관제 <span>CONTROL</span></button>
+  <button class="tab" data-tab="devices">장비 <span>DEVICES</span></button>
   <button class="tab" data-tab="env">기상 <span>WEATHER</span></button>
   <button class="tab" data-tab="plan">계획 <span>PLAN</span></button>
   <button class="tab" data-tab="analysis">분석 <span>ANALYSIS</span></button>
@@ -48,9 +51,14 @@
 
 <main class="workspace">
 
-  <!-- ============ 관제 CONTROL ============ -->
+  <!-- ============ 관제 CONTROL — 조합 전용 캔버스 (＋ 패널로 미러 구성) ============ -->
   <section class="tab-pane active" data-pane="control">
-    <div class="muuri" id="grid-control">
+    <div class="muuri" id="grid-control"></div>
+  </section>
+
+  <!-- ============ 장비 DEVICES — 네이티브 콕핏 (직접 조작, 빠름) ============ -->
+  <section class="tab-pane" data-pane="devices">
+    <div class="muuri" id="grid-devices">
 
       <!-- 하늘 돔 -->
       <div class="muuri-item w6" data-panel="sky">
@@ -232,7 +240,7 @@
       <!-- 프레임 미리보기 -->
       <div class="muuri-item w6" data-panel="image">
       <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">프레임 미리보기</span><span class="card-tag">LATEST FRAME</span></div>
+        <div class="card-head"><span class="card-title">Imaging Panel</span><span class="card-tag">IMAGING</span></div>
         <div class="frame-view" id="frame-view">
           <img id="frame-img" alt="아직 캡처된 프레임이 없습니다">
           <div class="frame-empty" id="frame-empty">캡처/플랫을 찍으면 여기에 표시됩니다</div>
@@ -444,12 +452,12 @@
   <section class="tab-pane" data-pane="system">
     <div class="muuri" id="grid-system">
 
-      <!-- 장비 연결 (ASCOM / PWI4) -->
+      <!-- 장비 연결 — 웹은 연결여부/장비명만, 프로토콜 라우팅은 백엔드 -->
       <div class="muuri-item w8" data-panel="connections">
       <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">장비 연결</span><span class="card-tag sys">ASCOM · PWI4</span></div>
+        <div class="card-head"><span class="card-title">장비 연결</span><span class="card-tag sys">DEVICES</span></div>
         <div class="conn-list" id="conn-list"></div>
-        <div class="drawer-note">
+        <div class="drawer-note devmode-only">
           드롭다운이 비어 있으면 ASCOM Platform / pywin32가 없거나 비-Windows 환경입니다.
           설정은 즉시 저장되며(config.local.json), [연결]을 눌러야 실제로 붙습니다.
         </div>
@@ -533,6 +541,7 @@
 </aside>
 
 <script src="/static/muuri.min.js"></script>
-<script src="/static/app.js?v=071"></script>
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script src="/static/app.js?v=101"></script>
 </body>
 </html>

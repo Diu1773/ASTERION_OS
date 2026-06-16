@@ -271,9 +271,9 @@ body.solo .gt-newwin { display: none; }
 
 /* kv rows */
 /* 라벨-값을 가깝게(왼쪽 그룹) — 넓은 카드에서 가운데가 텅 비지 않게. 라벨 폭으로 값 정렬. */
-.kv { display: flex; align-items: baseline; gap: 10px; padding: 2.5px 0; }
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 2.5px 0; }
 .kv > span { color: var(--dim); font-size: 12px; min-width: 92px; flex: none; }
-.kv > b { font-family: var(--mono); font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; }
+.kv > b { font-family: var(--mono); font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
 .kv > b.accent { color: var(--text); }
 
 .pills { display: flex; gap: 7px; margin: 10px 0 2px; }
@@ -658,6 +658,63 @@ select { color-scheme: dark; }
    display(예: .conn-dev-cfg의 flex)를 유지해야 라벨·드롭다운이 안 겹친다. */
 body:not(.devmode) .devmode-only { display: none; }
 
+/* 단일 패널 임베드(?panel=) — 관제 탭 라이브 미러용. 크롬을 숨기고 대상 패널만
+   화면을 채운다. 다른 패널은 .workspace 안에 display:none으로 남아 applyStatus의
+   전역 id 접근을 깨지 않는다. */
+body.panel-solo > .topbar,
+body.panel-solo > .tabbar,
+body.panel-solo > .workspace,
+body.panel-solo > .log-dock { display: none !important; }
+#panel-solo-host { display: none; }
+body.panel-solo { background: transparent; }
+body.panel-solo #panel-solo-host {
+  display: block; position: fixed; inset: 0; padding: 6px; overflow: auto;
+}
+body.panel-solo .solo-panel-item {
+  width: 100% !important; transform: none !important; position: static !important;
+  margin: 0 !important;
+}
+body.panel-solo .solo-panel-item .card { min-height: calc(100vh - 12px); box-sizing: border-box; }
+/* 미러(임베드)는 자연 높이로 — 부모가 iframe을 콘텐츠 높이에 맞춘다(자동 높이) */
+body.panel-solo.mirror-embed .solo-panel-item .card { min-height: 0; }
+body.panel-solo.mirror-embed #panel-solo-host { overflow: hidden; padding: 0; }
+/* 카드 속 카드 방지: 미러 안쪽 패널의 헤더·테두리·배경 제거 → 바깥 래퍼가 카드/헤더 담당 */
+body.panel-solo.mirror-embed .solo-panel-item .card {
+  border: none; background: transparent; box-shadow: none; backdrop-filter: none;
+  border-radius: 0; padding: 4px 8px;
+}
+body.panel-solo.mirror-embed .solo-panel-item .card > .card-head { display: none; }
+body.panel-solo .card-head { cursor: default; }
+.panel-solo-missing { padding: 20px; color: var(--text); font-family: var(--mono); }
+
+/* 관제 탭 라이브 미러 타일 (iframe 복제) + '+ 패널' 팔레트 */
+.panel-mirror .mirror-body { padding: 0; }
+.mirror-frame {
+  width: 100%; height: 320px; border: 0; display: block; background: transparent;
+}
+/* 관제(MCT) 미러 타일: iframe이 래퍼 박스를 꽉 채움 → 한 패널처럼 (카드 속 카드 X) */
+.grid-stack .panel-mirror .grid-stack-item-content.card { padding: 0; }
+.grid-stack .panel-mirror .card-head { padding: 6px 12px 7px; }   /* 카드 패딩 0이라 헤더가 자체 여백 */
+.grid-stack .panel-mirror .mirror-body { flex: 1; min-height: 0; }
+.grid-stack .panel-mirror .mirror-frame { height: 100%; }
+.pt-mirror-x { color: var(--err); font-weight: 700; }
+.gt-addpanel { margin-left: 6px; }
+.panel-palette {
+  position: fixed; z-index: 1200; min-width: 184px;
+  background: var(--panel-2); border: 1px solid var(--edge);
+  border-radius: var(--radius-sm); padding: 5px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.pp-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: none; border: 0; color: var(--text); cursor: pointer;
+  padding: 7px 9px; border-radius: 6px; font-size: 12px; text-align: left;
+}
+.pp-item:hover { background: rgba(255, 255, 255, .07); }
+.pp-sub { color: var(--faint); font-size: 9.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .5px; }
+.pp-empty { color: var(--faint); font-size: 11px; padding: 8px 9px; }
+
 /* ---------------- 시스템 탭: 장비 연결 목록 ---------------- */
 .conn-list { display: flex; flex-direction: column; gap: 9px; }
 .conn-dev {
@@ -669,14 +726,10 @@ body:not(.devmode) .devmode-only { display: none; }
 .conn-dev .cd-dot.on { background: var(--ok); }
 .conn-dev .cd-dot.off { background: var(--err); }
 .conn-dev .cd-label { font-weight: 600; font-size: 13px; color: var(--text); }
-.conn-dev .cd-backend {
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: .8px;
-  text-transform: uppercase; color: var(--faint); padding: 2px 7px;
-  border: 1px solid var(--edge); border-radius: 999px;
-}
-/* 프로토콜 칩(ASCOM/PWI4/SIM)은 중립 정보 — 연결 상태는 점·장비명·상태문구로 표시.
-   (장비1 = 점+라벨+상태문구, 드라이버1 = 프로토콜칩, 장비명 = cd-name) */
-.conn-dev .cd-name { font-family: var(--mono); font-size: 11px; color: var(--text); max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 웹은 프로토콜/어댑터(ZWO·ASCOM·PWI4·sim)를 표시하지 않는다 — 장비는 공용
+   백본에 플러그될 뿐이고, '무엇이 붙었나'는 장비명(cd-name), '붙었나'는
+   점·상태문구가 말한다. 프로토콜 라우팅은 백엔드 관심사(REGISTRY/config)다. */
+.conn-dev .cd-name { font-family: var(--mono); font-size: 11px; color: var(--text); max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-dev .cd-state { margin-left: auto; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .conn-dev .cd-state.on   { color: var(--ok); }
 .conn-dev .cd-state.off  { color: var(--err); }
@@ -689,3 +742,72 @@ body:not(.devmode) .devmode-only { display: none; }
 .conn-dev-actions { display: flex; gap: 7px; margin-top: 9px; }
 .conn-dev-actions .btn { flex: 1; padding: 7px 8px; font-size: 11.5px; }
 .conn-dev .cd-detail { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-top: 7px; word-break: break-all; min-height: 12px; }
+
+/* ============================================================
+   Gridstack 프로토타입 (?proto=) — 직각 도킹풍 (Open MCT/Grafana 참조)
+   .grid-stack 클래스가 붙은 탭에만 적용되므로 일반 탭엔 영향 없음.
+   ============================================================ */
+.proto-banner {
+  display: flex; align-items: center; justify-content: flex-end;
+  margin: 0 0 6px; padding: 0; background: transparent; border: none;
+}
+.proto-banner .pb-reset {
+  font-size: 11px; color: var(--text-2, #9AA4B2);
+  background: var(--panel-2); border: 1px solid var(--edge);
+  border-radius: 2px; padding: 3px 10px; cursor: pointer;
+}
+.proto-banner .pb-add {
+  margin-right: auto; font-size: 11px; color: #4DB8FF;
+  background: rgba(77, 184, 255, 0.10); border: 1px solid rgba(77, 184, 255, 0.35);
+  border-radius: 2px; padding: 3px 10px; cursor: pointer;
+}
+.proto-banner .pb-add:hover { background: rgba(77, 184, 255, 0.18); }
+.proto-banner .pb-reset:hover { color: var(--text-1, #E6EAF0); border-color: rgba(77, 184, 255, 0.5); }
+
+.grid-stack { background: transparent; }
+/* 직각·납작·고밀도 — macOS 머티리얼(둥근·블러·그림자)을 MCT 계기판으로 덮어쓴다 */
+.grid-stack .grid-stack-item-content.card {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  overflow: auto; margin: 0;
+  scrollbar-width: none;              /* 세로 bar 숨김 (높이는 내용에 맞춤) */
+  border-radius: 2px;                 /* 직각 */
+  padding: 10px 12px;                 /* 15/17 → 축소 (고밀도) */
+  background: #10141b;                /* 솔리드(반투명·블러 제거) */
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: none; backdrop-filter: none;
+}
+.grid-stack .grid-stack-item-content.card::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* 컴팩트 헤더 */
+.grid-stack .card-head { margin-bottom: 9px; padding-bottom: 7px; }
+.grid-stack .card-title { font-size: 12px; font-weight: 500; letter-spacing: .2px; }
+.grid-stack .card-tag { font-size: 9px; }
+/* readout 고밀도 */
+.grid-stack .kv { padding: 1.5px 0; gap: 8px; }
+.grid-stack .kv > span { font-size: 11px; min-width: 78px; }
+.grid-stack .kv > b { font-size: 12px; }
+/* 리사이즈 핸들 — 평소 은은, 호버 시 강조 (우하단 모서리 그립) */
+.grid-stack .ui-resizable-handle { background: transparent; }
+.grid-stack .ui-resizable-se {
+  width: 13px; height: 13px; right: 2px; bottom: 2px;
+  border-right: 2px solid rgba(77, 184, 255, 0.4);
+  border-bottom: 2px solid rgba(77, 184, 255, 0.4);
+}
+.grid-stack .grid-stack-item:hover .ui-resizable-se { border-color: #4DB8FF; }
+/* viz-fill: Sky 돔이 칸 높이에 맞게 줄어든다 (정사각 강제·460px 캡 제거 → drawSky가 min(w,h)로 그림) */
+.grid-stack [data-panel="sky"] .grid-stack-item-content.card { overflow: hidden; }
+.grid-stack [data-panel="sky"] .sky-wrap { flex: 1 1 auto; min-height: 0; margin-bottom: 6px; }
+.grid-stack [data-panel="sky"] #sky-canvas {
+  width: 100%; height: 100%; max-width: none; aspect-ratio: auto;
+}
+/* viz-fill: 프레임 뷰어·임베드(위성·CCTV)가 칸을 채운다 (폭기준 aspect 해제 → 칸 높이로 flex) */
+.grid-stack .gs-fill .grid-stack-item-content.card { overflow: hidden; }
+.grid-stack .gs-fill .frame-view,
+.grid-stack .gs-fill .embed-view { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
+.grid-stack .gs-fill .frame-view img,
+.grid-stack .gs-fill .embed-view img,
+.grid-stack .gs-fill .embed-view iframe { width: 100%; height: 100%; object-fit: contain; }
+/* 드래그 중 떠 있는 위젯 placeholder (N.I.N.A.식 드롭존 힌트) */
+.grid-stack .grid-stack-placeholder > .placeholder-content {
+  background: rgba(77, 184, 255, 0.08);
+  border: 1px dashed rgba(77, 184, 255, 0.45); border-radius: 2px;
+}

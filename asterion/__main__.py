@@ -26,7 +26,10 @@ def main() -> None:
         os.environ["ASTERION_CONFIG"] = args.config
     cfg = Config.load(os.environ.get("ASTERION_CONFIG"))
     host = args.host or str(cfg.get("server.host", "127.0.0.1"))
-    port = args.port or int(cfg.get("server.port", 8520))
+    # 포트 우선순위: --port 플래그 > PORT 환경변수(프리뷰/오케스트레이터가 빈 포트 할당) >
+    # config.toml. 일반 실행(env 없음)은 그대로 config의 8520을 쓴다.
+    env_port = os.environ.get("PORT")
+    port = args.port or (int(env_port) if env_port else int(cfg.get("server.port", 8520)))
 
     print(f"Asterion — http://{host}:{port}  (Ctrl+C로 종료)")
     uvicorn.run("asterion.app:create_app", factory=True,

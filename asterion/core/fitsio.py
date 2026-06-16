@@ -21,6 +21,18 @@ def have_fits() -> bool:
     return _fits is not None
 
 
+def load_frame(path) -> np.ndarray | None:
+    """FITS의 1차 HDU 이미지 데이터를 ndarray로 읽는다. astropy 없거나 읽기 실패 시 None."""
+    if _fits is None:
+        return None
+    try:
+        with _fits.open(path) as hdul:
+            data = hdul[0].data
+        return None if data is None else np.asarray(data)
+    except Exception:
+        return None
+
+
 def _ascii(value: str) -> str:
     return value.encode("ascii", errors="ignore").decode("ascii").strip()
 

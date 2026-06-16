@@ -29,6 +29,16 @@ from .core.ontology import ActionLog, Db, Frame, ObservationSession, WeatherReco
 from .core.preview import stretch_to_png
 from .drivers import REGISTRY, ConnectionManager
 from .drivers.sim import TwilightSim
+from .analysis.api import build_analysis_router
+from .analysis.calibration import CalibrationLibrary
+from .analysis.forge import Forge
+from .analysis.framedata import FrameData
+from .analysis.sentinel import Sentinel
+from .operation.api import build_operation_router
+from .operation.hooks import sim_autofocus, sim_platesolve
+from .operation.meridian import Meridian
+from .operation.orchestrator import ObservationOrchestrator
+from .satellite import SatelliteProxy
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
 from .watchtower.recovery import ConnectionWatchdog
 from .watchtower.status import StatusSampler
@@ -140,8 +150,28 @@ def create_app() -> FastAPI:
     bus = ActionBus(db, events, lambda: sampler.snapshot)
     # 프레임 미리보기 홀더 (캡처/플랫 직후 스트레치 PNG)
     frame_preview = {"png": b"", "token": 0, "meta": {}}
+    # 위성영상 프록시 — KMA GK-2A 최신 프레임을 고정 로컬 URL로 서빙 (lazy fetch)
+    satellite = SatelliteProxy(cfg)
+    # Meridian — 관측 계획 계층(ObservationPlan CRUD/승인). 실행은 Orchestrator가(Ph7-2~).
+    meridian = Meridian(db, events)
 
     async def publish_preview(img, meta):
+        # Forge 실시간 보정(켜져 있고 LIGHT일 때만) — 보정본을 프리뷰로. 마스터 없으면
+        # forge.process가 원본 그대로 돌려준다. forge는 아래에서 생성(런타임 late-bind).
+        _ftype = (meta.get("type") or "").upper()
+        if forge.enabled and _ftype == "LIGHT":
+            img, finfo = await asyncio.to_thread(forge.process, img, meta)
+            if finfo.get("applied"):
+                meta = {**meta, "forge": finfo}
+                if forge.save_calibrated:
+                    cal_path = await asyncio.to_thread(
+                        forge.save_calibrated_fits, img, meta)
+                    if cal_path:
+                        meta = {**meta, "forge_file": cal_path}
+        elif forge.enabled and _ftype in ("FLAT", "DARK", "BIAS"):
+            # OS가 새 보정 프레임을 캡처함 → 마스터 캐시 무효화해 다음 LIGHT가
+            # 이걸 반영해 재해석하게 한다 (자율형: 찍으면 자동 연결).
+            forge.clear_cache()
         png = await asyncio.to_thread(stretch_to_png, img)
         if not png:
             return
@@ -158,9 +188,31 @@ def create_app() -> FastAPI:
     capture = CaptureService(
         cfg, drivers, bus, db, events, cfg.data_dir / "frames",
         blocked_fn=lambda: ("오토플랫 실행 중 — 카메라 사용 불가"
-                            if runner.running() else None),
+                            if runner.running()
+                            else "관측(Orchestrator) 실행 중 — 카메라 사용 불가"
+                            if orch.running() else None),
         preview_cb=publish_preview)
     sampler.capture_status = capture.status_dict
+    # Orchestrator — 승인된 ObservationPlan을 표준 과학 시퀀스로 실행(Ph7). 안전 게이트는
+    # State Store의 safety 스냅샷을 소비하고, plate-solve/autofocus는 SIM 후크를 주입한다.
+    # (real 모드용 실제 솔버/AF로 교체 전까지 SIM 후크는 즉시성공 — PLAN 결정 로그 참조.)
+    orch = ObservationOrchestrator(
+        cfg, drivers, bus, db, events, meridian, cfg.data_dir / "frames",
+        preview_cb=publish_preview,
+        safety_fn=lambda: sampler.snapshot.get("safety"),
+        platesolve_fn=sim_platesolve, autofocus_fn=sim_autofocus)
+    sampler.orchestrator_status = orch.status_dict
+    # Sentinel — 프레임 품질 평가(Ph8, 로드맵 §10.4). 적재된 QualityMetric/Frame 지표로 판정.
+    sentinel = Sentinel(cfg, db)
+    # FrameData — 이미지/픽셀 뷰어 백엔드(저장 FITS→히스토그램/라인프로파일/통계 JSON).
+    framedata = FrameData(db)
+    # Calibration Library — bias/dark/flat 마스터 등록·매칭(Ph8, 로드맵 §10.5).
+    calibration = CalibrationLibrary(db)
+    # Forge — 실시간 단일 프레임 보정(퀵룩). 캡처된 LIGHT에 마스터 즉시 적용(numpy, 경량).
+    # 무거운 정렬·적분 스택은 AstralImage 서브프로세스(온디맨드)로 별도. 토글은 config/API.
+    forge = Forge(cfg, db, calibration, frames_dir=cfg.data_dir / "frames",
+                  events=events)
+    sampler.forge_status = forge.status_dict
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
     def conn_preconditions() -> list[tuple[str, bool, str]]:
@@ -169,6 +221,8 @@ def create_app() -> FastAPI:
              "오토플랫 실행 중에는 연결 변경 불가"),
             ("capture_idle", not capture.active(),
              "캡처 실행 중에는 연결 변경 불가"),
+            ("orchestrator_idle", not orch.running(),
+             "관측 실행 중에는 연결 변경 불가"),
         ]
 
     @asynccontextmanager
@@ -209,6 +263,22 @@ def create_app() -> FastAPI:
     async def preview_meta():
         return {"token": frame_preview["token"], "meta": frame_preview["meta"]}
 
+    # ---------- 위성영상 (KMA GK-2A 프록시) ----------
+
+    @app.get("/api/satellite/latest.png", include_in_schema=False)
+    async def satellite_latest():
+        """천리안2A 최신 프레임 (고정 URL). 패널은 이 URL만 주기적으로 새로고침."""
+        png, stamp = await satellite.get()
+        if not png:
+            raise HTTPException(503, "위성 영상을 가져오지 못했습니다 (KMA 응답 없음/비활성)")
+        return Response(png, media_type=satellite.media_type,
+                        headers={"Cache-Control": "no-store", "X-Sat-Frame": stamp})
+
+    @app.get("/api/satellite/meta")
+    async def satellite_meta():
+        """현재 캐시된 프레임 시각·신선도 (패널 메타 표시용)."""
+        return satellite.meta()
+
     # ---------- 조회 ----------
 
     @app.get("/api/status")
@@ -243,6 +313,8 @@ def create_app() -> FastAPI:
         await runner.start(params, extra_preconditions=[
             ("capture_idle", not capture.active(),
              "수동 캡처 실행 중 — 정지 후 시작"),
+            ("orchestrator_idle", not orch.running(),
+             "관측(Orchestrator) 실행 중 — 정지 후 시작"),
         ])
         return {"started": True}
 
@@ -338,7 +410,12 @@ def create_app() -> FastAPI:
     @app.post("/api/actions/filter")
     async def filter_set(req: FilterReq):
         fw = drivers["filterwheel"]
-        names = (await asyncio.to_thread(fw.status)).names
+        status = await asyncio.to_thread(fw.status)
+        if not status.connected:
+            raise HTTPException(409, status.detail or "필터휠이 연결되지 않았습니다")
+        if status.moving:
+            raise HTTPException(409, "필터휠이 초기화/이동 중입니다")
+        names = status.names
         if not 0 <= req.position < len(names):
             raise HTTPException(400, f"필터 위치 0~{len(names) - 1} 범위")
         await bus.run("filter_set", actor="operator",
@@ -514,7 +591,7 @@ def create_app() -> FastAPI:
         _device_or_404(req.device)
         await bus.run("device_connect", actor="operator",
                       params={"device": req.device},
-                      func=lambda: conn.connect(req.device),
+                      func=lambda: conn.connect(req.device, propagate=True),
                       preconditions=conn_preconditions())
         return conn.describe()
 
@@ -532,7 +609,7 @@ def create_app() -> FastAPI:
         _device_or_404(req.device)
         await bus.run("device_reconnect", actor="operator",
                       params={"device": req.device},
-                      func=lambda: conn.reconnect(req.device),
+                      func=lambda: conn.reconnect(req.device, propagate=True),
                       preconditions=conn_preconditions())
         return conn.describe()
 
@@ -558,5 +635,11 @@ def create_app() -> FastAPI:
             pass
         finally:
             events.unregister(ws)
+
+    # Operation 계층 라우트 (/api/meridian/* 계획, /api/orchestrator/* 실행 제어).
+    app.include_router(build_operation_router(meridian, orch))
+    # Analysis 계층 라우트 (/api/sentinel/* 품질, /api/analysis/frames/* 픽셀,
+    # /api/calibration/* 마스터, /api/forge/* 실시간 보정 토글).
+    app.include_router(build_analysis_router(sentinel, framedata, calibration, forge))
 
     return app

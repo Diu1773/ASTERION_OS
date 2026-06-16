@@ -166,6 +166,24 @@ class Feedback(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
 
 
+class CalibrationProduct(Base):
+    """보정 마스터 프레임 (bias/dark/flat). 전처리(Forge)가 프레임에 적용할 보정을
+    고를 때 kind+filter+temp+exposure+binning으로 매칭한다 (로드맵 §10.5)."""
+    __tablename__ = "calibration_product"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))  # bias / dark / flat
+    filter_name: Mapped[str] = mapped_column(String(16), default="")  # flat용
+    temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)  # dark용
+    exposure_s: Mapped[float | None] = mapped_column(Float, nullable=True)     # dark용
+    gain: Mapped[float | None] = mapped_column(Float, nullable=True)
+    binning: Mapped[int] = mapped_column(Integer, default=1)
+    n_frames: Mapped[int] = mapped_column(Integer, default=0)   # 스택 장수
+    file_path: Mapped[str] = mapped_column(Text, default="")
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+
 def row_to_dict(obj: Any) -> dict[str, Any]:
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
@@ -198,3 +216,14 @@ class Db:
         with self._lock, self.Session() as s:
             rows = s.query(model).order_by(model.id.desc()).limit(limit).all()
         return [row_to_dict(r) for r in rows]
+
+    def get(self, model, id_: int) -> dict[str, Any] | None:
+        with self._lock, self.Session() as s:
+            row = s.get(model, id_)
+            return row_to_dict(row) if row else None
+
+    def query(self, fn):
+        """fn(session)을 읽기 트랜잭션으로 실행하고 그 반환값을 돌려준다.
+        커밋하지 않으므로 ORM 객체를 그대로 내보내지 말고 fn 안에서 dict로 변환할 것."""
+        with self._lock, self.Session() as s:
+            return fn(s)

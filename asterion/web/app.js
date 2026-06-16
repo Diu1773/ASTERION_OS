@@ -592,7 +592,7 @@ const PROTO_GS_LAYOUT = {
 // '내용 이상 못 늘어나게' 막아 여백 제거. ar=[w,h]는 viz의 박스 목표비(잠금/스냅 대상).
 // fills: true=viz채움, 'gauge'/'scroll'=부분채움, false=폼. (defH는 라이브 측정 반영)
 const PANEL_DEF = {
-  sky:          { klass: "viz",     fills: true,     ar: [6, 7],  minW: 4, minH: 9,  defW: 6,  defH: 14, maxW: 9 },
+  sky:          { klass: "viz",     fills: true,     ar: [6, 7],  minW: 4, minH: 9,  defW: 6,  defH: 12, maxW: 9 },
   skyflat:      { klass: "mixed",   fills: "gauge",  ar: null,    minW: 6, minH: 9,  defW: 6,  defH: 10, maxW: 8 },
   mount:        { klass: "control", fills: false,    ar: null,    minW: 4, minH: 12, defW: 6,  defH: 13, maxW: 6, maxH: 15 },
   camera:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 10, defW: 6,  defH: 11, maxW: 6, maxH: 13 },
@@ -1045,17 +1045,18 @@ function ensureGridStack(tab) {
   const items = [...el.querySelectorAll(":scope > .muuri-item")];
   items.forEach((it) => {
     const pid = it.dataset.panel;
+    const defKey = it.dataset.mirror || pid;        // 미러면 원본 패널 키로 PANEL_DEF 조회
+    const sp = PANEL_DEF[defKey] || { minW: 3, minH: 2 };
     const pos = PROTO_GS_LAYOUT[pid];
-    const w = pos ? pos.w : (it.classList.contains("w12") ? 12 : it.classList.contains("w8") ? 8
-            : it.classList.contains("w4") ? 4 : 6);
-    const h = pos ? pos.h : (PROTO_GS_H[pid] || 6);
+    const w = pos ? pos.w : (sp.defW || (it.classList.contains("w12") ? 12 : it.classList.contains("w8") ? 8
+            : it.classList.contains("w4") ? 4 : 6));
+    const h = pos ? pos.h : (sp.defH || PROTO_GS_H[pid] || 6);   // 미러: PANEL_DEF.defH (전엔 fallback 6→잘림)
     WIDTHS.forEach((c) => it.classList.remove(c));
     it.classList.remove("muuri-item");
     it.classList.add("grid-stack-item");
     it.setAttribute("gs-id", pid);
     it.setAttribute("gs-w", w);
     it.setAttribute("gs-h", h);
-    const sp = PANEL_DEF[pid] || { minW: 3, minH: 2 };
     it.setAttribute("gs-min-w", sp.minW);
     it.setAttribute("gs-min-h", sp.minH);
     if (sp.maxW) it.setAttribute("gs-max-w", sp.maxW);
@@ -1088,9 +1089,13 @@ function ensureGridStack(tab) {
   // 저장은 드롭/리사이즈 종료 시 1회만 (연속 drag 이벤트엔 저장 금지 → thrashing 방지)
   let st = 0;
   grid.on("change", () => { clearTimeout(st); st = setTimeout(() => saveGSLayout(tab, grid), 200); });
-  grid.on("resizestop dragstop", () => { if (lastStatus) applyStatus(lastStatus); drawAllCharts(); });
+  grid.on("dragstart resizestart", () => document.body.classList.add("gs-dragging"));
+  grid.on("resizestop dragstop", () => {
+    document.body.classList.remove("gs-dragging");
+    if (lastStatus) applyStatus(lastStatus); drawAllCharts();
+  });
   grid.on("resize", () => { if (lastStatus) applyStatus(lastStatus); });
-  grid.on("resize resizestop", (ev, el) => aspectSnap(grid, el));   // viz 패널 비율 유지
+  grid.on("resizestop", (ev, el) => aspectSnap(grid, el));   // viz 비율 유지 — 드롭 시에만(드래그 중 호출하면 gridstack 리사이즈 상태가 깨져 멈춤)
   injectProtoBanner(tab);
   relayoutAfter(tab);
   return grid;
@@ -1202,6 +1207,7 @@ function panelRegistry() {
     if (!key || key.startsWith("mirror:") || pane === "control") return;
     PANEL_REGISTRY[key] = {
       title: el.querySelector(".card-title")?.textContent?.trim() || key,
+      tag: el.querySelector(".card-tag:not(.conn)")?.textContent?.trim() || "",   // 네이티브 태그(ALL-SKY 등)
       homeTab: pane,
     };
   });
@@ -1211,6 +1217,7 @@ function panelRegistry() {
 function makeMirrorTile(key) {
   const reg = panelRegistry()[key];
   const title = reg ? reg.title : key;
+  const tag = (reg && reg.tag) || "미러";   // 네이티브 태그를 그대로 써서 헤더가 원본과 동일해 보이게
   const el = document.createElement("div");
   el.className = "muuri-item w6 panel-mirror";
   el.dataset.panel = `mirror:${key}`;
@@ -1219,7 +1226,7 @@ function makeMirrorTile(key) {
     `<div class="muuri-item-content card">` +
       `<div class="card-head">` +
         `<span class="card-title">${escapeHtml(title)}</span>` +
-        `<span class="card-tag">미러</span>` +
+        `<span class="card-tag">${escapeHtml(tag)}</span>` +
       `</div>` +
       `<div class="mirror-body">` +
         `<iframe class="mirror-frame" src="/?panel=${encodeURIComponent(key)}" ` +
@@ -1272,25 +1279,9 @@ function gsifyMirror(el) {
   if (c) { c.classList.remove("muuri-item-content"); c.classList.add("grid-stack-item-content"); }
 }
 
-// 미러(iframe)가 보고하는 콘텐츠 높이에 맞춰 Gridstack 위젯 높이를 자동 조정 → 잘림 방지.
-window.addEventListener("message", (e) => {
-  if (e.origin !== location.origin) return;
-  const ph = e.data && e.data.__asterionPanelHeight;
-  if (!ph) return;
-  document.querySelectorAll(".panel-mirror iframe").forEach((f) => {
-    if (f.contentWindow !== e.source) return;
-    const el = f.closest(".grid-stack-item");
-    const pane = el && el.closest(".tab-pane");
-    const gs = pane && gstacks[pane.dataset.pane];
-    if (gs && el.gridstackNode) {
-      const rows = Math.max(3, Math.ceil((ph + 34) / 45));   // +미러헤더, /(cellHeight+margin)
-      // rAF 지연 — 레이아웃 도중 update 시 렌더 desync(노드만 바뀌고 높이 안따라옴) 방지
-      if (rows !== el.gridstackNode.h) requestAnimationFrame(() => {
-        if (el.gridstackNode && rows !== el.gridstackNode.h) gs.update(el, { h: rows });
-      });
-    }
-  });
-});
+// (미러 자동높이 제거됨) — iframe ResizeObserver→postMessage→gs.update 가 viz-fill과 물려
+// 피드백 루프(패널이 혼자 커짐)를 만들어 폐기. 미러 크기는 gsifyMirror의 PANEL_DEF.defH로 고정,
+// 돔/게이지는 viz-fill로 그 고정 박스를 채운다 → 루프 없이 안정.
 
 // Gridstack 미러 타일에 ✕(제거) 버튼.
 function wireGSMirrorRemove(el, tab) {
@@ -1341,18 +1332,40 @@ function addMirror(tab, key) {
 function openPanelPalette(tab, anchor) {
   document.querySelector(".panel-palette")?.remove();
   const have = new Set(mirrorList());
-  const items = Object.entries(panelRegistry()).filter(([k]) => !have.has(k));
+  // 탭별로 그룹화 — 탭 헤더 아래 그 탭의 패널들
+  const TAB_LABEL = { control: "관제", devices: "장비", env: "기상", plan: "계획", analysis: "분석", system: "시스템" };
+  const byTab = {};
+  Object.entries(panelRegistry()).forEach(([k, v]) => {
+    if (have.has(k)) return;
+    (byTab[v.homeTab] = byTab[v.homeTab] || []).push([k, v]);
+  });
   const menu = document.createElement("div");
   menu.className = "panel-palette";
-  menu.innerHTML = items.length
-    ? items.map(([k, v]) =>
-        `<button class="pp-item" data-key="${k}"><span class="pp-t">${escapeHtml(v.title)}</span>` +
-        `<span class="pp-sub">${v.homeTab}</span></button>`).join("")
-    : `<div class="pp-empty">추가할 패널이 없습니다</div>`;
+  let html = "";
+  TABS.forEach((t) => {
+    const list = byTab[t];
+    if (!list || !list.length) return;
+    html += `<button class="pp-group" data-grp="${t}"><span class="pp-chev">▸</span>` +
+      `<span class="pp-glabel">${TAB_LABEL[t] || t}</span><span class="pp-count">${list.length}</span></button>`;
+    html += `<div class="pp-items" data-grp="${t}" hidden>` +
+      list.map(([k, v]) => `<button class="pp-item" data-key="${k}">${escapeHtml(v.title)}</button>`).join("") +
+      `</div>`;
+  });
+  menu.innerHTML = html || `<div class="pp-empty">추가할 패널이 없습니다</div>`;
   document.body.appendChild(menu);
+  // 위치: ＋패널 버튼 아래, 화면 밖으로 안 나가게 (좌우)
   const r = anchor.getBoundingClientRect();
   menu.style.top = `${r.bottom + 4}px`;
-  menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
+  menu.style.left = `${Math.max(6, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  // 탭 그룹 접기/펴기 (기본 접힘 → 원하는 탭만 펴서 본다)
+  menu.querySelectorAll(".pp-group").forEach((g) => {
+    g.onclick = () => {
+      const box = menu.querySelector(`.pp-items[data-grp="${g.dataset.grp}"]`);
+      const opening = box.hidden;
+      box.hidden = !opening;
+      g.querySelector(".pp-chev").textContent = opening ? "▾" : "▸";
+    };
+  });
   menu.querySelectorAll(".pp-item").forEach((b) =>
     (b.onclick = () => { addMirror(tab, b.dataset.key); menu.remove(); }));
   setTimeout(() => {

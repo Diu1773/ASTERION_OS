@@ -684,6 +684,9 @@ body.panel-solo.mirror-embed .solo-panel-item .card {
   border-radius: 0; padding: 4px 8px;
 }
 body.panel-solo.mirror-embed .solo-panel-item .card > .card-head { display: none; }
+/* (미러 Sky viz-fill 제거 — iframe 안 높이 불안정으로 폭주) → 자연 크기 + 돔 max-width만 캡해
+   devices 탭(viz-fill ~360px)과 비슷하게. viz-fill 없이 max-width만이라 루프 없이 안정. */
+body.mirror-embed [data-panel="sky"] #sky-canvas { max-width: 360px; }
 body.panel-solo .card-head { cursor: default; }
 .panel-solo-missing { padding: 20px; color: var(--text); font-family: var(--mono); }
 
@@ -697,21 +700,34 @@ body.panel-solo .card-head { cursor: default; }
 .grid-stack .panel-mirror .card-head { padding: 6px 12px 7px; }   /* 카드 패딩 0이라 헤더가 자체 여백 */
 .grid-stack .panel-mirror .mirror-body { flex: 1; min-height: 0; }
 .grid-stack .panel-mirror .mirror-frame { height: 100%; }
+/* 드래그/리사이즈 중엔 iframe이 포인터를 먹지 않게 (안 그러면 커서가 미러 위로 가는 순간 드래그 끊김) */
+body.gs-dragging .mirror-frame { pointer-events: none; }
 .pt-mirror-x { color: var(--err); font-weight: 700; }
 .gt-addpanel { margin-left: 6px; }
 .panel-palette {
-  position: fixed; z-index: 1200; min-width: 184px;
-  background: var(--panel-2); border: 1px solid var(--edge);
+  position: fixed; z-index: 9999; min-width: 204px; max-height: 70vh; overflow-y: auto;
+  background: var(--panel-solid, #12161e); border: 1px solid var(--edge-strong, rgba(255,255,255,.13));
   border-radius: var(--radius-sm); padding: 5px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
-  display: flex; flex-direction: column; gap: 2px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .6);
+  display: flex; flex-direction: column; gap: 1px;
 }
+.pp-group {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--text); font-size: 12px; font-weight: 500;
+  padding: 7px 9px; border-radius: 6px;
+}
+.pp-group:hover { background: rgba(255, 255, 255, .05); }
+.pp-chev { color: var(--dim); font-size: 9px; width: 9px; flex: none; }
+.pp-glabel { flex: 1; }
+.pp-count { color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+.pp-items { display: flex; flex-direction: column; gap: 1px; }
+.pp-items[hidden] { display: none; }
 .pp-item {
-  display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  background: none; border: 0; color: var(--text); cursor: pointer;
-  padding: 7px 9px; border-radius: 6px; font-size: 12px; text-align: left;
+  background: none; border: 0; color: var(--text-2, #cdd3dc); cursor: pointer;
+  padding: 6px 9px 6px 26px; border-radius: 6px; font-size: 12px; text-align: left;
 }
-.pp-item:hover { background: rgba(255, 255, 255, .07); }
+.pp-item:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
 .pp-sub { color: var(--faint); font-size: 9.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .5px; }
 .pp-empty { color: var(--faint); font-size: 11px; padding: 8px 9px; }
 

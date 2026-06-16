@@ -19,7 +19,7 @@ from . import safety
 from ..config import Config
 from ..core import ephemeris
 from ..core.events import EventHub
-from ..core.ontology import Db, WeatherRecord
+from ..core.ontology import Db, TelemetrySample, WeatherRecord
 from ..drivers import REGISTRY
 from ..drivers.sim import TwilightSim
 
@@ -64,6 +64,11 @@ class StatusSampler:
                                           safety.WEATHER_UNSAFE_AGE_S))
         self._lat = float(cfg.get("site.latitude", 36.6))
         self._lon = float(cfg.get("site.longitude", 127.5))
+        # 1분 다운샘플 텔레메트리 영속 (채널 → [min, sum, max, count]) + 보존기간.
+        # 1Hz 라이브는 위 self.telemetry 링, 이건 재시작 후에도 남는 추세를 DB에.
+        self._telem_accum: dict[str, list[float]] = {}
+        self._last_telem_flush = 0.0
+        self._telem_retention_days = float(cfg.get("db.telemetry_retention_days", 30.0))
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="status-sampler")
@@ -122,6 +127,8 @@ class StatusSampler:
                              (safety.OPEN_ALLOWED, safety.OBSERVING,
                               safety.READY_CHECK),
                     ))
+                self._accumulate_telemetry(snap.get("telemetry_last"))
+                self._flush_telemetry(now)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -129,6 +136,33 @@ class StatusSampler:
                                 f"샘플러 오류:\n{traceback.format_exc()}",
                                 "error")
             await asyncio.sleep(1.0)
+
+    # ---------- 텔레메트리 다운샘플 영속 ----------
+
+    def _accumulate_telemetry(self, flat: dict | None) -> None:
+        """수치 채널을 1분 버킷에 누적 (채널 → [min, sum, max, count]). bool/None 제외."""
+        for k, v in (flat or {}).items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            a = self._telem_accum.get(k)
+            if a is None:
+                self._telem_accum[k] = [v, v, v, 1]
+            else:
+                a[0] = min(a[0], v); a[1] += v; a[2] = max(a[2], v); a[3] += 1
+
+    def _flush_telemetry(self, now: float) -> None:
+        """60초마다 누적 버킷을 다운샘플 행으로 DB에 적재 + 보존기간 prune."""
+        if now - self._last_telem_flush < 60.0 or not self._telem_accum:
+            return
+        self._last_telem_flush = now
+        samples = [TelemetrySample(channel=k, vmin=mn, vmean=sm / c, vmax=mx,
+                                   n=int(c))
+                   for k, (mn, sm, mx, c) in self._telem_accum.items()]
+        self._telem_accum = {}
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=self._telem_retention_days)
+                  ).isoformat(timespec="milliseconds")
+        self.db.add_telemetry(samples, prune_before_utc=cutoff)
 
     def _clear_recover(self, key: str) -> None:
         """진행 중인 회복 probe와 보류 상태를 폐기 (재연결로 인스턴스가 교체될 때).

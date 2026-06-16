@@ -25,7 +25,10 @@ from .config import Config
 from .core import ephemeris
 from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
-from .core.ontology import ActionLog, Db, Frame, ObservationSession, WeatherRecord
+from .archive import ArchiveRecovery
+from .core.ontology import (
+    ActionLog, Db, Frame, ObservationSession, WeatherRecord, set_current_site,
+)
 from .core.preview import stretch_to_png
 from .drivers import REGISTRY, ConnectionManager
 from .drivers.sim import TwilightSim
@@ -145,6 +148,8 @@ class DeviceConfigReq(BaseModel):
 
 def create_app() -> FastAPI:
     cfg = Config.load(os.environ.get("ASTERION_CONFIG"))
+    # 사이트 식별자 — 모든 INSERT의 site 컬럼 기본값에 반영(멀티사이트 프리베이크). DB 쓰기 전에.
+    set_current_site(str(cfg.get("site.name", "default")))
     lat = float(cfg.get("site.latitude", 36.6))
     lon = float(cfg.get("site.longitude", 127.5))
 
@@ -161,6 +166,7 @@ def create_app() -> FastAPI:
     conn = ConnectionManager(cfg, twilight, sun_alt_now, lst_now, events)
     drivers = conn.drivers
     db = Db(cfg.data_dir / "asterion.db")
+    archive = ArchiveRecovery(db, cfg.data_dir / "frames")   # 파일↔DB 정합성(§9.3)
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
     # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
     watchdog = ConnectionWatchdog(cfg, conn, sampler, events)
@@ -560,6 +566,13 @@ def create_app() -> FastAPI:
         await bus.run("dome_stop", actor="operator", params={},
                       func=lambda: asyncio.to_thread(dome.stop))
         return {"ok": True}
+
+    # ---------- 아카이브 정합성 (§9.3) ----------
+
+    @app.get("/api/archive/scan")
+    async def archive_scan(deep: bool = False):
+        """파일↔DB 정합성 스캔 — 누락/미등록/고아 + deep=true면 sha256 무결성(느림)."""
+        return await asyncio.to_thread(archive.scan, deep=deep)
 
     # ---------- 대상 해석 / 천체력 ----------
 

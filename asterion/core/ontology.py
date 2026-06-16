@@ -14,12 +14,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import (
+    Boolean, Float, ForeignKey, Integer, String, Text, create_engine, event,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+# ── 사이트 차원 프리베이크 (멀티사이트/멀티기기 대비 — 차원만 미리 박고 기능은 미래) ──
+# 한 ASTERION 인스턴스 = 한 사이트. 시작 시 set_current_site()로 식별자를 정하면 이후
+# 모든 물리/이벤트 INSERT의 site 컬럼 기본값에 자동 반영된다(쓰기 호출부 수정 0).
+# 멀티사이트면 코디네이터가 site로 집계, 한 사이트 여러 기기면 "사이트:기기"로 넣는다.
+_CURRENT_SITE = "default"
+
+
+def set_current_site(name: str) -> None:
+    global _CURRENT_SITE
+    _CURRENT_SITE = name or "default"
+
+
+def _current_site() -> str:
+    return _CURRENT_SITE
 
 
 class Base(DeclarativeBase):
@@ -64,6 +82,7 @@ class ObservationSession(Base):
     ended_utc: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="running")
     summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class TelescopeState(Base):
@@ -76,6 +95,7 @@ class TelescopeState(Base):
     az_degs: Mapped[float | None] = mapped_column(Float, nullable=True)
     tracking: Mapped[bool] = mapped_column(Boolean, default=False)
     slewing: Mapped[bool] = mapped_column(Boolean, default=False)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class Frame(Base):
@@ -92,6 +112,8 @@ class Frame(Base):
     mean_adu: Mapped[float | None] = mapped_column(Float, nullable=True)
     std_adu: Mapped[float | None] = mapped_column(Float, nullable=True)
     flag: Mapped[str] = mapped_column(String(32), default="ok")  # ok / out_of_range / aborted
+    checksum: Mapped[str] = mapped_column(String(64), default="")  # Archive Recovery 무결성(sha256)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class WeatherRecord(Base):
@@ -106,6 +128,7 @@ class WeatherRecord(Base):
     cloud_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     rain: Mapped[bool] = mapped_column(Boolean, default=False)
     safe: Mapped[bool] = mapped_column(Boolean, default=False)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class QualityMetric(Base):
@@ -130,6 +153,7 @@ class FocusRun(Base):
     best_fwhm: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     environment_json: Mapped[str] = mapped_column(Text, default="{}")
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class Decision(Base):
@@ -155,6 +179,7 @@ class ActionLog(Base):
     output_state_json: Mapped[str] = mapped_column(Text, default="{}")
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     message: Mapped[str] = mapped_column(Text, default="")
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
 class Feedback(Base):
@@ -182,6 +207,21 @@ class CalibrationProduct(Base):
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
     notes: Mapped[str] = mapped_column(Text, default="")
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
+
+
+class TelemetrySample(Base):
+    """1분 다운샘플 텔레메트리(채널별 min/mean/max). 1Hz 라이브는 인메모리 링이 들고,
+    이건 재시작 후에도 남는 추세 저장(보존기간 prune). InfluxDB는 선택적 외부 싱크."""
+    __tablename__ = "telemetry_sample"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
+    channel: Mapped[str] = mapped_column(String(64))
+    vmin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vmean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vmax: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
 
 
 def row_to_dict(obj: Any) -> dict[str, Any]:
@@ -189,16 +229,53 @@ def row_to_dict(obj: Any) -> dict[str, Any]:
 
 
 class Db:
-    """SQLite 래퍼 — 쓰기 직렬화 락 포함 (이벤트 루프/스레드 혼용 안전)."""
+    """SQLite 래퍼. WAL로 동시 읽기 허용(샘플러가 쓰는 중에도 AI/대시보드가 히스토리
+    읽음) + 쓰기만 직렬화 락. create_all로 새 테이블, _sync_columns로 기존 테이블에
+    누락 컬럼 자동 추가(additive 마이그레이션 — 'create_all은 컬럼 추가 안 함' 한계 보완)."""
 
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(
             f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
         )
+
+        @event.listens_for(self.engine, "connect")
+        def _pragmas(dbapi_conn, _rec):   # 연결마다: WAL(동시읽기)·NORMAL·락 대기
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.close()
+
         Base.metadata.create_all(self.engine)
+        self._sync_columns()
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()   # 쓰기 직렬화 (읽기는 WAL로 락 없이 동시)
+
+    def _sync_columns(self) -> None:
+        """모델에 있는데 기존 테이블에 없는 컬럼을 ALTER TABLE ADD COLUMN으로 채운다.
+        SQLite ADD COLUMN은 비파괴적 — 기존 행은 기본값을 받는다(추가형 변경만 지원)."""
+        def affinity(col) -> str:
+            t = col.type.__class__.__name__.lower()
+            if "int" in t or "bool" in t:
+                return "INTEGER"
+            if "float" in t or "real" in t or "numeric" in t:
+                return "REAL"
+            return "TEXT"
+        with self.engine.begin() as conn:
+            for table in Base.metadata.sorted_tables:
+                have = {r[1] for r in conn.exec_driver_sql(
+                    f'PRAGMA table_info("{table.name}")')}
+                if not have:
+                    continue   # 테이블 자체가 없으면 create_all이 이미 만듦
+                for col in table.columns:
+                    if col.name in have:
+                        continue
+                    aff = affinity(col)
+                    ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {aff}'
+                    if not col.nullable:   # NOT NULL 컬럼은 기존 행용 기본값 필요
+                        ddl += " DEFAULT ''" if aff == "TEXT" else " DEFAULT 0"
+                    conn.exec_driver_sql(ddl)
 
     def add(self, obj: Any) -> Any:
         with self._lock, self.Session() as s:
@@ -207,23 +284,51 @@ class Db:
         return obj
 
     def update(self, fn) -> None:
-        """fn(session)을 트랜잭션으로 실행."""
+        """fn(session)을 쓰기 트랜잭션으로 실행 (직렬화)."""
         with self._lock, self.Session() as s:
             fn(s)
             s.commit()
 
+    # 읽기는 WAL 덕에 락 없이 동시 실행 (쓰기를 막지 않음)
     def recent(self, model, limit: int = 50) -> list[dict[str, Any]]:
-        with self._lock, self.Session() as s:
+        with self.Session() as s:
             rows = s.query(model).order_by(model.id.desc()).limit(limit).all()
         return [row_to_dict(r) for r in rows]
 
     def get(self, model, id_: int) -> dict[str, Any] | None:
-        with self._lock, self.Session() as s:
+        with self.Session() as s:
             row = s.get(model, id_)
             return row_to_dict(row) if row else None
 
     def query(self, fn):
-        """fn(session)을 읽기 트랜잭션으로 실행하고 그 반환값을 돌려준다.
+        """fn(session)을 읽기 트랜잭션으로 실행하고 반환값을 돌려준다(락 없음).
         커밋하지 않으므로 ORM 객체를 그대로 내보내지 말고 fn 안에서 dict로 변환할 것."""
-        with self._lock, self.Session() as s:
+        with self.Session() as s:
             return fn(s)
+
+    # ---------- 텔레메트리 영속 ----------
+
+    def add_telemetry(self, samples: list[Any],
+                      prune_before_utc: str | None = None) -> None:
+        """1분 다운샘플 배치 적재 + 보존기간 지난 행 prune (있으면)."""
+        with self._lock, self.Session() as s:
+            if samples:
+                s.add_all(samples)
+            if prune_before_utc:
+                s.query(TelemetrySample).filter(
+                    TelemetrySample.utc < prune_before_utc).delete(
+                    synchronize_session=False)
+            s.commit()
+
+    def telemetry_persisted(self, channel: str | None = None,
+                            since_utc: str | None = None,
+                            limit: int = 5000) -> list[dict[str, Any]]:
+        def _q(s):
+            q = s.query(TelemetrySample)
+            if channel:
+                q = q.filter(TelemetrySample.channel == channel)
+            if since_utc:
+                q = q.filter(TelemetrySample.utc >= since_utc)
+            rows = q.order_by(TelemetrySample.id.desc()).limit(limit).all()
+            return [row_to_dict(r) for r in rows]
+        return self.query(_q)

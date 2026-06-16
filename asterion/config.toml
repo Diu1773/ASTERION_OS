@@ -56,6 +56,24 @@ camera_progid = ""        # 예: "ASCOM.C3_61000.Camera" (ZWO 등)
 filterwheel_progid = ""
 focuser_progid = ""
 weather_progid = ""       # ASCOM ObservingConditions (Davis/AAG/Boltwood 등)
+dome_progid = ""          # ASCOM Dome (NexDome/MaxDome II/ScopeDome 등)
+
+[drivers.dome]
+# 시리얼 돔(청람 CW/CCW/STOP). real 모드 + drivers.dome="serial"일 때 사용.
+# ⚠️ 명령 프로토콜·회전속도는 실제 컨트롤러로 검증·교정할 것(현재 기본값은 자리표시).
+serial_port = ""           # 예: "COM3" (비우면 미연결)
+baud = 9600
+rot_speed_deg_s = 3.0      # 추측항법용 회전속도 — 한 바퀴 시간 재서 교정
+
+[dome]
+# 돔 슬레이빙 기하 (망원경 광축이 돔 구를 뚫는 방위 계산). 청람 1회 실측값.
+# 오프셋은 돔 중심 대비 가대 교차점의 동/북/상 변위(m). 0이면 가대가 돔 중심.
+radius_m = 2.0
+mount_offset_e_m = 0.0
+mount_offset_n_m = 0.0
+mount_offset_up_m = 0.0
+gem_dec_offset_m = 0.0     # 독일식 적도의 경통 측면 오프셋(근사)
+az_tolerance_deg = 4.0     # 슬릿이 넓어 이 오차 안이면 재이동 안 함
 
 [capture]
 # 수동 캡처 콘솔 기본값
@@ -93,6 +111,9 @@ image_width = 618                # 시뮬 프레임은 축소 생성 (속도, AS
 image_height = 411
 exposure_sleep_cap_s = 2.0       # 시뮬에서 노출 대기 상한 (데모 속도)
 twilight_efold_s = 240.0         # 황혼 시뮬: 하늘 밝기 e-folding 시간
+# 시뮬 돔 흉내: feedback=false면 추측항법(드리프트+추정), shutter_auto=false면 수동 셔터(청람 현 상태)
+dome_feedback = true
+dome_shutter_auto = true
 
 [safety]
 # 기상 텔레메트리 fail-closed (로드맵 §6.5 / 원칙 #5: "데이터 없으면 unsafe").

@@ -16,12 +16,20 @@ import numpy as np
 import math
 
 from .base import (
-    CameraDriver, CameraStatus, FilterStatus, FilterWheelDriver,
+    CameraDriver, CameraStatus, DomeDriver, DomeStatus,
+    FilterStatus, FilterWheelDriver,
     FocuserDriver, FocuserStatus, MountDriver, MountStatus,
     WeatherDriver, WeatherStatus,
 )
 
 _HINT = "ASCOM ProgID 미설정 — asterion/scripts/choose_ascom.py 실행 후 config.toml에 입력"
+
+# ASCOM 드라이버는 오류를 예외가 아니라 자기 '모달 창'에 띄우는 경우가 많다. 그 창이
+# 떠 있는 동안 COM 호출이 묶여 결국 '타임아웃'으로 나타나고, 창 안의 텍스트는 다른
+# 프로세스 소유라 우리가 읽어올 수 없다(예: ZWO EFW "carousel slipping/blocked, O-ring").
+# 그래서 적어도 운영자가 '어디를 봐야 하는지'는 로그가 가리키게 한다.
+_EXT_WINDOW_HINT = ("드라이버가 별도 창에 상세 오류를 띄웠을 수 있습니다 — "
+                    "서버 화면을 확인하고 ZWO ReCalibrate를 실행하세요")
 
 
 def _com_executor() -> ThreadPoolExecutor:
@@ -44,6 +52,9 @@ class AscomMount(MountDriver):
         self._homing = False
         self._motion_sample = None
         self._motion_unchanged_since = None
+        # 팬텀(드라이버는 붙었으나 실물 가대 미응답) 동안 True → 워치독이 무의미한
+        # 재연결 폭주를 안 하게 한다(재연결해도 또 팬텀). status()가 매번 갱신.
+        self.reconnect_blocked = False
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -106,11 +117,17 @@ class AscomMount(MountDriver):
                 self._motion_sample = sample
                 self._motion_unchanged_since = None
 
-            detail = self._progid
-            if stale:
-                detail += " | 슬루 중 좌표가 5초 이상 갱신되지 않음"
+            # 팬텀 = 드라이버는 Connected=True인데 '슬루 중'이라며 좌표가 5초+ 고정
+            # → 실물 가대가 응답하지 않는 것(전원/링크 없음). 이때는 드라이버가 붙었어도
+            # '연결 안 됨'으로 보고한다: ASCOM의 Connected는 '드라이버 부착'이지
+            # '하드웨어 연결'이 아니다. 운영자 원칙대로 "실물 미연결 = disconnected".
+            # connected=False면 안전(FAULT)·UI(빨강·미연결)·운영이 모두 자동으로 끊김 취급.
+            phantom = connected and stale
+            self.reconnect_blocked = phantom   # 워치독 재연결 폭주 차단(재연결해도 또 팬텀)
+            detail = ("하드웨어 미응답 — 드라이버는 연결됐으나 가대가 응답하지 않음 "
+                      "(가대 전원·연결 확인)") if phantom else ""
             return MountStatus(
-                connected=connected,
+                connected=connected and not phantom,
                 ra_hours=ra, dec_degs=dec,
                 alt_degs=alt, az_degs=az,
                 slewing=slewing, tracking=b("Tracking"),
@@ -273,7 +290,7 @@ class AscomCamera(CameraDriver):
                 pass
             return CameraStatus(connected=bool(d.Connected), ccd_temp_c=temp,
                                 cooler_on=cooler, state=self._state,
-                                detail=self._progid, device_name=self._name)
+                                detail="", device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
@@ -356,7 +373,7 @@ class AscomFilterWheel(FilterWheelDriver):
                     self._fault = (
                         f"EFW 초기화가 {self._init_timeout_s:.0f}초 안에 "
                         "끝나지 않았습니다. 휠 고정 나사/회전판 간섭과 "
-                        "USB 전원을 확인하세요")
+                        f"USB 전원을 확인하세요. {_EXT_WINDOW_HINT}")
                     self.reconnect_blocked = True
                     try:
                         self._dev.Connected = False
@@ -409,7 +426,7 @@ class AscomFilterWheel(FilterWheelDriver):
                 if time.monotonic() >= deadline:
                     self._fault = (
                         f"EFW 이동이 {self._move_timeout_s:.0f}초 안에 "
-                        "끝나지 않았습니다")
+                        f"끝나지 않았습니다. {_EXT_WINDOW_HINT}")
                     self.reconnect_blocked = True
                     try:
                         self._dev.Connected = False
@@ -470,7 +487,7 @@ class AscomFocuser(FocuserDriver):
             return FocuserStatus(connected=bool(d.Connected),
                                  position=int(d.Position),
                                  moving=bool(d.IsMoving), temperature=temp,
-                                 max_position=maxpos, detail=self._progid,
+                                 max_position=maxpos, detail="",
                                  device_name=self._name)
         try:
             return self._call(_do)
@@ -544,12 +561,114 @@ class AscomWeather(WeatherDriver):
                 wind_dir_deg=g("WindDirection"),
                 cloud_score=None if cloud is None else max(0.0, min(1.0, cloud / 100.0)),
                 rain=bool(rain_rate and rain_rate > 0),
-                detail=self._progid, device_name=self._name)
+                detail="", device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
             return WeatherStatus(connected=False, detail=f"ASCOM 오류: {exc}",
                                  device_name=self._name)
+
+    def close(self) -> None:
+        try:
+            if self._dev is not None:
+                self._call(lambda: setattr(self._dev, "Connected", False))
+        finally:
+            self._ex.shutdown(wait=False)
+
+
+# ASCOM IDomeV2 ShutterStatus 열거값
+_SHUTTER = {0: "open", 1: "closed", 2: "opening", 3: "closing", 4: "error"}
+
+
+class AscomDome(DomeDriver):
+    """ASCOM Dome (IDomeV2) — NexDome·MaxDome II·ScopeDome·Beaver 등 표준 돔.
+    엔코더·슬레이빙·셔터 제어는 ASCOM 드라이버가 추상화하므로 ProgID만 바꾸면
+    코드 추가 없이 흡수된다. capability는 드라이버의 CanXxx로 정직 보고.
+    (실하드웨어 검증 전 — 지상국/자동돔 연결 시 확인 필요.)"""
+
+    def __init__(self, progid: str):
+        self._progid = progid
+        self._ex = _com_executor()
+        self._dev = None
+        self._name = ""
+
+    def _call(self, fn):
+        return self._ex.submit(fn).result()
+
+    def connect(self) -> None:
+        if not self._progid:
+            raise RuntimeError(_HINT)
+        def _do():
+            import win32com.client
+            self._dev = win32com.client.Dispatch(self._progid)
+            self._dev.Connected = True
+            try:
+                self._name = str(self._dev.Name)
+            except Exception:
+                self._name = self._progid
+        self._call(_do)
+
+    def status(self) -> DomeStatus:
+        if self._dev is None:
+            return DomeStatus(connected=False,
+                              detail=_HINT if not self._progid else "미연결",
+                              device_name=self._name)
+        def _do():
+            d = self._dev
+            def b(prop):
+                try:
+                    return bool(getattr(d, prop))
+                except Exception:
+                    return False
+            def f(prop):
+                try:
+                    return float(getattr(d, prop))
+                except Exception:
+                    return None
+            can_shutter = b("CanSetShutter")
+            can_az = b("CanSetAzimuth")
+            try:
+                shutter = _SHUTTER.get(int(d.ShutterStatus), "unknown")
+            except Exception:
+                shutter = "unknown"
+            return DomeStatus(
+                connected=bool(d.Connected), shutter=shutter,
+                azimuth=f("Azimuth") if can_az else None,
+                azimuth_estimated=False,
+                moving=b("Slewing"), slaved=b("Slaved"),
+                at_park=b("AtPark"), at_home=b("AtHome"),
+                has_shutter=can_shutter, can_command_shutter=can_shutter,
+                can_rotate=can_az, can_slew_azimuth=can_az,
+                can_slave=b("CanSlave"), detail="", device_name=self._name)
+        try:
+            return self._call(_do)
+        except Exception as exc:
+            return DomeStatus(connected=False, detail=f"ASCOM 오류: {exc}",
+                              device_name=self._name)
+
+    def open_shutter(self) -> None:
+        self._call(lambda: self._dev.OpenShutter())
+
+    def close_shutter(self) -> None:
+        self._call(lambda: self._dev.CloseShutter())
+
+    def slew_to_azimuth(self, az_deg: float) -> None:
+        self._call(lambda: self._dev.SlewToAzimuth(float(az_deg) % 360.0))
+
+    def sync_azimuth(self, az_deg: float) -> None:
+        self._call(lambda: self._dev.SyncToAzimuth(float(az_deg) % 360.0))
+
+    def set_slaved(self, on: bool) -> None:
+        self._call(lambda: setattr(self._dev, "Slaved", bool(on)))
+
+    def park(self) -> None:
+        self._call(lambda: self._dev.Park())
+
+    def find_home(self) -> None:
+        self._call(lambda: self._dev.FindHome())
+
+    def stop(self) -> None:
+        self._call(lambda: self._dev.AbortSlew())
 
     def close(self) -> None:
         try:

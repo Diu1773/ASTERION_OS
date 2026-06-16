@@ -15,7 +15,8 @@ from typing import Callable
 import numpy as np
 
 from .base import (
-    CameraDriver, CameraStatus, FilterStatus, FilterWheelDriver,
+    CameraDriver, CameraStatus, DomeDriver, DomeStatus,
+    FilterStatus, FilterWheelDriver,
     FocuserDriver, FocuserStatus, MountDriver, MountStatus,
     WeatherDriver, WeatherStatus,
 )
@@ -103,7 +104,7 @@ class SimMount(MountDriver):
                 alt_degs=alt, az_degs=az,
                 slewing=slewing and self._slew is not None,
                 tracking=self._tracking, at_park=self._at_park,
-                can_park=True, can_home=True, detail="SIM",
+                can_park=True, can_home=True, detail="",
                 device_name="Sim Telescope",
             )
 
@@ -232,7 +233,7 @@ class SimCamera(CameraDriver):
     def status(self) -> CameraStatus:
         return CameraStatus(connected=self._connected, ccd_temp_c=self._temp,
                             cooler_on=self._cooler, state=self._state,
-                            detail="SIM", device_name="Sim Camera")
+                            detail="", device_name="Sim Camera")
 
     def expose(self, seconds: float, light: bool = True) -> np.ndarray:
         self._state = "exposing"
@@ -288,7 +289,7 @@ class SimFocuser(FocuserDriver):
             return FocuserStatus(
                 connected=self._connected, position=int(round(self._pos)),
                 moving=abs(self._pos - self._target) > 0.5,
-                temperature=8.5, max_position=self._max, detail="SIM",
+                temperature=8.5, max_position=self._max, detail="",
                 device_name="Sim Focuser",
             )
 
@@ -321,6 +322,114 @@ class SimWeather(WeatherDriver):
             connected=self._connected, temp_c=round(self._temp, 1),
             humidity=round(self._hum, 1), dew_point_c=round(dew, 1),
             wind_ms=round(self._wind, 1), wind_dir_deg=round(self._wind_dir),
-            cloud_score=0.1, rain=False, detail="SIM",
+            cloud_score=0.1, rain=False, detail="",
             device_name="Sim Weather",
         )
+
+
+class SimDome(DomeDriver):
+    """시뮬 돔 — 플래그로 다양한 실제 돔을 흉내낸다:
+      feedback=True  → 엔코더급(절대 방위·추정 아님). False → 추측항법(드리프트+추정치).
+      shutter_auto=True → 전동 셔터(SW 개폐). False → 수동 셔터(청람 현 상태: 개폐 불가).
+    회전은 ROT_SPEED로 보간하고, 개루프(feedback=False)면 이동마다 drift 오차를 주입해
+    '남쪽 맞춤→추적→드리프트→재영점(sync)'을 sim에서 재현한다."""
+
+    is_sim = True
+    ROT_SPEED = 4.0      # deg/s (시뮬 회전속도)
+    SHUTTER_S = 2.0      # 개폐 소요(초)
+
+    def __init__(self, feedback: bool = True, shutter_auto: bool = True,
+                 openloop_drift: float = 0.04):
+        self._connected = False
+        self._feedback = bool(feedback)
+        self._shutter_auto = bool(shutter_auto)
+        self._drift = float(openloop_drift)   # 개루프 이동량당 오차 비율
+        self._true_az = 90.0       # 실제 방위
+        self._believed = 90.0      # 추정(개루프)
+        self._slew: tuple | None = None    # (t0, a0_true, a1, a0_bel, dur)
+        self._shutter = "closed"
+        self._sh: tuple | None = None      # (t0, dur, target)
+        self._slaved = False
+        self._lock = threading.Lock()
+
+    def connect(self) -> None:
+        self._connected = True
+
+    def _tick(self) -> None:
+        if self._slew is not None:
+            t0, a0t, a1, a0b, dur = self._slew
+            f = min(1.0, (time.time() - t0) / dur)
+            delta = ((a1 - a0t + 540.0) % 360.0) - 180.0   # 최단경로
+            self._true_az = (a0t + delta * f) % 360.0
+            self._believed = self._true_az if self._feedback \
+                else (a0b + delta * f) % 360.0
+            if f >= 1.0:
+                if not self._feedback:   # 이동 끝 — 실제에 drift 오차 주입
+                    self._true_az = (self._true_az + delta * self._drift) % 360.0
+                self._slew = None
+        if self._sh is not None:
+            t0, dur, target = self._sh
+            if time.time() - t0 >= dur:
+                self._shutter = target
+                self._sh = None
+            else:
+                self._shutter = "opening" if target == "open" else "closing"
+
+    def status(self) -> DomeStatus:
+        with self._lock:
+            self._tick()
+            moving = self._slew is not None
+            az = self._true_az if self._feedback else self._believed
+            return DomeStatus(
+                connected=self._connected, shutter=self._shutter,
+                azimuth=round(az, 2), azimuth_estimated=not self._feedback,
+                target_azimuth=(round(self._slew[2], 2) if self._slew else None),
+                moving=moving, slaved=self._slaved,
+                aligned=(None if not self._feedback else (not moving)),
+                has_shutter=True, can_command_shutter=self._shutter_auto,
+                can_rotate=True, can_slew_azimuth=True, can_slave=True,
+                detail="", device_name="Sim Dome")
+
+    def open_shutter(self) -> None:
+        if not self._shutter_auto:
+            raise NotImplementedError("이 돔은 셔터 수동 — SW로 열 수 없습니다")
+        with self._lock:
+            self._sh = (time.time(), self.SHUTTER_S, "open")
+
+    def close_shutter(self) -> None:
+        if not self._shutter_auto:
+            raise NotImplementedError("이 돔은 셔터 수동 — SW로 닫을 수 없습니다")
+        with self._lock:
+            self._sh = (time.time(), self.SHUTTER_S, "closed")
+
+    def slew_to_azimuth(self, az_deg: float) -> None:
+        with self._lock:
+            az_deg %= 360.0
+            delta = abs(((az_deg - self._true_az + 540.0) % 360.0) - 180.0)
+            self._slew = (time.time(), self._true_az, az_deg, self._believed,
+                          max(0.3, delta / self.ROT_SPEED))
+
+    def rotate(self, direction: str) -> None:
+        d = str(direction).lower()
+        if d == "stop":
+            with self._lock:
+                self._slew = None
+        elif d in ("cw", "ccw"):
+            step = 5.0 if d == "cw" else -5.0
+            self.slew_to_azimuth((self._true_az + step) % 360.0)
+        else:
+            raise ValueError(f"방향은 cw/ccw/stop: {direction}")
+
+    def sync_azimuth(self, az_deg: float) -> None:
+        with self._lock:
+            self._believed = az_deg % 360.0
+            if self._feedback:
+                self._true_az = self._believed
+
+    def set_slaved(self, on: bool) -> None:
+        with self._lock:
+            self._slaved = bool(on)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._slew = None

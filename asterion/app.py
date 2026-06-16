@@ -40,6 +40,7 @@ from .operation.meridian import Meridian
 from .operation.orchestrator import ObservationOrchestrator
 from .satellite import SatelliteProxy
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
+from .watchtower.dome_guard import DomeGuard
 from .watchtower.recovery import ConnectionWatchdog
 from .watchtower.status import StatusSampler
 
@@ -84,6 +85,22 @@ class TwilightReq(BaseModel):
 
 class DevModeReq(BaseModel):
     mode: str  # "sim" | "real"
+
+
+class DomeShutterReq(BaseModel):
+    open: bool
+
+
+class DomeRotateReq(BaseModel):
+    direction: str   # cw | ccw | stop
+
+
+class DomeAzReq(BaseModel):
+    azimuth: float
+
+
+class DomeSlaveReq(BaseModel):
+    on: bool
 
 
 class GotoRaDecReq(BaseModel):
@@ -213,6 +230,18 @@ def create_app() -> FastAPI:
     forge = Forge(cfg, db, calibration, frames_dir=cfg.data_dir / "frames",
                   events=events)
     sampler.forge_status = forge.status_dict
+    # 돔 가드 — 안전 '판정'(safety)과 분리된 '행동'(비상 자동닫힘 + 슬레이빙). 샘플러가
+    # 매 스냅샷마다 호출. 장비 키 비의존 — 돔이 REGISTRY에 있으면 자동 동작.
+    sampler.safety_actuator = DomeGuard(
+        drivers, bus, events,
+        dome_cfg={
+            "dome_radius_m": float(cfg.get("dome.radius_m", 2.0)),
+            "mount_offset_e_m": float(cfg.get("dome.mount_offset_e_m", 0.0)),
+            "mount_offset_n_m": float(cfg.get("dome.mount_offset_n_m", 0.0)),
+            "mount_offset_up_m": float(cfg.get("dome.mount_offset_up_m", 0.0)),
+            "gem_dec_offset_m": float(cfg.get("dome.gem_dec_offset_m", 0.0)),
+        },
+        az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)))
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
     def conn_preconditions() -> list[tuple[str, bool, str]]:
@@ -475,6 +504,62 @@ def create_app() -> FastAPI:
                       params={"delta": int(req.delta), "target": target},
                       func=lambda: asyncio.to_thread(foc.move_to, target))
         return {"ok": True, "target": target}
+
+    # ---------- 돔 ----------
+
+    @app.post("/api/actions/dome/shutter")
+    async def dome_shutter(req: DomeShutterReq):
+        dome = drivers["dome"]
+        st = await asyncio.to_thread(dome.status)
+        if not st.can_command_shutter:
+            raise HTTPException(409, "이 돔은 셔터 수동 — SW로 개폐할 수 없습니다")
+        fn = dome.open_shutter if req.open else dome.close_shutter
+        await bus.run("dome_shutter", actor="operator",
+                      params={"open": req.open},
+                      func=lambda: asyncio.to_thread(fn))
+        return {"ok": True}
+
+    @app.post("/api/actions/dome/rotate")
+    async def dome_rotate(req: DomeRotateReq):
+        d = req.direction.lower()
+        if d not in ("cw", "ccw", "stop"):
+            raise HTTPException(400, "direction은 cw/ccw/stop")
+        dome = drivers["dome"]
+        await bus.run("dome_rotate", actor="operator", params={"direction": d},
+                      func=lambda: asyncio.to_thread(dome.rotate, d))
+        return {"ok": True}
+
+    @app.post("/api/actions/dome/slew")
+    async def dome_slew(req: DomeAzReq):
+        dome = drivers["dome"]
+        az = req.azimuth % 360.0
+        await bus.run("dome_slew", actor="operator", params={"azimuth": round(az, 2)},
+                      func=lambda: asyncio.to_thread(dome.slew_to_azimuth, az))
+        return {"ok": True, "azimuth": az}
+
+    @app.post("/api/actions/dome/sync")
+    async def dome_sync(req: DomeAzReq):
+        """현재 돔 방위를 이 값으로 영점화 (추측항법 기준 — '지금 남쪽=180')."""
+        dome = drivers["dome"]
+        az = req.azimuth % 360.0
+        await bus.run("dome_sync", actor="operator", params={"azimuth": round(az, 2)},
+                      func=lambda: asyncio.to_thread(dome.sync_azimuth, az))
+        return {"ok": True, "azimuth": az}
+
+    @app.post("/api/actions/dome/slave")
+    async def dome_slave(req: DomeSlaveReq):
+        """마운트 자동추종 on/off. 켜면 가드가 기하로 목표방위를 계산해 추종한다."""
+        dome = drivers["dome"]
+        await bus.run("dome_slave", actor="operator", params={"on": req.on},
+                      func=lambda: asyncio.to_thread(dome.set_slaved, req.on))
+        return {"ok": True, "slaved": req.on}
+
+    @app.post("/api/actions/dome/stop")
+    async def dome_stop():
+        dome = drivers["dome"]
+        await bus.run("dome_stop", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(dome.stop))
+        return {"ok": True}
 
     # ---------- 대상 해석 / 천체력 ----------
 

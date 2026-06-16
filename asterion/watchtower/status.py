@@ -46,6 +46,9 @@ class StatusSampler:
         self.capture_status = lambda: {"active": False, "state": "idle"}
         self.orchestrator_status = lambda: {"running": False, "phase": "idle"}
         self.forge_status = lambda: {"enabled": False}
+        # 안전 액추에이터(주입형) — 매 스냅샷마다 호출. 샘플러는 '판정'만 하고
+        # 실제 '행동'(EMERGENCY_CLOSE→돔 닫기/경보, 돔 슬레이빙)은 여기 위임.
+        self.safety_actuator: Any = None
         self.telemetry: deque[tuple[float, dict]] = deque(maxlen=TELEMETRY_MAXLEN)
         self._task: asyncio.Task | None = None
         self._stuck: dict[str, Any] = {}   # key → 응답없어 폴링 보류 중인 드라이버 인스턴스
@@ -100,6 +103,12 @@ class StatusSampler:
                 snap = await self._sample()
                 self.snapshot = snap
                 self.events.status(snap)
+                if self.safety_actuator is not None:
+                    try:
+                        await self.safety_actuator(snap)
+                    except Exception:
+                        self.events.log("status", "안전 액추에이터 오류:\n"
+                                        f"{traceback.format_exc()}", "error")
                 now = time.time()
                 if now - self._last_weather_db >= 30.0:
                     self._last_weather_db = now

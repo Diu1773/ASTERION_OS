@@ -24,10 +24,12 @@ from typing import Any, Callable
 
 from ..config import Config
 from .base import (
-    CameraStatus, FilterStatus, FocuserStatus, MountStatus, WeatherStatus,
+    CameraStatus, DomeStatus, FilterStatus, FocuserStatus, MountStatus,
+    WeatherStatus,
 )
 from .sim import (
-    SimCamera, SimFilterWheel, SimFocuser, SimMount, SimWeather, TwilightSim,
+    SimCamera, SimDome, SimFilterWheel, SimFocuser, SimMount, SimWeather,
+    TwilightSim,
 )
 
 
@@ -135,6 +137,25 @@ def _davis_weather(ctx: DriverContext):
     return DavisWeather(str(ctx.cfg.get("drivers.davis.base_url", "http://127.0.0.1")))
 
 
+def _sim_dome(ctx: DriverContext):
+    return SimDome(
+        feedback=bool(ctx.cfg.get("sim.dome_feedback", True)),
+        shutter_auto=bool(ctx.cfg.get("sim.dome_shutter_auto", True)))
+
+
+def _ascom_dome(ctx: DriverContext):
+    from .ascom import AscomDome
+    return AscomDome(str(ctx.cfg.get("drivers.ascom.dome_progid", "")))
+
+
+def _serial_dome(ctx: DriverContext):
+    from .serial_dome import SerialDome
+    return SerialDome(
+        port=str(ctx.cfg.get("drivers.dome.serial_port", "")),
+        baud=int(ctx.cfg.get("drivers.dome.baud", 9600)),
+        rot_speed_deg_s=float(ctx.cfg.get("drivers.dome.rot_speed_deg_s", 3.0)))
+
+
 # ---------- 레지스트리 (= 장비를 흡수하는 단일 데이터) ----------
 
 @dataclass(frozen=True)
@@ -195,6 +216,14 @@ REGISTRY: dict[str, DeviceSpec] = {
         url_key="drivers.davis.base_url",
         offline_factory=lambda: WeatherStatus(connected=False, detail=_OFFLINE_DETAIL),
         safety_role="weather"),
+    "dome": DeviceSpec(
+        "dome", "돔", "status", _sim_dome,
+        {"ascom": _ascom_dome, "serial": _serial_dome},
+        ascom_type="Dome",
+        progid_key="drivers.ascom.dome_progid",
+        url_key="drivers.dome.serial_port",   # serial 백엔드 포트(COM3 등) — url 필드 재사용
+        offline_factory=lambda: DomeStatus(connected=False, detail=_OFFLINE_DETAIL),
+        safety_role="shutter"),
 }
 
 
@@ -209,6 +238,7 @@ BACKEND_CONFIG: dict[str, str] = {
     "pwi4": "url",
     "davis": "url",
     "zwo": "auto",
+    "serial": "url",   # 시리얼 돔 — 포트(COM3 등)를 url 텍스트 필드로 입력
 }
 
 

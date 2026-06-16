@@ -35,8 +35,12 @@ class MountStatus:
     slewing: bool = False
     tracking: bool = False
     at_park: bool = False
+    at_home: bool = False
     can_park: bool = False      # 드라이버가 파킹 지원 (UI 버튼 노출용)
     can_home: bool = False      # 드라이버가 홈 찾기 지원
+    homing: bool = False
+    stale: bool = False
+    coord_source: str = "device"
     detail: str = ""
     device_name: str = ""
 
@@ -49,8 +53,10 @@ class MountStatus:
             "ra_str": ephemeris.fmt_ra_hours(self.ra_hours),
             "dec_str": ephemeris.fmt_dec_degs(self.dec_degs),
             "slewing": self.slewing, "tracking": self.tracking,
-            "at_park": self.at_park, "can_park": self.can_park,
-            "can_home": self.can_home, "detail": self.detail,
+            "at_park": self.at_park, "at_home": self.at_home,
+            "can_park": self.can_park, "can_home": self.can_home,
+            "homing": self.homing, "stale": self.stale,
+            "coord_source": self.coord_source, "detail": self.detail,
         }
 
     def telemetry(self) -> dict:
@@ -83,12 +89,15 @@ class FilterStatus:
     position: int | None = None
     name: str = ""              # 현재 필터 이름 (장비명 아님)
     names: list[str] = field(default_factory=list)
+    moving: bool = False
+    detail: str = ""
     device_name: str = ""
 
     def snapshot(self) -> dict:
         return {
             "connected": self.connected, "position": self.position,
             "name": self.name, "names": self.names,
+            "moving": self.moving, "detail": self.detail,
             "device_name": self.device_name,
         }
 
@@ -250,6 +259,95 @@ class FocuserDriver(abc.ABC):
     @abc.abstractmethod
     def move_to(self, position: int) -> None:
         """목표 스텝으로 이동 시작 (논블로킹 — status().moving으로 추적)."""
+
+    def close(self) -> None:
+        pass
+
+
+@dataclass
+class DomeStatus:
+    connected: bool = False
+    shutter: str = "unknown"        # open|closed|opening|closing|unknown|error
+    azimuth: float | None = None    # 현재 돔 방위 (피드백 없으면 None 또는 추정치)
+    azimuth_estimated: bool = False  # 추측항법 추정치면 True (엔코더/피드백 없음)
+    target_azimuth: float | None = None
+    moving: bool = False
+    slaved: bool = False
+    aligned: bool | None = None     # 슬릿 정렬? 모르면 None, ROR/클램셸=항상 True
+    at_park: bool = False
+    at_home: bool = False
+    # ── capability (UI·safety·orchestrator가 보고 분기; 방식 불문) ──
+    has_shutter: bool = False           # 셔터(또는 지붕) 존재
+    can_command_shutter: bool = False   # SW로 개폐 가능?  (수동 셔터=False → 안전은 경보로)
+    can_rotate: bool = False            # 회전 모터 있음 (수동 조그 가능)
+    can_slew_azimuth: bool = False      # 절대 방위로 갈 수 있음 (피드백 보유)
+    can_slave: bool = False             # 마운트 자동추종 가능
+    detail: str = ""
+    device_name: str = ""
+
+    def snapshot(self) -> dict:
+        return {
+            "connected": self.connected, "name": self.device_name,
+            "shutter": self.shutter, "azimuth": _round(self.azimuth, 2),
+            "azimuth_estimated": self.azimuth_estimated,
+            "target_azimuth": _round(self.target_azimuth, 2),
+            "moving": self.moving, "slaved": self.slaved, "aligned": self.aligned,
+            "at_park": self.at_park, "at_home": self.at_home,
+            "has_shutter": self.has_shutter,
+            "can_command_shutter": self.can_command_shutter,
+            "can_rotate": self.can_rotate, "can_slew_azimuth": self.can_slew_azimuth,
+            "can_slave": self.can_slave, "detail": self.detail,
+        }
+
+    def telemetry(self) -> dict:
+        return {"dome.azimuth": self.azimuth}
+
+
+class DomeDriver(abc.ABC):
+    """돔/지붕 추상. 인터페이스는 '의도'(열기/닫기/정렬/영점)만 안다 — 엔코더·레이저·
+    CCTV·수동·추측항법 등 '방식'은 어댑터 안에 격리된다. 미지원 동작은
+    NotImplementedError를 던지고, capability 플래그(DomeStatus.can_*)로 광고한다."""
+
+    is_sim = False
+
+    @abc.abstractmethod
+    def connect(self) -> None: ...
+
+    @abc.abstractmethod
+    def status(self) -> DomeStatus: ...
+
+    # 셔터 — 기본 미지원(수동 돔). 전동 돔이 오버라이드. can_command_shutter로 광고.
+    def open_shutter(self) -> None:
+        raise NotImplementedError("이 돔은 셔터를 SW로 열 수 없습니다 (수동)")
+
+    def close_shutter(self) -> None:
+        raise NotImplementedError("이 돔은 셔터를 SW로 닫을 수 없습니다 (수동)")
+
+    # 회전 — 절대 방위(피드백 보유) / 수동·개루프 조그
+    def slew_to_azimuth(self, az_deg: float) -> None:
+        raise NotImplementedError("이 돔은 절대 방위 이동을 지원하지 않습니다")
+
+    def rotate(self, direction: str) -> None:
+        """수동/개루프 조그. direction: 'cw' | 'ccw' | 'stop'."""
+        raise NotImplementedError("이 돔은 회전을 지원하지 않습니다")
+
+    def sync_azimuth(self, az_deg: float) -> None:
+        """현재 방위를 az_deg로 영점화 (추측항법 기준점 — '지금 남쪽=180')."""
+        raise NotImplementedError("이 돔은 방위 영점화를 지원하지 않습니다")
+
+    def set_slaved(self, on: bool) -> None:
+        """드라이버 내부 슬레이빙 on/off (자체 슬레이빙 돔용). 외부 계산형은
+        ASTERION이 slew_to_azimuth로 추종하므로 미지원이어도 된다."""
+        raise NotImplementedError("이 돔은 내부 슬레이빙을 지원하지 않습니다")
+
+    def park(self) -> None:
+        raise NotImplementedError("이 돔은 파킹을 지원하지 않습니다")
+
+    def find_home(self) -> None:
+        raise NotImplementedError("이 돔은 홈 찾기를 지원하지 않습니다")
+
+    def stop(self) -> None:
+        """모든 움직임 즉시 정지 (안전). 기본 no-op — 회전 돔이 오버라이드."""
 
     def close(self) -> None:
         pass

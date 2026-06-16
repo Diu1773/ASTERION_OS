@@ -14,3 +14,9 @@ asterion/data/
 
 # Local config overrides (ProgID/URL saved from the SYSTEM tab) — machine-specific
 asterion/config.local.json
+
+# 위성/기상 API 탐색 중 받아둔 루트 스크래치 (런타임 의존 없음 — 프록시는 라이브 페치)
+/cap.xml
+/sat.json
+/radar.json
+/nmsc_img.html

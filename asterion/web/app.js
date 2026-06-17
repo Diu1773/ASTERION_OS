@@ -158,8 +158,8 @@ let skyFlip = (() => { try { return JSON.parse(localStorage.getItem("asterion.sk
 function saveSkyFlip() { try { localStorage.setItem("asterion.skyflip", JSON.stringify(skyFlip)); } catch (e) { /* noop */ } }
 // Sky 표시 커스텀 — 카탈로그 레이어/한계등급/궤적 토글 (localStorage 영속, 드로어로 편집)
 const SKYCUSTOM_DEF = { messier: true, ngc: true, stars: true, planets: true,
-                        labels: true, starMag: 4.5, dsoMag: 12, grid: true, reticle: true,
-                        track: false, trackH: 3 };
+                        labels: true, constellations: true, starMag: 4.5, dsoMag: 12,
+                        grid: true, reticle: true, track: false, trackH: 3 };
 let skyCustom = (() => {
   try { return Object.assign({}, SKYCUSTOM_DEF, JSON.parse(localStorage.getItem("asterion.skycustom") || "{}")); }
   catch (e) { return Object.assign({}, SKYCUSTOM_DEF); }
@@ -190,6 +190,26 @@ function drawDsoGlyph(ctx, x, y, t, s, col) {
   } else {
     ctx.beginPath(); ctx.arc(x, y, s * 0.8, 0, TAU); ctx.stroke();
   }
+}
+// 별자리선 — 막대그림 선분(카탈로그 마커 아래·격자 위). 양 끝 다 시야 안·지평선 위일 때만.
+function drawConstLines(ctx, proj, fovHalf, lat, lstH) {
+  const C = window.SKY_CONSTLINES; if (!C) return;
+  ctx.strokeStyle = "rgba(116,150,205,.34)"; ctx.lineWidth = 1; ctx.setLineDash([]);
+  const cache = {};
+  const pos = (k) => {
+    if (k in cache) return cache[k];
+    const sc = C.s[k]; if (!sc) return (cache[k] = null);
+    const [alt, az] = radecToAltaz(sc[0], sc[1], lat, lstH);
+    return (cache[k] = { alt, q: proj(alt, az) });
+  };
+  ctx.beginPath();
+  for (const name in C.fig) for (const seg of C.fig[name]) {
+    const pa = pos(seg[0]), pb = pos(seg[1]);
+    if (!pa || !pb || pa.alt < -2 || pb.alt < -2) continue;     // 지평선 아래 끝 → 생략
+    if (pa.q[2] > fovHalf || pb.q[2] > fovHalf) continue;       // 시야 밖
+    ctx.moveTo(pa.q[0], pa.q[1]); ctx.lineTo(pb.q[0], pb.q[1]);
+  }
+  ctx.stroke();
 }
 // 카탈로그 레이어 렌더 — 켜진 그룹만, RA/Dec→Alt/Az(LST·위도) 직접 변환.
 function drawSkyCatalog(ctx, proj, fovHalf, lat, lstH) {
@@ -402,21 +422,29 @@ function drawSkyOn(cv, s) {
     skyPath(pts, al === 0 ? "rgba(150,180,225,.34)" : "rgba(150,180,225,.13)", al === 0 ? 1.4 : 1);
     if (al > 0) {
       const q = proj(al, skyView.cAz);
-      if (q[2] <= fovHalf) {
-        ctx.fillStyle = "rgba(160,188,230,.5)"; ctx.font = "9.5px " + SKYFONT;
+      if (q[2] <= fovHalf) {                              // 외곽선 케이싱으로 가독성 확보
+        ctx.font = "700 10px " + SKYFONT;
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(`${al}°`, q[0], q[1]);
+        ctx.lineWidth = 2.8; ctx.strokeStyle = "rgba(6,9,15,.85)"; ctx.strokeText(`${al}°`, q[0], q[1]);
+        ctx.fillStyle = "rgba(180,202,238,.85)"; ctx.fillText(`${al}°`, q[0], q[1]);
       }
     }
   });
-  // 방위 라벨 N/E/S/W — 지평선에서 투영(조향·반전 따라 위치 이동)
-  ctx.fillStyle = "rgba(196,214,242,.74)"; ctx.font = "700 12px " + SKYFONT;
+  // 방위 라벨 N/E/S/W — 림 안쪽으로 당겨 잘림 방지 + 외곽선 케이싱
+  ctx.font = "700 13px " + SKYFONT;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   [["N", 0], ["E", 90], ["S", 180], ["W", 270]].forEach(([lab, az]) => {
     const q = proj(2, az);
-    if (q[2] <= fovHalf) ctx.fillText(lab, q[0], q[1]);
+    if (q[2] > fovHalf) return;
+    const dx = q[0] - cx, dy = q[1] - cy, d = Math.hypot(dx, dy) || 1;
+    const inset = clamp(d - (R - 14), 0, 14);              // 림에서 14px 이내면 그만큼 안으로
+    const fx = q[0] - dx / d * inset, fy = q[1] - dy / d * inset;
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(6,9,15,.9)"; ctx.strokeText(lab, fx, fy);
+    ctx.fillStyle = "rgba(208,224,250,.95)"; ctx.fillText(lab, fx, fy);
   });
 
+  // 별자리선 (격자 위, 카탈로그 마커 아래)
+  if (skyCustom.constellations) drawConstLines(ctx, proj, fovHalf, lat, lstH);
   // 카탈로그 레이어 (메시에·NGC·별) — 격자 위, 태양/달 아래
   drawSkyCatalog(ctx, proj, fovHalf, lat, lstH);
 
@@ -2722,8 +2750,8 @@ $("btn-setpark").onclick = () => post("/api/actions/mount/setpark");
   const redraw = () => { if (lastStatus) drawSky(lastStatus); };
   // 레이어/기준선 토글 → skyCustom
   [["sc-messier", "messier"], ["sc-ngc", "ngc"], ["sc-stars", "stars"],
-   ["sc-planets", "planets"], ["sc-labels", "labels"], ["sc-grid", "grid"],
-   ["sc-reticle", "reticle"], ["sc-track", "track"]
+   ["sc-constel", "constellations"], ["sc-planets", "planets"], ["sc-labels", "labels"],
+   ["sc-grid", "grid"], ["sc-reticle", "reticle"], ["sc-track", "track"]
   ].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     el.checked = !!skyCustom[key];

@@ -173,3 +173,88 @@ window.SKY_CATALOG = {
     { id: "Albireo",    ra: 19.512, dec: 27.960,  mag: 3.05,  t: "star", name: "알비레오" },
   ],
 };
+
+// ── 별자리선 (주요 별자리 막대그림, J2000) ───────────────────────────────────
+// s: 정점 별 좌표 [ra(시간), dec(도)] (중복 제거, 키로 한 번만)
+// fig: 별자리별 선분 = 별 키 쌍 배열. 프런트가 양 끝을 Alt/Az로 변환해 잇는다.
+window.SKY_CONSTLINES = {
+  s: {
+    // Orion
+    betelgeuse: [5.919, 7.407], bellatrix: [5.418, 6.350], meissa: [5.585, 9.934],
+    alnitak: [5.679, -1.943], alnilam: [5.604, -1.202], mintaka: [5.533, -0.299],
+    saiph: [5.796, -9.670], rigel: [5.242, -8.202],
+    // Ursa Major (북두칠성)
+    dubhe: [11.062, 61.751], merak: [11.031, 56.382], phecda: [11.897, 53.695],
+    megrez: [12.257, 57.033], alioth: [12.900, 55.960], mizar: [13.399, 54.925], alkaid: [13.792, 49.313],
+    // Ursa Minor (작은곰)
+    polaris: [2.530, 89.264], yildun: [17.537, 86.586], epsUMi: [16.766, 82.037],
+    zetUMi: [15.734, 77.794], etaUMi: [16.291, 75.755], kochab: [14.845, 74.156], pherkad: [15.345, 71.834],
+    // Cassiopeia
+    caph: [0.153, 59.150], schedar: [0.675, 56.537], cih: [0.945, 60.717], ruchbah: [1.430, 60.235], segin: [1.907, 63.670],
+    // Cygnus
+    deneb: [20.690, 45.280], sadr: [20.371, 40.257], gienahCyg: [20.770, 33.970], deltaCyg: [19.749, 45.131], albireo: [19.512, 27.960],
+    // Lyra
+    vega: [18.616, 38.784], sheliak: [18.834, 33.363], sulafat: [18.982, 32.690], zetLyr: [18.746, 37.612], delLyr: [18.913, 36.899],
+    // Aquila
+    altair: [19.846, 8.868], tarazed: [19.771, 10.613], alshain: [19.922, 6.407],
+    delAql: [19.425, 3.115], zetAql: [19.090, 13.863], thetaAql: [20.188, -0.821], lambdaAql: [19.099, -4.882],
+    // Leo
+    regulus: [10.139, 11.967], denebola: [11.818, 14.572], algieba: [10.333, 19.842], zosma: [11.235, 20.524],
+    etaLeo: [10.122, 16.763], thetaLeo: [11.237, 15.430], adhafera: [10.278, 23.417], muLeo: [9.880, 26.007], epsLeo: [9.764, 23.774],
+    // Gemini
+    castor: [7.577, 31.888], pollux: [7.755, 28.026], alhena: [6.629, 16.399], wasat: [7.335, 21.982],
+    mebsuta: [6.732, 25.131], mekbuda: [7.068, 20.570], gemEta: [6.248, 22.507], gemXi: [6.755, 12.896],
+    // Taurus
+    aldebaran: [4.599, 16.509], elnath: [5.438, 28.608], zetTau: [5.627, 21.143],
+    gamTau: [4.330, 15.628], delTau: [4.382, 17.542], epsTau: [4.477, 19.180], lamTau: [4.011, 12.490],
+    // Canis Major
+    sirius: [6.752, -16.716], mirzam: [6.378, -17.956], muliphein: [7.063, -15.633],
+    wezen: [7.140, -26.393], adhara: [6.977, -28.972], aludra: [7.402, -29.303],
+    // Canis Minor
+    procyon: [7.655, 5.225], gomeisa: [7.452, 8.289],
+    // Bootes
+    arcturus: [14.261, 19.182], izar: [14.749, 27.074], nekkar: [15.032, 40.390],
+    seginus: [14.534, 38.308], delBoo: [15.258, 33.315], rhoBoo: [14.530, 30.371], muphrid: [13.911, 18.398],
+    // Corona Borealis
+    alphecca: [15.578, 26.715], betCrB: [15.464, 29.106], gamCrB: [15.711, 26.296],
+    thetaCrB: [15.548, 31.359], delCrB: [15.824, 26.068], epsCrB: [15.960, 26.878],
+    // Scorpius
+    antares: [16.490, -26.432], dschubba: [16.005, -22.622], graffias: [16.090, -19.805], piSco: [15.981, -26.114],
+    tauSco: [16.598, -28.216], epsSco: [16.836, -34.293], muSco: [16.865, -38.017], zetSco: [16.910, -42.362],
+    etaSco: [17.203, -43.239], sargas: [17.622, -42.998], kappaSco: [17.708, -39.030], shaula: [17.560, -37.104], lesath: [17.512, -37.296],
+    // Sagittarius (teapot)
+    alnasl: [18.097, -30.424], kausMedia: [18.350, -29.828], kausAustralis: [18.403, -34.385],
+    ascella: [19.044, -29.880], phiSgr: [18.763, -26.991], kausBorealis: [18.466, -25.422], nunki: [18.921, -26.297], tauSgr: [19.115, -27.670],
+    // Pegasus + Andromeda
+    markab: [23.079, 15.205], scheat: [23.063, 28.083], algenib: [0.221, 15.184],
+    alpheratz: [0.140, 29.090], mirach: [1.162, 35.621], almach: [2.065, 42.330],
+    // Auriga
+    capella: [5.278, 45.998], menkalinan: [5.992, 44.947], mahasim: [5.995, 37.213], iotaAur: [4.950, 33.166], almaaz: [5.033, 43.823],
+    // Perseus
+    mirfak: [3.405, 49.861], algol: [3.136, 40.956], gamPer: [3.080, 53.506], delPer: [3.715, 47.788], epsPer: [3.964, 40.010], zetPer: [3.902, 31.884],
+    // Crux (남십자)
+    acrux: [12.443, -63.099], mimosa: [12.795, -59.689], gacrux: [12.519, -57.113], delCru: [12.252, -58.749],
+  },
+  fig: {
+    Orion: [["meissa", "betelgeuse"], ["meissa", "bellatrix"], ["betelgeuse", "bellatrix"], ["betelgeuse", "alnitak"], ["bellatrix", "mintaka"], ["mintaka", "alnilam"], ["alnilam", "alnitak"], ["alnitak", "saiph"], ["saiph", "rigel"], ["rigel", "mintaka"]],
+    UrsaMajor: [["dubhe", "merak"], ["merak", "phecda"], ["phecda", "megrez"], ["megrez", "dubhe"], ["megrez", "alioth"], ["alioth", "mizar"], ["mizar", "alkaid"]],
+    UrsaMinor: [["polaris", "yildun"], ["yildun", "epsUMi"], ["epsUMi", "zetUMi"], ["zetUMi", "kochab"], ["kochab", "pherkad"], ["pherkad", "etaUMi"], ["etaUMi", "zetUMi"]],
+    Cassiopeia: [["caph", "schedar"], ["schedar", "cih"], ["cih", "ruchbah"], ["ruchbah", "segin"]],
+    Cygnus: [["deneb", "sadr"], ["sadr", "albireo"], ["deltaCyg", "sadr"], ["sadr", "gienahCyg"]],
+    Lyra: [["vega", "zetLyr"], ["vega", "sheliak"], ["sheliak", "sulafat"], ["sulafat", "delLyr"], ["delLyr", "zetLyr"]],
+    Aquila: [["tarazed", "altair"], ["altair", "alshain"], ["tarazed", "zetAql"], ["altair", "delAql"], ["delAql", "thetaAql"], ["delAql", "lambdaAql"]],
+    Leo: [["regulus", "etaLeo"], ["etaLeo", "algieba"], ["algieba", "adhafera"], ["adhafera", "muLeo"], ["muLeo", "epsLeo"], ["regulus", "thetaLeo"], ["thetaLeo", "denebola"], ["denebola", "zosma"], ["zosma", "algieba"], ["thetaLeo", "zosma"]],
+    Gemini: [["castor", "pollux"], ["castor", "mebsuta"], ["mebsuta", "gemEta"], ["pollux", "wasat"], ["wasat", "mekbuda"], ["mekbuda", "alhena"], ["wasat", "gemXi"]],
+    Taurus: [["elnath", "epsTau"], ["epsTau", "aldebaran"], ["aldebaran", "zetTau"], ["aldebaran", "gamTau"], ["gamTau", "lamTau"], ["gamTau", "delTau"], ["delTau", "epsTau"]],
+    CanisMajor: [["mirzam", "sirius"], ["sirius", "muliphein"], ["sirius", "wezen"], ["wezen", "adhara"], ["wezen", "aludra"]],
+    CanisMinor: [["procyon", "gomeisa"]],
+    Bootes: [["arcturus", "muphrid"], ["arcturus", "izar"], ["izar", "delBoo"], ["delBoo", "nekkar"], ["nekkar", "seginus"], ["seginus", "rhoBoo"], ["rhoBoo", "arcturus"]],
+    CoronaBorealis: [["thetaCrB", "betCrB"], ["betCrB", "alphecca"], ["alphecca", "gamCrB"], ["gamCrB", "delCrB"], ["delCrB", "epsCrB"]],
+    Scorpius: [["graffias", "dschubba"], ["dschubba", "piSco"], ["dschubba", "antares"], ["antares", "tauSco"], ["tauSco", "epsSco"], ["epsSco", "muSco"], ["muSco", "zetSco"], ["zetSco", "etaSco"], ["etaSco", "sargas"], ["sargas", "kappaSco"], ["kappaSco", "shaula"], ["shaula", "lesath"]],
+    Sagittarius: [["alnasl", "kausMedia"], ["kausMedia", "kausAustralis"], ["kausAustralis", "ascella"], ["ascella", "phiSgr"], ["phiSgr", "kausBorealis"], ["kausBorealis", "kausMedia"], ["phiSgr", "nunki"], ["nunki", "tauSgr"], ["nunki", "ascella"]],
+    Pegasus: [["markab", "scheat"], ["scheat", "alpheratz"], ["alpheratz", "algenib"], ["algenib", "markab"], ["alpheratz", "mirach"], ["mirach", "almach"]],
+    Auriga: [["capella", "menkalinan"], ["menkalinan", "mahasim"], ["mahasim", "elnath"], ["elnath", "iotaAur"], ["iotaAur", "capella"], ["capella", "almaaz"]],
+    Perseus: [["gamPer", "mirfak"], ["mirfak", "delPer"], ["delPer", "epsPer"], ["epsPer", "zetPer"], ["mirfak", "algol"]],
+    Crux: [["acrux", "gacrux"], ["mimosa", "delCru"]],
+  },
+};

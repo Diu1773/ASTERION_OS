@@ -439,6 +439,7 @@ select { color-scheme: dark; }
 .sky-custom .sc-dot.neb { background: #e87a92; }
 .sky-custom .sc-dot.star { background: #eaf0fb; border-radius: 50%; }
 .sky-custom .sc-dot.pl { background: #dccaa0; border-radius: 50%; }
+.sky-custom .sc-dot.cl { background: #7496cd; }
 /* 팝오버 안에서는 스위치를 살짝 작게(행 높이 일치) */
 .sky-custom .switch { width: 38px; height: 21px; }
 .sky-custom .switch .slider::before { width: 15px; height: 15px; }

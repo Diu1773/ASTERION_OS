@@ -64,6 +64,18 @@ function altazToRadec(alt, az, lat, lstH) {
   const ra = (((lstH - H / 15) % 24) + 24) % 24;
   return [ra, dec / D2R];
 }
+function radecToAltaz(raH, dec, lat, lstH) {   // 목표 마커가 하늘과 함께 움직이게
+  let ha = (lstH - raH) * 15;
+  ha = (((ha + 180) % 360) + 360) % 360 - 180;
+  const h = ha * D2R, d = dec * D2R, p = lat * D2R;
+  const sinAlt = Math.sin(d) * Math.sin(p) + Math.cos(d) * Math.cos(p) * Math.cos(h);
+  const alt = Math.asin(clamp(sinAlt, -1, 1));
+  const cosAz = (Math.sin(d) - Math.sin(alt) * Math.sin(p)) /
+                Math.max(1e-9, Math.cos(alt) * Math.cos(p));
+  let az = Math.acos(clamp(cosAz, -1, 1));
+  if (Math.sin(h) > 0) az = TAU - az;
+  return [alt / D2R, az / D2R];
+}
 function fmtRa(h) {
   if (h === null || h === undefined) return "—";
   const t = ((h % 24) + 24) % 24;
@@ -125,11 +137,89 @@ function drawSparkOn(cv, buf, color) {
 
 // ---------- 전천 돔 (클릭-GoTo) ----------
 
-let skyTarget = null;   // {alt, az, ts} — 클릭으로 지정한 목표
+// {alt, az, ra, dec, name, kind, state} — 클릭/선택한 목표.
+// state: proposed(주황·제안) → slewing(초록·이동) → tracking(파랑·추종)
+let skyTarget = null;
 let skyGeom = null;     // {cx, cy, R} — 마지막 그리기 기하 (클릭 역변환용)
+// 조향(steerable) 뷰 — 하늘 자체를 조향: 시야중심(보는 방향 alt/az) + 시야각(fov°) + 롤(rad).
+// 드래그=중심 이동(재투영), 휠=fov, Shift+드래그=롤. 기본=천정 중심·fov 180°(=올스카이).
+// 기본 = 천정 살짝 아래(89°)·남향 — 정확한 천정(특이점)을 피해 기저가 항상 연속이라
+// 줌/조향해도 방위(NSEW)가 뒤집히지 않는다. (89°,180°가 N-위·E-오른쪽으로 나옴.)
+let skyView = { cAlt: 89, cAz: 180, fov: 180, roll: 0 };
+function resetSkyView() {
+  skyView = { cAlt: 89, cAz: 180, fov: 180, roll: 0 };
+  if (lastStatus) drawSky(lastStatus);
+}
+const SKYTARGET_COL = { proposed: "#fb923c", slewing: "#34d399", tracking: "#4cc9f0" };
 // 돔 방위 반전 (SkyX/PWI처럼 E↔W, N↔S 뒤집기). proj·역투영·방위라벨에 반영.
 let skyFlip = (() => { try { return JSON.parse(localStorage.getItem("asterion.skyflip") || "{}") || {}; } catch (e) { return {}; } })();
 function saveSkyFlip() { try { localStorage.setItem("asterion.skyflip", JSON.stringify(skyFlip)); } catch (e) { /* noop */ } }
+
+// Sky Panel 천체 렌더 — 글꼴/행성 스타일/달 위상 글리프
+// 라틴/숫자는 B612 Mono, 한글(달·금성 등)은 Pretendard로 폴백 → 앱 전체와 글꼴 일치
+const SKYFONT = '"B612 Mono", "Pretendard", system-ui, sans-serif';
+const PLANET_STYLE = {
+  venus:   { c: "#f4f0e0", r: 3.2, ko: "금성" },
+  mars:    { c: "#e0764a", r: 3.0, ko: "화성" },
+  jupiter: { c: "#dccaa0", r: 3.7, ko: "목성" },
+  saturn:  { c: "#e8d9a6", r: 3.3, ko: "토성" },
+};
+// 달 위상 글리프 — illum 0(신월)~1(보름), waxing면 밝은 쪽이 오른쪽
+function drawMoonGlyph(ctx, x, y, r, illum, waxing) {
+  illum = clamp(illum == null ? 0.5 : illum, 0, 1);
+  ctx.save();
+  ctx.translate(x, y);
+  if (!waxing) ctx.scale(-1, 1);                 // 이지러짐 = 좌우 반전
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU);
+  ctx.fillStyle = "rgba(118,128,150,.42)"; ctx.fill();           // 어두운 면
+  const ex = r * (1 - 2 * illum);                                // +r(신월)…0(반월)…−r(보름)
+  ctx.beginPath();
+  ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);            // 밝은 림(오른쪽 반원)
+  ctx.ellipse(0, 0, Math.abs(ex), r, 0, Math.PI / 2, -Math.PI / 2, ex > 0);
+  ctx.closePath();
+  ctx.fillStyle = "#e9eef7"; ctx.fill();                         // 밝은 면
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU);
+  ctx.strokeStyle = "rgba(222,230,246,.55)"; ctx.lineWidth = 0.8; ctx.stroke();
+}
+
+// ── 조향 가능한 구면 투영 (방위등거리). 시야중심 벡터 + fov + roll로 sky→화면 ──
+function _v3(alt, az) { const A = alt * D2R, Z = az * D2R, c = Math.cos(A);
+  return [c * Math.cos(Z), c * Math.sin(Z), Math.sin(A)]; }            // (북,동,천정)
+function skyBasis() {                                                   // 시야 직교기저 {f,right,up}
+  const f = _v3(skyView.cAlt, skyView.cAz);
+  let up;
+  if (Math.abs(f[2]) > 0.99999) up = [1, 0, 0];                         // 천정/천저 → 북이 위
+  else { const k = f[2]; const u = [-k * f[0], -k * f[1], 1 - k * k];   // (천정) - (f·천정)f
+         const m = Math.hypot(u[0], u[1], u[2]) || 1e-9; up = [u[0]/m, u[1]/m, u[2]/m]; }
+  const r = [f[1]*up[2]-f[2]*up[1], f[2]*up[0]-f[0]*up[2], f[0]*up[1]-f[1]*up[0]];  // f×up
+  const rm = Math.hypot(r[0], r[1], r[2]) || 1e-9;
+  return { f, right: [r[0]/rm, r[1]/rm, r[2]/rm], up };
+}
+// (alt,az) → [화면x, 화면y, c(중심각거리 rad)]. geom·flip은 인자로.
+function skyProj(cx, cy, R, sgx, sgy, B, alt, az) {
+  const p = _v3(alt, az);
+  const d = p[0]*B.f[0] + p[1]*B.f[1] + p[2]*B.f[2];
+  const c = Math.acos(clamp(d, -1, 1));
+  const x = p[0]*B.right[0] + p[1]*B.right[1] + p[2]*B.right[2];
+  const y = p[0]*B.up[0] + p[1]*B.up[1] + p[2]*B.up[2];
+  const hyp = Math.hypot(x, y) || 1e-9;
+  const sr = (c / ((skyView.fov * 0.5) * D2R)) * R;                     // 방위등거리: fov/2 → R
+  const cr = Math.cos(skyView.roll), srr = Math.sin(skyView.roll);
+  const rx = sr * (x / hyp), ry = sr * (y / hyp);
+  return [cx + sgx * (rx * cr - ry * srr), cy - sgy * (rx * srr + ry * cr), c];
+}
+// '하늘을 잡고 끄는' 느낌 — 시야중심 alt/az를 직접 이동(극점 안전, 천정에서도 안 튐).
+function panByScreen(ddx, ddy) {
+  if (!skyGeom) return;
+  const sgx = skyFlip.ew ? -1 : 1, sgy = skyFlip.ns ? -1 : 1;
+  const ux = ddx * sgx, uy = -ddy * sgy;                                // flip·y반전 해제
+  const cr = Math.cos(-skyView.roll), srr = Math.sin(-skyView.roll);
+  const right = ux * cr - uy * srr, up = ux * srr + uy * cr;            // roll 해제
+  const deg = (skyView.fov * 0.5) / skyGeom.R;                          // px당 각(°)
+  skyView.cAlt = clamp(skyView.cAlt - up * deg, -89, 89);              // 위로 끌면 시선 내려감
+  skyView.cAz = ((skyView.cAz - right * deg) % 360 + 360) % 360;        // 오른쪽으로 끌면 왼쪽 봄
+}
 
 function drawSky(s) {   // 모든 인스턴스(.js-c-sky: 원본 + 관제 탭 복제)에 그린다
   document.querySelectorAll(".js-c-sky").forEach((cv) => drawSkyOn(cv, s));
@@ -148,129 +238,246 @@ function drawSkyOn(cv, s) {
   g.addColorStop(0, mix([12, 18, 33], [96, 150, 214], b));
   g.addColorStop(0.7, mix([9, 13, 26], [60, 100, 165], b));
   g.addColorStop(1, mix([5, 8, 16], [150, 110, 70], b * 0.7));
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fillStyle = g; ctx.fill();
+  // 디스크 기본 = '땅'(지평선 아래) 색. 하늘만 위에 그라디언트로 덮어 구분되게.
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fillStyle = "#0c0a07"; ctx.fill();
 
-  const sx = skyFlip.ew ? -1 : 1, sy = skyFlip.ns ? -1 : 1;   // 방위 반전
-  ctx.lineWidth = 1;
-  [30, 60].forEach((alt) => {
-    const r = (90 - alt) / 90 * R;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU);
-    ctx.strokeStyle = "rgba(150,180,225,.14)"; ctx.stroke();
-    ctx.fillStyle = "rgba(150,180,225,.5)"; ctx.font = "9px monospace";
-    ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.fillText(`${alt}°`, cx + 4, cy - r);                  // 고도선 숫자
-  });
-  ctx.strokeStyle = "rgba(150,180,225,.10)";
-  ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
-  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU);
-  ctx.strokeStyle = "rgba(150,180,225,.4)"; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = "rgba(190,210,240,.65)"; ctx.font = "11px monospace";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(sy < 0 ? "S" : "N", cx, cy - R + 11);   // 반전 반영
-  ctx.fillText(sy < 0 ? "N" : "S", cx, cy + R - 11);
-  ctx.fillText(sx < 0 ? "W" : "E", cx + R - 11, cy);
-  ctx.fillText(sx < 0 ? "E" : "W", cx - R + 11, cy);
+  const sgx = skyFlip.ew ? -1 : 1, sgy = skyFlip.ns ? -1 : 1;   // 방위 반전
+  const B = skyBasis();
+  const fovHalf = (skyView.fov * 0.5) * D2R;
+  const proj = (alt, az) => skyProj(cx, cy, R, sgx, sgy, B, alt, az);
 
-  const proj = (alt, az) => {
-    const r = (90 - clamp(alt, 0, 90)) / 90 * R, a = az * D2R;
-    return [cx + sx * r * Math.sin(a), cy - sy * r * Math.cos(a)];
+  // 시야 원판으로 클립 — 밖은 안 그림(항상 패널을 꽉 채움)
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip();
+
+  // 하늘(지평선 위) 영역만 그라디언트로. 지평선(alt=0) 폐곡선이 천정쪽을 감싸므로
+  // 채우면 하늘만 칠해지고, 지평선 아래는 땅색이 남아 한눈에 구분된다.
+  ctx.beginPath();
+  for (let az = 0; az <= 360; az += 3) {
+    const q = proj(0, az);
+    if (az === 0) ctx.moveTo(q[0], q[1]); else ctx.lineTo(q[0], q[1]);
+  }
+  ctx.closePath(); ctx.fillStyle = g; ctx.fill();
+
+  // 격자(조향 시 곡선) — 폴리라인 투영, 시야 밖 구간은 끊는다
+  const skyPath = (pts, style, lw) => {
+    ctx.strokeStyle = style; ctx.lineWidth = lw; ctx.beginPath();
+    let pen = false;
+    for (const [al, az] of pts) {
+      const q = proj(al, az);
+      if (q[2] > fovHalf * 1.3) { pen = false; continue; }
+      if (!pen) { ctx.moveTo(q[0], q[1]); pen = true; } else ctx.lineTo(q[0], q[1]);
+    }
+    ctx.stroke();
   };
+  for (let az = 0; az < 360; az += 30) {            // 방위선(자오선)
+    const pts = []; for (let al = 0; al <= 88; al += 3) pts.push([al, az]);
+    skyPath(pts, "rgba(150,180,225,.08)", 1);
+  }
+  [0, 30, 60].forEach((al) => {                     // 고도선 (0=지평선)
+    const pts = []; for (let az = 0; az <= 360; az += 3) pts.push([al, az]);
+    skyPath(pts, al === 0 ? "rgba(150,180,225,.34)" : "rgba(150,180,225,.13)", al === 0 ? 1.4 : 1);
+    if (al > 0) {
+      const q = proj(al, skyView.cAz);
+      if (q[2] <= fovHalf) {
+        ctx.fillStyle = "rgba(160,188,230,.5)"; ctx.font = "9.5px " + SKYFONT;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(`${al}°`, q[0], q[1]);
+      }
+    }
+  });
+  // 방위 라벨 N/E/S/W — 지평선에서 투영(조향·반전 따라 위치 이동)
+  ctx.fillStyle = "rgba(196,214,242,.74)"; ctx.font = "700 12px " + SKYFONT;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  [["N", 0], ["E", 90], ["S", 180], ["W", 270]].forEach(([lab, az]) => {
+    const q = proj(2, az);
+    if (q[2] <= fovHalf) ctx.fillText(lab, q[0], q[1]);
+  });
 
   // 태양
-  if (sun.az !== undefined && sun.az !== null) {
-    const below = (sun.alt ?? -1) < 0;
-    const [sx, sy] = proj(below ? 0 : sun.alt, sun.az);
-    if (!below) { ctx.shadowColor = "#ffce6b"; ctx.shadowBlur = 20; }
-    ctx.beginPath(); ctx.arc(sx, sy, below ? 5 : 8, 0, TAU);
-    ctx.fillStyle = below ? "rgba(255,170,90,.4)" : "#ffd884"; ctx.fill();
-    ctx.shadowBlur = 0;
+  if (sun.az != null && sun.alt != null) {
+    const q = proj(sun.alt, sun.az);
+    if (q[2] <= fovHalf) {
+      const below = sun.alt < 0;
+      if (!below) { ctx.shadowColor = "#ffce6b"; ctx.shadowBlur = 20; }
+      ctx.beginPath(); ctx.arc(q[0], q[1], below ? 5 : 8, 0, TAU);
+      ctx.fillStyle = below ? "rgba(255,170,90,.4)" : "#ffd884"; ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   }
+
+  // 달·행성 (백엔드 30초 캐시). 지평선 아래여도 시야 안이면 흐리게 표시.
+  (s.sky_bodies || []).forEach((bd) => {
+    if (bd.az == null || bd.alt == null
+        || Number.isNaN(bd.alt) || Number.isNaN(bd.az)) return;
+    const q = proj(bd.alt, bd.az);
+    if (q[2] > fovHalf) return;                    // 시야 밖
+    const bx = q[0], by = q[1], up = bd.alt > 0;
+    ctx.globalAlpha = up ? 1 : 0.3;
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    if (bd.kind === "moon") {
+      drawMoonGlyph(ctx, bx, by, 7, bd.illum, bd.waxing);
+      ctx.fillStyle = "rgba(223,231,247,.9)"; ctx.font = "9px " + SKYFONT;
+      ctx.fillText("달", bx, by + 9);
+    } else {
+      const st = PLANET_STYLE[bd.name] || { c: "#cdd6e6", r: 3, ko: bd.name };
+      if (up) { ctx.shadowColor = st.c; ctx.shadowBlur = 6; }
+      ctx.beginPath(); ctx.arc(bx, by, st.r, 0, TAU);
+      ctx.fillStyle = st.c; ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(208,217,233,.82)"; ctx.font = "8.5px " + SKYFONT;
+      ctx.fillText(st.ko, bx, by + st.r + 2.5);
+    }
+    ctx.globalAlpha = 1;
+  });
 
   const hasMount = !m.stale && m.alt != null && m.az != null &&
                    !Number.isNaN(m.alt) && !Number.isNaN(m.az);
   const md = hasMount ? { alt: m.alt, az: m.az } : null;  // 라이브 위치(실시간, 보간 없음)
 
-  // 클릭 목표 마커 (주황 다이아) + 망원경→목표 점선
+  // 목표 마커 — 상태별 색: 제안(주황) → 이동(초록) → 추종(파랑). RA/Dec면 하늘 따라 이동.
   if (skyTarget) {
-    const [gx, gy] = proj(skyTarget.alt, skyTarget.az);
+    let tAlt = skyTarget.alt, tAz = skyTarget.az;
+    if (skyTarget.ra != null && skyTarget.dec != null) {
+      const lat = (s.geo && s.geo.lat) != null ? s.geo.lat : 36.6;
+      const lstH = (s.time && s.time.lst_hours) != null ? s.time.lst_hours : 0;
+      [tAlt, tAz] = radecToAltaz(skyTarget.ra, skyTarget.dec, lat, lstH);
+    }
+    const [gx, gy] = proj(tAlt, tAz);
+    const tc = SKYTARGET_COL[skyTarget.state] || SKYTARGET_COL.proposed;
+    const rgb = skyTarget.state === "slewing" ? "52,211,153"
+              : skyTarget.state === "tracking" ? "76,201,240" : "251,146,60";
     if (md) {
       const [tx, ty] = proj(md.alt, md.az);
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(gx, gy);
-      ctx.strokeStyle = "rgba(251,146,60,.6)"; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.strokeStyle = `rgba(${rgb},.55)`; ctx.lineWidth = 1.2; ctx.stroke();
       ctx.setLineDash([]);
     }
     ctx.save();
     ctx.translate(gx, gy); ctx.rotate(Math.PI / 4);
-    ctx.strokeStyle = "#fb923c"; ctx.lineWidth = 1.6;
+    ctx.strokeStyle = tc; ctx.lineWidth = 1.7;
     ctx.strokeRect(-5, -5, 10, 10);
     ctx.restore();
     const pulse = (Date.now() % 1600) / 1600;
     ctx.beginPath(); ctx.arc(gx, gy, 7 + pulse * 9, 0, TAU);
-    ctx.strokeStyle = `rgba(251,146,60,${0.55 * (1 - pulse)})`;
+    ctx.strokeStyle = `rgba(${rgb},${0.55 * (1 - pulse)})`;
     ctx.lineWidth = 1.2; ctx.stroke();
+    if (skyTarget.name) {                          // 대상 이름 라벨
+      ctx.fillStyle = tc; ctx.font = "9.5px " + SKYFONT;
+      ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(skyTarget.name, gx, gy - 11);
+    }
+    skyTarget._alt = tAlt; skyTarget._az = tAz;    // 도달 판정용 현재 위치
   }
 
   // 망원경 포인팅 (청록 십자 / 슬루 중 호박색)
   if (md) {
     const [tx, ty] = proj(md.alt, md.az);
     const col = m.slewing ? "#fbbf24" : "#4cc9f0";
-    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(tx, ty, 7, 0, TAU); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(tx - 12, ty); ctx.lineTo(tx - 3, ty);
-    ctx.moveTo(tx + 3, ty); ctx.lineTo(tx + 12, ty);
-    ctx.moveTo(tx, ty - 12); ctx.lineTo(tx, ty - 3);
-    ctx.moveTo(tx, ty + 3); ctx.lineTo(tx, ty + 12);
+    const soft = m.slewing ? "rgba(251,191,36,.28)" : "rgba(76,201,240,.26)";
+    ctx.beginPath(); ctx.arc(tx, ty, 11, 0, TAU);          // 외곽 희미한 링
+    ctx.strokeStyle = soft; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.6;            // 본 레티클
+    ctx.beginPath(); ctx.arc(tx, ty, 6.5, 0, TAU); ctx.stroke();
+    ctx.beginPath();                                        // 갭 십자
+    ctx.moveTo(tx - 13, ty); ctx.lineTo(tx - 4, ty);
+    ctx.moveTo(tx + 4, ty); ctx.lineTo(tx + 13, ty);
+    ctx.moveTo(tx, ty - 13); ctx.lineTo(tx, ty - 4);
+    ctx.moveTo(tx, ty + 4); ctx.lineTo(tx, ty + 13);
     ctx.stroke();
-    ctx.beginPath(); ctx.arc(tx, ty, 2, 0, TAU); ctx.fillStyle = col; ctx.fill();
+    ctx.beginPath(); ctx.arc(tx, ty, 1.6, 0, TAU); ctx.fillStyle = col; ctx.fill();
+    ctx.fillStyle = col; ctx.font = "9px " + SKYFONT;       // 위치 라벨(alt/az)
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(`${m.alt.toFixed(0)}° / ${m.az.toFixed(0)}°`, tx, ty + 15);
 
-    // 목표 도달 → 마커 자동 해제
-    if (skyTarget && !m.slewing) {
-      const dAlt = Math.abs(m.alt - skyTarget.alt);
-      const dAz = Math.abs(((m.az - skyTarget.az + 540) % 360) - 180) *
-                  Math.cos(m.alt * D2R);
-      if (Math.hypot(dAlt, dAz) < 0.7) skyTarget = null;
+    // 슬루 완료 → 추종(파랑)으로 전환 (마커 유지 — 추적 대상 표시)
+    if (skyTarget && skyTarget.state === "slewing" && !m.slewing) {
+      const ta = skyTarget._alt != null ? skyTarget._alt : skyTarget.alt;
+      const tz = skyTarget._az != null ? skyTarget._az : skyTarget.az;
+      const dAlt = Math.abs(m.alt - ta);
+      const dAz = Math.abs(((m.az - tz + 540) % 360) - 180) * Math.cos(m.alt * D2R);
+      if (Math.hypot(dAlt, dAz) < 0.7) skyTarget.state = "tracking";
     }
   }
+
+  ctx.restore();                                   // 클립 해제
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU);     // 시야 테두리
+  ctx.strokeStyle = "rgba(150,180,225,.4)"; ctx.lineWidth = 1.5; ctx.stroke();
 }
 
 // 클릭 → alt/az 역변환 → GoTo 메뉴
-function skyClickHandler(ev) {
+// 화면(px,py, 원본 캔버스 기준) → 돔 alt/az (뷰포트 줌·팬·회전 역적용). 돔 밖이면 null.
+function skyInv(px, py) {           // 화면 → alt/az (조향 투영 역변환). 시야 밖이면 null.
+  if (!skyGeom) return null;
+  const { cx, cy, R } = skyGeom;
+  const sgx = skyFlip.ew ? -1 : 1, sgy = skyFlip.ns ? -1 : 1;
+  const ux = (px - cx) * sgx, uy = -(py - cy) * sgy;          // flip·y반전 해제
+  const cr = Math.cos(-skyView.roll), srr = Math.sin(-skyView.roll);
+  const x = ux * cr - uy * srr, y = ux * srr + uy * cr;        // roll 해제
+  const sr = Math.hypot(x, y);
+  const c = (sr / R) * ((skyView.fov * 0.5) * D2R);            // 중심 각거리
+  if (c > Math.PI) return null;
+  const nx = x / (sr || 1e-9), ny = y / (sr || 1e-9);
+  const B = skyBasis(), cc = Math.cos(c), ss = Math.sin(c);
+  const p = [B.f[0]*cc + (B.right[0]*nx + B.up[0]*ny)*ss,
+             B.f[1]*cc + (B.right[1]*nx + B.up[1]*ny)*ss,
+             B.f[2]*cc + (B.right[2]*nx + B.up[2]*ny)*ss];
+  return { alt: Math.asin(clamp(p[2], -1, 1)) / D2R,
+           az: ((Math.atan2(p[1], p[0]) / D2R) + 360) % 360 };
+}
+// 클릭 위치에서 가장 가까운 천체(달/행성) — px 임계 내 + 시야 안.
+function skyHitBody(px, py) {
+  if (!skyGeom || !lastStatus) return null;
+  const { cx, cy, R } = skyGeom;
+  const sgx = skyFlip.ew ? -1 : 1, sgy = skyFlip.ns ? -1 : 1;
+  const B = skyBasis(), fovHalf = (skyView.fov * 0.5) * D2R;
+  let best = null, bestD = 15;
+  (lastStatus.sky_bodies || []).forEach((bd) => {
+    if (bd.alt == null || bd.az == null) return;
+    const q = skyProj(cx, cy, R, sgx, sgy, B, bd.alt, bd.az);
+    if (q[2] > fovHalf) return;
+    const d = Math.hypot(q[0] - px, q[1] - py);
+    if (d < bestD) { bestD = d; best = bd; }
+  });
+  return best;
+}
+// 좌클릭 선택 — 객체 우선, 없으면 빈 하늘. 제안(주황) 마커 + GoTo 메뉴.
+function skySelectAt(px, py, clientX, clientY) {
   if (!skyGeom || !lastStatus) return;
-  const cv = $("sky-canvas");
-  const rect = cv.getBoundingClientRect();
-  const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
-  const sx = skyFlip.ew ? -1 : 1, sy = skyFlip.ns ? -1 : 1;   // 반전 역적용
-  const dx = px - skyGeom.cx, dy = py - skyGeom.cy;
-  const r = Math.hypot(dx, dy);
-  if (r > skyGeom.R) { hideSkyMenu(); return; }
-  const alt = 90 - (r / skyGeom.R) * 90;
-  const az = ((Math.atan2(sx * dx, -sy * dy) / D2R) + 360) % 360;
-  const lat = lastStatus.geo?.lat ?? 36.6;
-  const lstH = lastStatus.time?.lst_hours ?? 0;
+  const lat = (lastStatus.geo && lastStatus.geo.lat) != null ? lastStatus.geo.lat : 36.6;
+  const lstH = (lastStatus.time && lastStatus.time.lst_hours) != null ? lastStatus.time.lst_hours : 0;
+  let name = null, kind = null, alt, az;
+  const hit = skyHitBody(px, py);
+  if (hit) {
+    alt = hit.alt; az = hit.az; kind = hit.kind;
+    name = hit.kind === "moon" ? "달" : ((PLANET_STYLE[hit.name] || {}).ko || hit.name);
+  } else {
+    const aa = skyInv(px, py);
+    if (!aa) { hideSkyMenu(); return; }
+    alt = aa.alt; az = aa.az;
+  }
+  if (alt < 0) { hideSkyMenu(); return; }   // 지평선 아래(땅)는 선택 불가 — 못 가리킴
   const [ra, dec] = altazToRadec(alt, az, lat, lstH);
-
+  skyTarget = { ra, dec, alt, az, _alt: alt, _az: az, name, kind, state: "proposed", ts: Date.now() };
+  kickSky();
   const menu = $("sky-menu");
   menu.innerHTML =
-    `<div class="sm-line">ALT ${alt.toFixed(1)}° · AZ ${az.toFixed(1)}°</div>` +
+    (name ? `<div class="sm-line">${name}</div>` : "") +
+    `<div class="sm-line${name ? " sm-sub" : ""}">ALT ${alt.toFixed(1)}° · AZ ${az.toFixed(1)}°</div>` +
     `<div class="sm-line sm-sub">RA ${fmtRa(ra)} · DEC ${fmtDec(dec)}</div>` +
-    `<div class="ctrl-row">` +
-    `<button class="btn btn-go" id="sm-goto">GoTo</button>` +
+    `<div class="ctrl-row"><button class="btn btn-go" id="sm-goto">GoTo</button>` +
     `<button class="btn" id="sm-close">닫기</button></div>`;
   const wrap = $("sky-wrap").getBoundingClientRect();
-  menu.style.left = clamp(ev.clientX - wrap.left + 8, 0, wrap.width - 180) + "px";
-  menu.style.top = clamp(ev.clientY - wrap.top + 8, 0, wrap.height - 90) + "px";
+  menu.style.left = clamp(clientX - wrap.left + 8, 0, wrap.width - 180) + "px";
+  menu.style.top = clamp(clientY - wrap.top + 8, 0, wrap.height - 96) + "px";
   menu.style.display = "block";
   $("sm-goto").onclick = async () => {
     hideSkyMenu();
-    skyTarget = { alt, az, ts: Date.now() };
+    if (skyTarget) skyTarget.state = "slewing";       // 주황→초록
     kickSky();
-    // RA/DEC로 슬루 (SlewToCoordinatesAsync) — AltAz 슬루 미지원 적도의도 동작.
-    // 엔드포인트(GotoRaDecReq)는 ra/dec를 문자열로 받는다 → 문자열로 보냄.
     try { await post("/api/actions/mount/goto_radec", { ra: ra.toFixed(5), dec: dec.toFixed(4) }); }
-    catch (e) { skyTarget = null; }
+    catch (e) { if (skyTarget) skyTarget.state = "proposed"; }
   };
   $("sm-close").onclick = hideSkyMenu;
 }
@@ -1206,6 +1413,9 @@ function makeMirrorTile(key) {
   card.classList.remove("grid-stack-item-content");
   card.classList.add("muuri-item-content");
   card.querySelectorAll("input, select, button, textarea").forEach((n) => { n.disabled = true; n.tabIndex = -1; });  // 읽기전용
+  // 미러 캔버스(Sky 등)는 읽기전용 — 클릭/줌 핸들러가 원본에만 붙으므로 상호작용 차단
+  // (안 그러면 crosshair 커서로 클릭 가능해 보이지만 아무 반응 없음).
+  card.querySelectorAll("canvas").forEach((c) => { c.style.pointerEvents = "none"; c.style.cursor = "default"; });
   el.appendChild(card);
   return el;
 }
@@ -1382,6 +1592,7 @@ async function refreshDevices() {
     deviceConfig = await (await fetch("/api/system/devices")).json();
     renderConnList();
     applyFocuserNudge();   // 포커서 스텝 프리셋 반영
+    applyCameraSetup();    // 비닝 옵션(caps.max_bin) + 기본값 반영
   } catch (e) { /* noop */ }
 }
 
@@ -1813,9 +2024,11 @@ function applyStatus(s) {
     const mcaps = (((deviceConfig && deviceConfig.devices) || [])
       .find((d) => d.key === "mount") || {}).caps || {};
     const canPri = !!mcaps.can_move_axis_primary, canSec = !!mcaps.can_move_axis_secondary;
+    // 수치(step) 모드는 offset 기반이라 move_axis 능력 없이도 동작 → 연결만 되면 활성.
+    const stepMode = (typeof mountJogMode !== "undefined" && mountJogMode === "step");
     document.querySelectorAll(".jog-pad [data-jog]").forEach((b) => {
       const sec = (b.dataset.jog === "N" || b.dataset.jog === "S");
-      b.disabled = mountBusy || !(sec ? canSec : canPri);
+      b.disabled = mountBusy || (!stepMode && !(sec ? canSec : canPri));
     });
     document.querySelectorAll("#m-rate-seg .seg-btn").forEach((b) => {
       b.disabled = !(canPri || canSec);
@@ -1836,24 +2049,37 @@ function applyStatus(s) {
   $("c-temp").textContent = fmt(c.ccd_temp, 1, " ℃") +
     (c.cooler_on ? " ❄" : "");
   $("c-state").textContent = c.state || "—";
-  // 쿨러 램프(Max ΔT) — 쿨다운/웜업 진행 중일 때만 노출
+  const camCon = !!c.connected;                                  // On=파랑 / Off=빨강(연결 시)
+  $("btn-cooler").classList.toggle("cool-on", camCon && !!c.cooler_on);
+  $("btn-cooler").classList.toggle("cool-off", camCon && !c.cooler_on);
+  // 쿨러 상태 + 파워(%) — 켜졌을 때만. 램프 중=냉각/웜업, 도달=유지. 80%↑ 경고(실관측).
   const cool = s.cooler || {};
-  const rampEl = $("c-cooler-ramp");
-  if (rampEl) {
-    if (cool.ramping) {
-      const cmd = cool.commanded == null ? "—" : Number(cool.commanded).toFixed(1) + "°C";
-      const tgt = cool.mode === "warming" ? "OFF"
-        : (cool.target == null ? "—" : cool.target + "°C");
-      const rate = cool.max_dt_c ? ` · ≤${cool.max_dt_c}°C/min` : "";
-      rampEl.textContent =
-        `❄ ${cool.mode === "warming" ? "웜업" : "냉각"} ${cmd} → ${tgt}${rate}`;
-      rampEl.hidden = false;
-    } else {
-      rampEl.hidden = true;
-    }
+  const cstat = $("cooler-stat");
+  if (cstat) {
+    if (c.cooler_on) {
+      cstat.hidden = false;
+      let label;
+      if (cool.ramping) {
+        const cmd = cool.commanded == null ? "" : ` ${Number(cool.commanded).toFixed(1)}°`;
+        label = cool.mode === "warming" ? `웜업${cmd}` : `냉각 중${cmd}`;
+      } else {
+        const stable = cool.target == null || c.ccd_temp == null
+          || Math.abs(c.ccd_temp - cool.target) <= 0.5;
+        label = stable ? "유지" : "냉각 중";
+      }
+      $("c-cooler-state").textContent = "❄ " + label;
+      const pw = c.cooler_power, pe = $("c-cooler-power"), pb = $("c-power-bar");
+      if (pw == null) { pe.textContent = "파워 —"; pe.className = ""; pb.style.width = "0%"; }
+      else {
+        pe.textContent = `파워 ${pw.toFixed(0)}%`;
+        pe.className = pw >= 80 ? "err" : pw >= 70 ? "warn" : "";
+        pb.style.width = clamp(pw, 0, 100) + "%";
+        pb.style.background = pw >= 80 ? "var(--err)" : pw >= 70 ? "var(--warn)" : "var(--ok)";
+      }
+    } else { cstat.hidden = true; }
   }
   const f = s.filter || {};
-  $("c-filter").textContent = f.moving ? "초기화/이동 중…" : (f.name || "—");
+  $("c-filter").textContent = f.moving ? "이동 중…" : (f.name || "—");
   const filterSignature = JSON.stringify(f.names || []);
   if (filterSignature !== filterOptionsSignature &&
       Array.isArray(f.names) && f.names.length) {
@@ -1861,7 +2087,7 @@ function applyStatus(s) {
       `<option value="${i}">${n}</option>`).join("");
     filterOptionsSignature = filterSignature;
   }
-  $("btn-filter").disabled = !f.connected || !!f.moving;
+  $("sel-filter").disabled = !f.connected || !!f.moving;   // 이동 중 잠금(이동=선택 즉시)
   const cap = s.capture || {};
   const capCount = cap.count ? `/${cap.count}` : "";
   $("cap-state").textContent = cap.active
@@ -2201,8 +2427,14 @@ document.querySelectorAll("#goto-seg .seg-btn").forEach((b) => {
 // E/W=primary), 클라는 N/S/E/W + rate만 보낸다. 안전: pointerup/leave/cancel·창 blur·
 // 탭 종료(pagehide)·■ STOP가 모두 정지로 수렴 + 서버 데드맨(keepalive 끊기면 자동정지).
 let mountJogRate = "normal";
+let mountJogMode = "speed";  // speed(press-hold 속도) | step(이산 수치)
 let mountJogTimer = null;   // 데드맨 keepalive 인터벌
 let mountJogDir = null;     // 현재 유지 중인 방향(N/S/E/W) | null
+function mountStepArcsec() {           // 수치 모드 1회 이동량(arcsec) = 값 × 단위
+  const v = Number(($("m-step-val") || {}).value) || 0;
+  const u = Number(($("m-step-unit") || {}).value) || 1;
+  return Math.max(0.1, v * u);
+}
 function stopMountJog() {
   if (mountJogTimer) { clearInterval(mountJogTimer); mountJogTimer = null; }
   document.querySelectorAll(".jog-pad [data-jog].held").forEach((b) => b.classList.remove("held"));
@@ -2213,7 +2445,12 @@ function applyMountJog() {
     b.addEventListener("pointerdown", (e) => {
       if (b.disabled) return;
       e.preventDefault();
-      stopMountJog();
+      if (mountJogMode === "step") {                   // 수치 모드 = 누를 때마다 이산 이동
+        b.classList.add("held"); setTimeout(() => b.classList.remove("held"), 160);
+        post("/api/actions/mount/jog", { direction: b.dataset.jog, arcsec: mountStepArcsec() });
+        return;
+      }
+      stopMountJog();                                  // 속도 모드 = 유지=연속 슬루(velocity)
       b.classList.add("held");
       mountJogDir = b.dataset.jog;
       post("/api/actions/mount/move_axis", { direction: mountJogDir, rate: mountJogRate });
@@ -2240,6 +2477,18 @@ document.querySelectorAll("#m-rate-seg .seg-btn").forEach((b) => {
       post("/api/actions/mount/move_axis", { direction: mountJogDir, rate: mountJogRate });
   };
 });
+// 조그 모드 토글 — 속도(press-hold velocity) ↔ 수치(이산 스텝)
+document.querySelectorAll("#m-mode-seg .seg-btn").forEach((b) => {
+  b.onclick = () => {
+    stopMountJog();
+    mountJogMode = b.dataset.mode;
+    document.querySelectorAll("#m-mode-seg .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    const step = mountJogMode === "step";
+    const rw = $("m-rate-seg"), sw = $("m-step-wrap");
+    if (rw) rw.hidden = step;      // 속도 모드에서만 rate 세그
+    if (sw) sw.hidden = !step;     // 수치 모드에서만 스텝 입력
+  };
+});
 $("btn-tracking").onclick = () =>
   post("/api/actions/mount/tracking", { on: !(lastStatus?.mount?.tracking) });
 $("btn-stop").onclick = () => { stopMountJog(); skyTarget = null; post("/api/actions/mount/stop"); };
@@ -2252,8 +2501,59 @@ $("btn-home").onclick = () => {
 };
 $("btn-setpark").onclick = () => post("/api/actions/mount/setpark");
 
-// 하늘 돔 클릭
-$("sky-canvas").addEventListener("click", skyClickHandler);
+// 하늘 돔 — 좌클릭=선택, 드래그=팬, Shift/우클릭 드래그=회전, 휠=줌(커서 고정).
+// 클릭/드래그는 이동량(4px)으로 구분 → 드래그 끝에 안 움직였으면 선택으로 처리.
+(() => {
+  const cv = $("sky-canvas");
+  if (!cv) return;
+  let drag = null, drawReq = 0;
+  const requestDraw = () => {        // rAF 합치기 — 빠른 휠/드래그 중복 redraw 방지
+    if (drawReq) return;
+    drawReq = requestAnimationFrame(() => { drawReq = 0; if (lastStatus) drawSky(lastStatus); });
+  };
+  cv.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    drag = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY,
+             lastX: ev.clientX, lastY: ev.clientY,
+             moved: false, mode: (ev.shiftKey || ev.button === 2) ? "rotate" : "pan" };
+    try { cv.setPointerCapture(ev.pointerId); } catch (e) { /* noop */ }
+  });
+  cv.addEventListener("pointermove", (ev) => {
+    if (!drag || drag.id !== ev.pointerId) return;     // 시작한 포인터만(멀티터치 누수 방지)
+    if (Math.hypot(ev.clientX - drag.x0, ev.clientY - drag.y0) > 4) drag.moved = true;
+    if (drag.mode === "rotate" && skyGeom) {           // Shift/우클릭 = 롤
+      const rect = cv.getBoundingClientRect();
+      const a0 = Math.atan2(drag.lastY - rect.top - skyGeom.cy, drag.lastX - rect.left - skyGeom.cx);
+      const a1 = Math.atan2(ev.clientY - rect.top - skyGeom.cy, ev.clientX - rect.left - skyGeom.cx);
+      skyView.roll += (a1 - a0);
+    } else {                                           // 드래그 = 하늘 잡고 끌기(시야중심 이동)
+      const G = 0.5;                                   // 감도(너무 빠르지 않게)
+      panByScreen((ev.clientX - drag.lastX) * G, (ev.clientY - drag.lastY) * G);
+    }
+    drag.lastX = ev.clientX; drag.lastY = ev.clientY;
+    requestDraw();
+  });
+  const endDrag = (ev) => {
+    if (!drag || drag.id !== ev.pointerId) return;
+    const wasClick = !drag.moved; drag = null;
+    try { cv.releasePointerCapture(ev.pointerId); } catch (e) { /* noop */ }
+    if (wasClick) {
+      const rect = cv.getBoundingClientRect();
+      skySelectAt(ev.clientX - rect.left, ev.clientY - rect.top, ev.clientX, ev.clientY);
+    }
+  };
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", (ev) => { if (drag && drag.id === ev.pointerId) drag = null; });
+  window.addEventListener("blur", () => { drag = null; });   // 탭 이탈 → 드래그 상태 정리
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());   // 우클릭 롤용
+  cv.addEventListener("wheel", (ev) => {              // 휠 = 시야각(FOV), 중심 기준.
+    ev.preventDefault();                              // 중심 고정 → 줌인/아웃하면 원래대로 정확히 복귀
+    skyView.fov = clamp(skyView.fov * Math.exp(ev.deltaY * 0.0015), 4, 220);  // 휠↑=줌인(fov↓)
+    requestDraw();
+  }, { passive: false });
+})();
+// 뷰 리셋 (줌·팬·회전 초기화)
+{ const rb = $("btn-sky-reset"); if (rb) rb.onclick = resetSkyView; }
 // 돔 방위 반전 버튼 (E↔W, N↔S)
 [["btn-flip-ew", "ew"], ["btn-flip-ns", "ns"]].forEach(([id, key]) => {
   const b = $(id); if (!b) return;
@@ -2267,18 +2567,19 @@ $("sky-canvas").addEventListener("click", skyClickHandler);
 });
 
 // 카메라 / 캡처
-$("btn-filter").onclick = () => {
-  $("btn-filter").disabled = true;
-  post("/api/actions/filter", {
-    position: Number($("sel-filter").value),
-  }).catch(() => { $("btn-filter").disabled = false; });
-};
+// 필터: 드롭다운 선택 = 즉시 이동 (별도 '이동' 버튼 없음)
+$("sel-filter").onchange = () =>
+  post("/api/actions/filter", { position: Number($("sel-filter").value) });
+// 쿨러 On/Off 토글 — 셋포인트는 안 건드린다(예전: 토글이 OFF→15°로 튀던 버그 분리).
 $("btn-cooler").onclick = () => {
+  const on = !(lastStatus?.camera?.cooler_on);
   const sp = $("c-setpoint").value;
-  post("/api/actions/camera/cooler", {
-    on: !(lastStatus?.camera?.cooler_on),
-    setpoint: sp === "" ? null : Number(sp),
-  });
+  post("/api/actions/camera/cooler", { on, setpoint: (on && sp !== "") ? Number(sp) : null });
+};
+// 온도 설정 — 입력값으로 쿨러 켜고 셋포인트 적용(토글과 분리, 끄지 않음).
+$("btn-cooler-set").onclick = () => {
+  const sp = $("c-setpoint").value;
+  if (sp !== "") post("/api/actions/camera/cooler", { on: true, setpoint: Number(sp) });
 };
 function captureBody(count) {
   return {
@@ -2286,7 +2587,25 @@ function captureBody(count) {
     frame_type: $("cap-type").value,
     count,
     interval_s: Number($("cap-interval").value),
+    binning: Number($("cap-bin").value) || 1,
   };
+}
+// 비닝 셀렉트 — 카메라 caps.max_bin까지만 노출 + setup.camera.default_binning 시드
+function applyCameraSetup() {
+  const sel = $("cap-bin");
+  if (!sel) return;
+  const dev = ((deviceConfig && deviceConfig.devices) || []).find((d) => d.key === "camera") || {};
+  const maxBin = Math.max(1, Number((dev.caps && dev.caps.max_bin) || 4));
+  const prev = Number(sel.value) || 0;   // 사용자가 고르던 값 (유지 우선)
+  sel.innerHTML = Array.from({ length: maxBin },
+    (_, i) => `<option value="${i + 1}">${i + 1}×${i + 1}</option>`).join("");
+  let want = prev;
+  if (!want) {   // 첫 로드 — setup.camera.default_binning 시드 ("2x2"·2 모두 허용)
+    const m = String((dev.setup && dev.setup.default_binning) ?? "").match(/(\d+)/);
+    if (m) want = Number(m[1]);
+  }
+  // max_bin이 줄어도 1×1로 소실되지 않게 클램프
+  if (want) sel.value = String(Math.max(1, Math.min(maxBin, want)));
 }
 $("btn-cap-once").onclick = () =>
   post("/api/actions/camera/capture", captureBody(1));

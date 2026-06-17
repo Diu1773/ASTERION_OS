@@ -139,7 +139,7 @@ body {
 .tab.active::after { transform: scaleX(1); }
 .tab.active span { color: var(--dim); }
 
-.workspace { max-width: 1760px; margin: 0 auto; padding: 16px 18px 28px; }
+.workspace { max-width: 2400px; margin: 0 auto; padding: 16px 18px 28px; }
 /* 하단 고정 로그 독(접힘 38px)이 콘텐츠 끝을 가리지 않게 여백 확보 */
 body { padding-bottom: 38px; }
 .tab-pane { display: none; }
@@ -329,8 +329,22 @@ body.solo .gt-newwin { display: none; }
 .m-rate > span { color: var(--dim); font-size: 11px; }
 .m-rate .seg { padding: 3px; }
 .m-rate .seg-btn { padding: 4px 11px; font-size: 11px; }
+.m-rate { flex-wrap: wrap; }
+.m-step { display: inline-flex; align-items: center; gap: 5px; }
+.m-step input { max-width: 56px; padding: 4px 6px; font-size: 11px; }
+.m-step select { padding: 4px 4px; font-size: 11px; }
+/* .seg/.m-step의 display가 [hidden]을 이겨서 안 숨겨지는 문제 → 강제 */
+#m-rate-seg[hidden], #m-step-wrap[hidden] { display: none !important; }
 /* 쿨러 램프(Max ΔT) 진행 표시 — 냉각/웜업 중에만 */
-.cooler-ramp { margin-top: 5px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+/* 쿨러 상태 + 파워(%) 막대. 실관측은 80% 미만 권장 → 70%↑ warn, 80%↑ err 색 */
+.cooler-stat { margin-top: 6px; }
+.cstat-line { display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--mono); font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+.cstat-line > b { font-variant-numeric: tabular-nums; color: var(--accent); }
+.cstat-line > b.warn { color: var(--warn); }
+.cstat-line > b.err { color: var(--err); }
+.btn.cool-on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }   /* 쿨러 On = 파랑 */
+.btn.cool-off { border-color: var(--err); color: var(--err); background: rgba(239, 68, 68, .10); }     /* 쿨러 Off = 빨강 */
 
 /* ---------------- controls ---------------- */
 .ctrl-row { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
@@ -367,7 +381,7 @@ select { color-scheme: dark; }
 
 /* ---------------- sky dome ---------------- */
 .sky-wrap { display: flex; justify-content: center; margin-bottom: 10px; position: relative; }
-#sky-canvas, .js-c-sky { width: 100%; max-width: 460px; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
+#sky-canvas, .js-c-sky { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
 .sky-flip { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
 .flip-btn {
   background: rgba(12, 15, 22, .7); border: 1px solid var(--edge); color: var(--dim);
@@ -376,6 +390,8 @@ select { color-scheme: dark; }
 }
 .flip-btn:hover { color: var(--text); border-color: var(--edge-strong); }
 .flip-btn.on { color: var(--accent); border-color: rgba(77, 184, 255, .45); background: var(--accent-soft); }
+.sky-hint { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center;
+  font-size: 9px; color: var(--faint); pointer-events: none; font-family: var(--mono); opacity: .7; }
 /* 콤팩트 readout 3-타일 strip (세로 공간 절약) */
 .sky-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 6px; }
 .sky-stat { background: var(--panel-2); border: 1px solid var(--edge); border-radius: var(--radius-sm); padding: 6px 8px; text-align: center; }

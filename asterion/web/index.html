@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=107">
+<link rel="stylesheet" href="/static/style.css?v=113">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -70,9 +70,11 @@
           <canvas id="sky-canvas" class="js-c-sky" title="돔을 클릭하면 그 지점으로 GoTo"></canvas>
           <div class="sky-menu" id="sky-menu"></div>
           <div class="sky-flip">
+            <button id="btn-sky-reset" class="flip-btn" title="뷰 리셋 (줌·팬·회전)">⊙</button>
             <button id="btn-flip-ew" class="flip-btn" title="동-서 반전">E↔W</button>
             <button id="btn-flip-ns" class="flip-btn" title="남-북 반전">N↔S</button>
           </div>
+          <div class="sky-hint" id="sky-hint">휠 줌 · 드래그 팬 · Shift+드래그 회전 · 클릭 선택</div>
         </div>
         <div class="sky-stats">
           <div class="sky-stat"><span>태양 고도</span><b class="accent" id="s-sunalt">—</b></div>
@@ -171,12 +173,22 @@
           <span></span>
         </div>
           <div class="m-rate">
-            <span>조그 속도</span>
+            <span>조그</span>
+            <div class="seg" id="m-mode-seg">
+              <button class="seg-btn active" data-mode="speed">Slew</button>
+              <button class="seg-btn" data-mode="step">Step</button>
+            </div>
             <div class="seg" id="m-rate-seg">
               <button class="seg-btn" data-rate="slow">느림</button>
               <button class="seg-btn active" data-rate="normal">보통</button>
               <button class="seg-btn" data-rate="fast">빠름</button>
             </div>
+            <span class="m-step" id="m-step-wrap" hidden>
+              <input id="m-step-val" type="number" value="10" min="0.1" step="1">
+              <select id="m-step-unit">
+                <option value="1">″</option><option value="60">′</option><option value="3600">°</option>
+              </select>
+            </span>
           </div>
           <div class="ctrl-row">
             <button id="btn-tracking" class="btn">Tracking</button>
@@ -202,20 +214,29 @@
         <!-- control zone -->
         <div class="zone-act">
           <div class="ctrl-row">
-            <select id="sel-filter"></select>
-            <button id="btn-filter" class="btn">필터 이동</button>
+            <select id="sel-filter" title="필터 선택 — 선택 즉시 이동"></select>
           </div>
           <div class="ctrl-row">
-            <button id="btn-cooler" class="btn">쿨러 ON/OFF</button>
-            <input id="c-setpoint" type="number" placeholder="설정 °C" step="1" style="max-width:84px">
+            <button id="btn-cooler" class="btn">쿨러</button>
+            <input id="c-setpoint" type="number" placeholder="°C" step="1" style="max-width:62px">
+            <button id="btn-cooler-set" class="btn btn-sm">설정</button>
           </div>
-          <div class="cooler-ramp" id="c-cooler-ramp" hidden></div>
+          <div class="cooler-stat" id="cooler-stat" hidden>
+            <div class="cstat-line"><span id="c-cooler-state">—</span><b id="c-cooler-power">—</b></div>
+            <div class="f-bar"><div class="f-bar-fill" id="c-power-bar"></div></div>
+          </div>
           <div class="cap-form">
             <label>노출 (s) <input id="cap-exp" type="number" value="2.0" step="0.1" min="0"></label>
             <label>타입
               <select id="cap-type">
                 <option>LIGHT</option><option>FLAT</option>
                 <option>DARK</option><option>BIAS</option>
+              </select>
+            </label>
+            <label>비닝
+              <select id="cap-bin">
+                <option value="1">1×1</option><option value="2">2×2</option>
+                <option value="3">3×3</option><option value="4">4×4</option>
               </select>
             </label>
             <label>장수 (0=∞) <input id="cap-count" type="number" value="5" min="0"></label>
@@ -591,6 +612,6 @@
 
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
-<script src="/static/app.js?v=133"></script>
+<script src="/static/app.js?v=145"></script>
 </body>
 </html>

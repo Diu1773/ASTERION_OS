@@ -168,7 +168,7 @@ class Forge:
             return float("inf")
 
     def _captured(self, image_type: str, *, filter_name: str | None = None,
-                  exposure_s: float | None = None,
+                  exposure_s: float | None = None, binning: int | None = None,
                   tol_s: float = 0.0) -> list[tuple[str, str]]:
         """OS가 캡처한 보정 프레임 (Frame 테이블). [(file_path, date_obs_utc)] 최신순."""
         def _q(s):
@@ -177,18 +177,21 @@ class Forge:
                          Frame.flag == "ok"))
             if filter_name is not None:
                 q = q.filter(Frame.filter_name == filter_name)
+            if binning is not None:                 # 비닝 일치 — 크기 다른 마스터 오적용 방지
+                q = q.filter(Frame.binning == binning)
             rows = q.order_by(Frame.id.desc()).limit(300).all()
             return [(path, date) for path, date, exp in rows
                     if exposure_s is None or abs((exp or 0.0) - exposure_s) <= tol_s]
         return self.db.query(_q)
 
     def _registered(self, kind: str, *, exposure_s=None,
-                    filter_name=None) -> tuple[np.ndarray | None, str | None]:
+                    filter_name=None, binning=None) -> tuple[np.ndarray | None, str | None]:
         if self.calibration is None:
             return None, None
         try:
             mm = self.calibration.find_match(kind=kind, exposure_s=exposure_s,
-                                             filter_name=filter_name)
+                                             filter_name=filter_name,
+                                             binning=binning)
             if mm:
                 a = fitsio.load_frame(mm["file_path"])
                 if a is not None:
@@ -199,8 +202,8 @@ class Forge:
 
     # 각 _resolve_*는 (배열|None, 출처|None, 경고|None)를 돌려준다 — 폴백/부재를 경고로.
 
-    def _resolve_flat(self, filter_name):
-        caps = self._captured("FLAT", filter_name=filter_name)
+    def _resolve_flat(self, filter_name, binning=1):
+        caps = self._captured("FLAT", filter_name=filter_name, binning=binning)
         if caps and self._age_h(caps[0][1]) <= self.flat_max_age_h:
             recent = [p for p, d in caps if self._age_h(d) <= self.flat_max_age_h]
             m = self._stack(recent)
@@ -218,32 +221,33 @@ class Forge:
                     f"[{filter_name}] 당일 플랫 없음 → {age:.0f}h 지난 플랫 사용"
         return None, None, f"[{filter_name}] 플랫 없음 — 비네팅/감도 미보정"
 
-    def _resolve_dark(self, exposure_s):
-        caps = self._captured("DARK", exposure_s=exposure_s, tol_s=self.dark_tol_s)
+    def _resolve_dark(self, exposure_s, binning=1):
+        caps = self._captured("DARK", exposure_s=exposure_s, binning=binning,
+                              tol_s=self.dark_tol_s)
         m = self._stack([p for p, _ in caps])
         if m is not None:
             return m, f"captured({len(caps)})", None
-        mismatch = bool(self._captured("DARK"))   # 다크는 있는데 노출만 안 맞음?
+        mismatch = bool(self._captured("DARK", binning=binning))   # 다크는 있는데 노출만 안 맞음?
         m = self._stack(self._pin_paths(self.dark_pin))
         if m is not None:
             w = (f"다크 노출 {exposure_s:g}s(±{self.dark_tol_s:g}) 매칭 실패 → 지정 핀 다크 사용"
                  if mismatch else "노출 맞는 캡처 다크 없음 → 지정 핀 다크 사용")
             return m, "pin", w
-        arr, src = self._registered("dark", exposure_s=exposure_s)
+        arr, src = self._registered("dark", exposure_s=exposure_s, binning=binning)
         if arr is not None:
             return arr, src, f"다크 노출 {exposure_s:g}s 매칭 실패 → 등록 다크 사용"
         w = (f"다크 노출 {exposure_s:g}s 매칭 실패, 다른 다크 없음 — 다크 미보정"
              if mismatch else f"다크 없음 (노출 {exposure_s:g}s)")
         return None, None, w
 
-    def _resolve_bias(self):
-        m = self._stack([p for p, _ in self._captured("BIAS")])
+    def _resolve_bias(self, binning=1):
+        m = self._stack([p for p, _ in self._captured("BIAS", binning=binning)])
         if m is not None:
             return m, "captured", None
         m = self._stack(self._pin_paths(self.bias_pin))
         if m is not None:
             return m, "pin", None
-        arr, src = self._registered("bias")
+        arr, src = self._registered("bias", binning=binning)
         if arr is not None:
             return arr, src, None
         return None, None, "바이어스 없음"
@@ -254,15 +258,15 @@ class Forge:
         """캡처(OS가 앎) > 핀(외부 경로) > 등록 순으로 bias/dark/flat을 해석(캐시).
         출처는 self._sources, 폴백·부재 경고는 self._warnings에 기록하고 emit한다
         (캐시 키당 1회만 — 매 프레임 스팸 방지)."""
-        key = (filter_name or "", round(exposure_s or 0.0, 1))
+        key = (filter_name or "", round(exposure_s or 0.0, 1), int(binning))
         cached = self._master_cache.get(key)
         if cached is not None:
             self._sources, self._warnings = cached["sources"], cached["warnings"]
             return cached["masters"]
         try:
-            flat, fs, fw = self._resolve_flat(filter_name)
-            dark, ds, dw = self._resolve_dark(exposure_s)
-            bias, bs, bw = self._resolve_bias()
+            flat, fs, fw = self._resolve_flat(filter_name, binning)
+            dark, ds, dw = self._resolve_dark(exposure_s, binning)
+            bias, bs, bw = self._resolve_bias(binning)
         except Exception as exc:
             if self.events:
                 self.events.log("forge", f"마스터 해석 실패: {exc}", "warn")

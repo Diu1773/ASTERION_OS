@@ -136,6 +136,7 @@ class CaptureStartReq(BaseModel):
     frame_type: str = "LIGHT"   # LIGHT | FLAT | DARK | BIAS
     count: int = 1              # 0 = 무한 (정지 버튼까지)
     interval_s: float = 1.0
+    binning: int = 1            # NxN 하드웨어 비닝
 
 
 class AutosaveReq(BaseModel):
@@ -572,7 +573,8 @@ def create_app() -> FastAPI:
     async def camera_capture(req: CaptureStartReq):
         await capture.start(exposure_s=req.exposure_s,
                             frame_type=req.frame_type,
-                            count=req.count, interval_s=req.interval_s)
+                            count=req.count, interval_s=req.interval_s,
+                            binning=req.binning)
         return {"started": True}
 
     @app.post("/api/actions/camera/capture/stop")

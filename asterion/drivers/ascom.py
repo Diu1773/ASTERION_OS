@@ -416,20 +416,50 @@ class AscomCamera(CameraDriver):
                 cooler = bool(d.CoolerOn)
             except Exception:
                 pass
+            power = None
+            try:                                  # Moravian 등은 CoolerPower(%) 보고
+                power = float(d.CoolerPower)
+            except Exception:
+                pass
             return CameraStatus(connected=bool(d.Connected), ccd_temp_c=temp,
-                                cooler_on=cooler, state=self._state,
-                                detail="", device_name=self._name)
+                                cooler_on=cooler, cooler_power=power,
+                                state=self._state, detail="", device_name=self._name)
         try:
             return self._call(_do)
         except Exception as exc:
             return CameraStatus(connected=False, detail=f"ASCOM 오류: {exc}",
                                 device_name=self._name)
 
-    def expose(self, seconds: float, light: bool = True) -> np.ndarray:
+    def expose(self, seconds: float, light: bool = True,
+               binning: int = 1) -> np.ndarray:
         def _do():
             d = self._dev
             self._state = "exposing"
             try:
+                b = max(1, int(binning))
+                applied_b = 1                     # 실제 적용된 비닝(capture가 기록에 사용)
+                try:                              # 비닝 + 전체 프레임
+                    mx = int(getattr(d, "MaxBinX", 1) or 1)
+                    b = max(1, min(b, mx))
+                    d.BinX = b
+                    d.BinY = b
+                    d.NumX = int(d.CameraXSize) // b
+                    d.NumY = int(d.CameraYSize) // b
+                    d.StartX = 0
+                    d.StartY = 0
+                    applied_b = b
+                except Exception:                 # 실패 → 1x1 전체프레임 복구(불일치 방지)
+                    try:
+                        d.BinX = 1
+                        d.BinY = 1
+                        d.NumX = int(d.CameraXSize)
+                        d.NumY = int(d.CameraYSize)
+                        d.StartX = 0
+                        d.StartY = 0
+                    except Exception:
+                        pass
+                    applied_b = 1
+                self.last_binning = applied_b
                 d.StartExposure(seconds, light)
                 while not d.ImageReady:
                     time.sleep(0.25)
@@ -484,6 +514,10 @@ class AscomCamera(CameraDriver):
                 pass
             try:
                 caps["can_set_ccd_temperature"] = bool(d.CanSetCCDTemperature)
+            except Exception:
+                pass
+            try:
+                caps["max_bin"] = int(d.MaxBinX)
             except Exception:
                 pass
             try:

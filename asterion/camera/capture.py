@@ -62,7 +62,7 @@ class CaptureService:
     # ---------- 제어 ----------
 
     async def start(self, *, exposure_s: float, frame_type: str,
-                    count: int, interval_s: float) -> None:
+                    count: int, interval_s: float, binning: int = 1) -> None:
         if self.active():
             raise ActionError("캡처가 이미 실행 중입니다")
         frame_type = str(frame_type).upper()
@@ -71,20 +71,21 @@ class CaptureService:
         exposure_s = max(0.0, float(exposure_s))
         count = max(0, int(count))          # 0 = 무한 (정지 버튼까지)
         interval_s = max(0.0, float(interval_s))
+        binning = max(1, int(binning))
         blocked = self._blocked_fn()
         cam_st = await asyncio.to_thread(self.drivers["camera"].status)
 
         async def _launch():
             self._stop.clear()
             self._task = asyncio.create_task(
-                self._run(exposure_s, frame_type, count, interval_s),
+                self._run(exposure_s, frame_type, count, interval_s, binning),
                 name="capture")
 
         await self.bus.run(
             "capture_start", actor="operator",
             params={"exposure_s": exposure_s, "frame_type": frame_type,
                     "count": count, "interval_s": interval_s,
-                    "autosave": self.autosave},
+                    "binning": binning, "autosave": self.autosave},
             func=_launch,
             preconditions=[
                 ("camera_connected", cam_st.connected, "카메라 연결 필요"),
@@ -104,7 +105,7 @@ class CaptureService:
     # ---------- 본체 ----------
 
     async def _run(self, exposure_s: float, frame_type: str,
-                   count: int, interval_s: float) -> None:
+                   count: int, interval_s: float, binning: int = 1) -> None:
         light = frame_type in ("LIGHT", "FLAT")
         if frame_type == "BIAS":
             exposure_s = 0.0  # 바이어스는 최소 노출(셔터 닫힘)
@@ -112,7 +113,8 @@ class CaptureService:
         if count != 1:
             session = self.db.add(ObservationSession(kind="capture"))
         self._state.update(active=True, state="running", seq=0, count=count,
-                           frame_type=frame_type, exposure=exposure_s)
+                           frame_type=frame_type, exposure=exposure_s,
+                           binning=binning)
         n = 0
         try:
             while not self._stop.is_set():
@@ -124,10 +126,20 @@ class CaptureService:
                 img = await self.bus.run(
                     "expose_capture", actor="capture",
                     params={"frame_type": frame_type,
-                            "exposure_s": round(exposure_s, 3), "seq": n},
+                            "exposure_s": round(exposure_s, 3), "seq": n,
+                            "binning": binning},
                     func=lambda: asyncio.to_thread(
-                        self.drivers["camera"].expose, exposure_s, light),
+                        self.drivers["camera"].expose, exposure_s, light,
+                        binning),
                 )
+                # 드라이버가 실제 적용한 비닝(MaxBin 클램프·실패 폴백 반영) — 기록은 이 값으로.
+                actual_bin = int(getattr(self.drivers["camera"], "last_binning",
+                                         binning) or binning)
+                if actual_bin != binning:
+                    self.events.log("capture",
+                                    f"비닝 {binning}×{binning} 미적용 → {actual_bin}×{actual_bin}로 기록",
+                                    "warn")
+                self._state["binning"] = actual_bin
                 median = float(np.median(img))
                 mount_st = await asyncio.to_thread(self.drivers["mount"].status)
                 fw_st = await asyncio.to_thread(
@@ -137,7 +149,8 @@ class CaptureService:
                     path = await asyncio.to_thread(
                         fitsio.save_frame, self.frames_dir, self.cfg, img,
                         image_type=frame_type, filter_name=fw_st.name,
-                        exposure_s=exposure_s, seq=n, mount_st=mount_st)
+                        exposure_s=exposure_s, seq=n, mount_st=mount_st,
+                        binning=actual_bin)
                 tstate = self.db.add(TelescopeState(
                     ra_hours=mount_st.ra_hours, dec_degs=mount_st.dec_degs,
                     alt_degs=mount_st.alt_degs, az_degs=mount_st.az_degs,
@@ -148,7 +161,7 @@ class CaptureService:
                     telescope_state_id=tstate.id,
                     file_path=str(path) if path else "",
                     image_type=frame_type, filter_name=fw_st.name,
-                    exposure_s=round(exposure_s, 3),
+                    exposure_s=round(exposure_s, 3), binning=actual_bin,
                     median_adu=median, mean_adu=float(np.mean(img)),
                     std_adu=float(np.std(img)), flag="ok",
                 ))
@@ -156,7 +169,7 @@ class CaptureService:
                 if self.preview_cb:
                     await self.preview_cb(img, {
                         "type": frame_type, "filter": fw_st.name,
-                        "exposure_s": round(exposure_s, 3),
+                        "exposure_s": round(exposure_s, 3), "binning": actual_bin,
                         "median": round(median), "seq": n,
                         "file": path.name if path else ""})
                 self._state.update(last_median=round(median),

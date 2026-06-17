@@ -74,6 +74,7 @@ class CameraStatus:
     connected: bool = False
     ccd_temp_c: float | None = None
     cooler_on: bool = False
+    cooler_power: float | None = None   # 쿨러 부하 % (Moravian 등). 실관측은 80% 미만 권장
     state: str = "idle"  # idle / exposing / error
     detail: str = ""
     device_name: str = ""
@@ -82,6 +83,7 @@ class CameraStatus:
         return {
             "connected": self.connected, "name": self.device_name,
             "ccd_temp": self.ccd_temp_c, "cooler_on": self.cooler_on,
+            "cooler_power": self.cooler_power,
             "state": self.state, "detail": self.detail,
         }
 
@@ -212,6 +214,9 @@ class MountDriver(abc.ABC):
 
 class CameraDriver(abc.ABC):
     is_sim = False
+    # expose()가 *실제로* 적용한 비닝(MaxBin 클램프·실패 폴백 반영). capture가 이 값을
+    # Frame/FITS에 기록한다 — 요청값과 다를 수 있어 보정 마스터 매칭이 어긋나지 않게.
+    last_binning: int = 1
 
     @abc.abstractmethod
     def connect(self) -> None: ...
@@ -220,8 +225,10 @@ class CameraDriver(abc.ABC):
     def status(self) -> CameraStatus: ...
 
     @abc.abstractmethod
-    def expose(self, seconds: float, light: bool = True) -> np.ndarray:
-        """노출 완료까지 블로킹, uint16 2D 배열 반환."""
+    def expose(self, seconds: float, light: bool = True,
+               binning: int = 1) -> np.ndarray:
+        """노출 완료까지 블로킹, uint16 2D 배열 반환.
+        binning: NxN 하드웨어 비닝(기본 1). 미지원 드라이버는 1로 동작."""
 
     @abc.abstractmethod
     def set_cooler(self, on: bool, setpoint_c: float | None = None) -> None: ...

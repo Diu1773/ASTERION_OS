@@ -107,6 +107,7 @@ class Frame(Base):
     image_type: Mapped[str] = mapped_column(String(16))  # FLAT / LIGHT / DARK / BIAS / TEST
     filter_name: Mapped[str] = mapped_column(String(16), default="")
     exposure_s: Mapped[float] = mapped_column(Float, default=0.0)
+    binning: Mapped[int] = mapped_column(Integer, default=1)   # NxN 하드웨어 비닝
     date_obs_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
     median_adu: Mapped[float | None] = mapped_column(Float, nullable=True)
     mean_adu: Mapped[float | None] = mapped_column(Float, nullable=True)

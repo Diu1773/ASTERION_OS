@@ -39,7 +39,7 @@ def _ascii(value: str) -> str:
 
 def save_frame(frames_dir: Path, cfg, img: np.ndarray, *, image_type: str,
                filter_name: str, exposure_s: float, seq: int,
-               mount_st=None, object_name: str = "") -> Path | None:
+               mount_st=None, object_name: str = "", binning: int = 1) -> Path | None:
     if _fits is None:
         return None
     now = datetime.now(timezone.utc)
@@ -55,6 +55,8 @@ def save_frame(frames_dir: Path, cfg, img: np.ndarray, *, image_type: str,
         h["OBJECT"] = _ascii(object_name)
     h["FILTER"] = _ascii(filter_name)
     h["EXPTIME"] = round(float(exposure_s), 3)
+    h["XBINNING"] = int(binning)
+    h["YBINNING"] = int(binning)
     h["DATE-OBS"] = now.strftime("%Y-%m-%dT%H:%M:%S")
     site = _ascii(str(cfg.get("site.name_ascii", cfg.get("site.name", ""))))
     if site:

@@ -79,6 +79,71 @@ def sun_altaz(dt_utc: datetime, lat_deg: float, lon_deg: float) -> tuple[float, 
     return radec_to_altaz(ra_h, dec, lat_deg, lst_hours(dt_utc, lon_deg))
 
 
+# Sky Panel용 — 달·밝은 행성의 (alt,az) + 달 위상. astropy(번들 ephemeris, 오프라인)로
+# 계산하며 느리므로(수백 ms) 호출부(StatusSampler)가 30초 캐시한다. 천체는 분당 ~0.13°만
+# 움직여 차트 표시엔 충분. 실패하면 빈 리스트(차트는 태양/마운트만 그림).
+_SKY_BODIES = ("moon", "venus", "mars", "jupiter", "saturn")
+_astropy_ready = False
+
+
+def _ensure_astropy() -> None:
+    """astropy를 오프라인·견고 모드로 1회만 설정(관측소는 네트워크 의존 금지).
+    auto_download=False + auto_max_age=None + degraded_accuracy 무시 → IERS 데이터가
+    오래돼도(미래 날짜 포함) 예외 없이 외삽한다. 차트용이라 arcsec 오차는 무관."""
+    global _astropy_ready
+    if _astropy_ready:
+        return
+    import warnings
+    warnings.filterwarnings("ignore")
+    from astropy.utils import iers
+    iers.conf.auto_download = False
+    iers.conf.auto_max_age = None
+    try:
+        iers.conf.iers_degraded_accuracy = "ignore"   # astropy 5.1+ — 외삽 시 raise 안 함
+    except Exception:
+        pass
+    from astropy.coordinates import solar_system_ephemeris
+    solar_system_ephemeris.set("builtin")             # 번들 — 외부 다운로드 없음
+    _astropy_ready = True
+
+
+def sky_bodies_altaz(dt_utc: datetime, lat_deg: float,
+                     lon_deg: float) -> list[dict]:
+    _ensure_astropy()
+    from astropy.coordinates import AltAz, EarthLocation, get_body
+    from astropy.time import Time
+    import astropy.units as u
+    loc = EarthLocation(lat=lat_deg * u.deg, lon=lon_deg * u.deg, height=0 * u.m)
+    t = Time(dt_utc)
+    aa = AltAz(obstime=t, location=loc)
+    try:                                              # 태양 실패해도 달·행성은 그림
+        sun_b = get_body("sun", t, loc)
+    except Exception:
+        sun_b = None
+    out: list[dict] = []
+    for name in _SKY_BODIES:
+        try:
+            b = get_body(name, t, loc)
+            h = b.transform_to(aa)
+            alt_deg, az_deg = float(h.alt.deg), float(h.az.deg)
+            if not (math.isfinite(alt_deg) and math.isfinite(az_deg)):
+                continue                              # NaN/inf 방어 — 깨진 좌표 차단
+            item = {"name": name,
+                    "kind": "moon" if name == "moon" else "planet",
+                    "alt": round(alt_deg, 2), "az": round(az_deg, 2)}
+            if name == "moon" and sun_b is not None:  # 위상: 태양-달 이각
+                sep = float(b.separation(sun_b).deg)
+                if math.isfinite(sep):
+                    item["illum"] = round((1.0 - math.cos(sep * D2R)) / 2.0, 3)
+                    # 달 RA가 태양보다 동쪽(0~12h 앞)이면 차오름(waxing), 아니면 이지러짐
+                    item["waxing"] = ((float(b.ra.hour)
+                                       - float(sun_b.ra.hour)) % 24.0) < 12.0
+            out.append(item)
+        except Exception:
+            continue
+    return out
+
+
 def twilight_phase(sun_alt_deg: float) -> tuple[str, str]:
     """(코드, 한국어 라벨)"""
     if sun_alt_deg >= -0.833:

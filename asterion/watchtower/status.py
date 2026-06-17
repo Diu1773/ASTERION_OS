@@ -67,6 +67,10 @@ class StatusSampler:
                                           safety.WEATHER_UNSAFE_AGE_S))
         self._lat = float(cfg.get("site.latitude", 36.6))
         self._lon = float(cfg.get("site.longitude", 127.5))
+        # Sky Panel용 달·행성 (astropy, 느림) — 30초 캐시. 천체는 분당 ~0.13°만 움직임.
+        self._sky_bodies: list = []
+        self._sky_next = 0.0   # monotonic — 다음 재계산 시각
+        self._sky_failed = False   # 실패 경고 1회만(전환 시) — 30초마다 스팸 방지
         # 1분 다운샘플 텔레메트리 영속 (채널 → [min, sum, max, count]) + 보존기간.
         # 1Hz 라이브는 위 self.telemetry 링, 이건 재시작 후에도 남는 추세를 DB에.
         self._telem_accum: dict[str, list[float]] = {}
@@ -251,6 +255,19 @@ class StatusSampler:
         sun_alt, sun_az = ephemeris.sun_altaz(now, self._lat, self._lon)
         lst = ephemeris.lst_hours(now, self._lon)
         phase_code, phase_label = ephemeris.twilight_phase(sun_alt)
+        # 달·행성 — 30초마다 off-thread 재계산(astropy 무거움), 그 외엔 캐시 사용.
+        mono = time.monotonic()
+        if mono >= self._sky_next:
+            self._sky_next = mono + 30.0
+            try:
+                self._sky_bodies = await asyncio.to_thread(
+                    ephemeris.sky_bodies_altaz, now, self._lat, self._lon)
+                self._sky_failed = False
+            except Exception as exc:
+                if not self._sky_failed:   # 지속 실패해도 경고는 1회(차트는 태양/마운트만)
+                    self._sky_failed = True
+                    self.events.log("status", f"천체 ephemeris 실패 "
+                                    f"({type(exc).__name__}) — 차트는 태양/마운트만", "warn")
 
         # 일부 ASCOM 가대는 RA/Dec는 제공하지만 Alt/Az 속성을 구현하지 않는다.
         # 이때만 사이트/LST로 수평좌표를 보완한다. 장비가 준 0/270 같은 실제 값은
@@ -333,6 +350,7 @@ class StatusSampler:
             "orchestrator": orchestrator,
             "forge": self.forge_status(),
             "cooler": self.cooler_status(),
+            "sky_bodies": self._sky_bodies,
             "telemetry_last": flat_telemetry,
             "defaults": {
                 "autoflat": self.cfg.get("autoflat", {}) or {},

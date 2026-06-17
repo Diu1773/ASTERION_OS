@@ -138,17 +138,38 @@ class ZwoCamera(CameraDriver):
                 cooler_on = bool(self._cam.get_control_value(asi.ASI_COOLER_ON)[0])
             except Exception:
                 cooler_on = False
+            power = None
+            try:
+                power = float(self._cam.get_control_value(asi.ASI_COOLER_POWER_PERC)[0])
+            except Exception:
+                pass
             return CameraStatus(
                 connected=True, ccd_temp_c=temp, cooler_on=cooler_on,
-                state=self._state, detail=self._name, device_name=self._name)
+                cooler_power=power, state=self._state,
+                detail=self._name, device_name=self._name)
         except Exception as exc:
             return CameraStatus(connected=False, detail=f"ZWO 오류: {exc}",
                                 device_name=self._name)
 
-    def expose(self, seconds: float, light: bool = True) -> np.ndarray:
+    def expose(self, seconds: float, light: bool = True,
+               binning: int = 1) -> np.ndarray:
         import zwoasi as asi
         self._state = "exposing"
         try:
+            b = max(1, int(binning))
+            w, h = self._width, self._height
+            if b > 1:
+                # ZWO ROI 폭은 8, 높이는 2의 배수여야 함 → 비닝 후 정렬
+                w = ((self._width // b) // 8) * 8
+                h = ((self._height // b) // 2) * 2
+                try:
+                    self._cam.set_roi_format(w, h, b, asi.ASI_IMG_RAW16)
+                except Exception:                # 비닝 미지원/실패 → 1x1 복귀
+                    b, w, h = 1, self._width, self._height
+                    self._cam.set_roi_format(w, h, 1, asi.ASI_IMG_RAW16)
+            else:
+                self._cam.set_roi_format(w, h, 1, asi.ASI_IMG_RAW16)
+            self.last_binning = b                # 실제 적용된 비닝(폴백 시 1)
             self._cam.set_control_value(asi.ASI_EXPOSURE, int(seconds * 1_000_000))
             self._cam.start_exposure(is_dark=not light)
             while True:
@@ -159,8 +180,7 @@ class ZwoCamera(CameraDriver):
                     raise RuntimeError("ZWO 노출 실패")
                 time.sleep(0.05)
             data = self._cam.get_data_after_exposure()
-            arr = np.frombuffer(data, dtype=np.uint16).reshape(
-                self._height, self._width)
+            arr = np.frombuffer(data, dtype=np.uint16).reshape(h, w)
             return np.clip(arr, 0, self._sat).astype(np.uint16)
         finally:
             self._state = "idle"

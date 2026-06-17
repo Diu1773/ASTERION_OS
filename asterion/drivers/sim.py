@@ -293,18 +293,23 @@ class SimCamera(CameraDriver):
         self._connected = True
 
     def status(self) -> CameraStatus:
+        # 쿨러 부하 모델 — 주변(~15°C)보다 깊이 냉각할수록 높음(°C당 ~2.2%).
+        power = None
+        if self._cooler:
+            power = max(0.0, min(100.0, (15.0 - self._temp) * 2.2))
         return CameraStatus(connected=self._connected, ccd_temp_c=self._temp,
-                            cooler_on=self._cooler, state=self._state,
-                            detail="", device_name="Sim Camera")
+                            cooler_on=self._cooler, cooler_power=power,
+                            state=self._state, detail="", device_name="Sim Camera")
 
     def capabilities(self) -> dict:
         return {"gain_min": 0, "gain_max": 300, "offset_min": 0, "offset_max": 255,
                 "readout_modes": ["High Gain DR", "Low Gain HC"],
-                "can_set_ccd_temperature": True,
+                "can_set_ccd_temperature": True, "max_bin": 4,
                 "exposure_min_s": 0.001, "exposure_max_s": 3600.0,
                 "pixel_size_um": 3.76}
 
-    def expose(self, seconds: float, light: bool = True) -> np.ndarray:
+    def expose(self, seconds: float, light: bool = True,
+               binning: int = 1) -> np.ndarray:
         self._state = "exposing"
         try:
             time.sleep(min(seconds, self._sleep_cap))
@@ -314,6 +319,12 @@ class SimCamera(CameraDriver):
             level = min(level, float(self._sat) * 1.2)
             img = self._rng.normal(level * self._vignette,
                                    np.sqrt(max(level, 1.0)))
+            b = max(1, int(binning))
+            self.last_binning = b                  # sim은 항상 요청대로 적용
+            if b > 1:                              # 하드웨어 비닝: b×b 전하 합산 → 작아진 배열
+                h2, w2 = (self._h // b) * b, (self._w // b) * b
+                img = (img[:h2, :w2]
+                       .reshape(h2 // b, b, w2 // b, b).sum(axis=(1, 3)))
             return np.clip(img, 0, self._sat).astype(np.uint16)
         finally:
             self._state = "idle"

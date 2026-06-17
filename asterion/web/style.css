@@ -406,7 +406,32 @@ select { color-scheme: dark; }
 }
 .sky-menu .sm-line { font-family: var(--mono); color: var(--text); padding: 1px 0; }
 .sky-menu .sm-sub { color: var(--dim); font-size: 10.5px; }
+.sky-menu .sm-desig { color: var(--dim); font-size: 10px; font-family: var(--mono); margin-left: 4px; }
 .sky-menu .ctrl-row { margin-top: 8px; }
+
+/* 표시 설정 드로어 (⚙) — 카탈로그 레이어/한계등급/궤적 토글 */
+.sky-custom {
+  position: absolute; z-index: 7; top: 30px; right: 4px; width: 178px;
+  background: var(--panel-solid); border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-sm); padding: 9px 11px 11px; box-shadow: var(--shadow);
+}
+.sky-custom[hidden] { display: none; }
+.sky-custom .sc-head { font-size: 10px; color: var(--dim); letter-spacing: .06em;
+  text-transform: uppercase; margin-bottom: 7px; }
+.sky-custom .sc-row {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text);
+  padding: 3px 0; cursor: pointer; user-select: none;
+}
+.sky-custom .sc-row input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; margin: 0; }
+.sky-custom .sc-range { gap: 7px; }
+.sky-custom .sc-range input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
+.sky-custom .sc-range b { font-family: var(--mono); color: var(--accent); font-size: 11px; min-width: 22px; text-align: right; }
+.sky-custom .sc-sep { height: 1px; background: var(--edge); margin: 7px 0 4px; }
+.sky-custom .sc-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
+.sky-custom .sc-dot.gx { background: #e8c86a; border-radius: 50%; }
+.sky-custom .sc-dot.neb { background: #e87a92; }
+.sky-custom .sc-dot.star { background: #eaf0fb; border-radius: 50%; }
+.sky-custom .sc-dot.pl { background: #dccaa0; border-radius: 50%; }
 
 /* ---------------- jog pad ---------------- */
 .jog-pad {

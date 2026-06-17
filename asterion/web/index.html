@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=114">
+<link rel="stylesheet" href="/static/style.css?v=116">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -70,22 +70,42 @@
           <canvas id="sky-canvas" class="js-c-sky" title="돔을 클릭하면 그 지점으로 GoTo"></canvas>
           <div class="sky-menu" id="sky-menu"></div>
           <div class="sky-flip">
-            <button id="btn-sky-cfg" class="flip-btn" title="표시 설정">⚙</button>
-            <button id="btn-sky-reset" class="flip-btn" title="뷰 리셋 (줌·팬·회전)">⊙</button>
-            <button id="btn-flip-ew" class="flip-btn" title="동-서 반전">E↔W</button>
-            <button id="btn-flip-ns" class="flip-btn" title="남-북 반전">N↔S</button>
+            <button id="btn-sky-reset" class="sky-iconbtn" title="뷰 리셋 (줌·팬·회전)">⊙</button>
+            <button id="btn-sky-cfg" class="sky-iconbtn" title="표시 설정">⚙</button>
           </div>
           <div class="sky-custom" id="sky-custom" hidden>
-            <div class="sc-head">표시 설정</div>
-            <label class="sc-row"><input type="checkbox" id="sc-messier"> <span class="sc-dot gx"></span>메시에 (M1–110)</label>
-            <label class="sc-row"><input type="checkbox" id="sc-ngc"> <span class="sc-dot neb"></span>NGC·IC 명소</label>
-            <label class="sc-row"><input type="checkbox" id="sc-stars"> <span class="sc-dot star"></span>밝은 별</label>
-            <label class="sc-row"><input type="checkbox" id="sc-planets"> <span class="sc-dot pl"></span>행성·달</label>
-            <label class="sc-row"><input type="checkbox" id="sc-labels"> 이름표</label>
-            <label class="sc-row sc-range">별 한계등급 <input type="range" id="sc-starmag" min="0" max="6" step="0.5"> <b id="sc-starmag-v">4.5</b></label>
-            <div class="sc-sep"></div>
-            <label class="sc-row"><input type="checkbox" id="sc-track"> 대상 궤적</label>
-            <label class="sc-row sc-range">궤적 ± <input type="range" id="sc-trackh" min="1" max="6" step="1"> <b id="sc-trackh-v">3h</b></label>
+            <div class="sc-head"><span>표시 설정</span><button class="sc-x" id="sc-close" title="닫기">✕</button></div>
+
+            <div class="sc-group">레이어</div>
+            <div class="switch-row sc-row"><span class="sc-lab"><span class="sc-dot gx"></span>메시에 <i>M1–110</i></span>
+              <label class="switch"><input type="checkbox" id="sc-messier"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab"><span class="sc-dot neb"></span>NGC·IC 명소</span>
+              <label class="switch"><input type="checkbox" id="sc-ngc"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab"><span class="sc-dot star"></span>밝은 별</span>
+              <label class="switch"><input type="checkbox" id="sc-stars"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab"><span class="sc-dot pl"></span>행성·달</span>
+              <label class="switch"><input type="checkbox" id="sc-planets"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab">이름표</span>
+              <label class="switch"><input type="checkbox" id="sc-labels"><span class="slider"></span></label></div>
+
+            <div class="sc-group">한계등급</div>
+            <div class="sc-slider"><label for="sc-starmag">별</label><input type="range" id="sc-starmag" min="0" max="6" step="0.5"><b id="sc-starmag-v">4.5</b></div>
+            <div class="sc-slider"><label for="sc-dsomag">DSO</label><input type="range" id="sc-dsomag" min="4" max="12" step="0.5"><b id="sc-dsomag-v">12</b></div>
+
+            <div class="sc-group">기준선 · 방위</div>
+            <div class="switch-row sc-row"><span class="sc-lab">고도·방위 격자</span>
+              <label class="switch"><input type="checkbox" id="sc-grid"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab">망원경 레티클</span>
+              <label class="switch"><input type="checkbox" id="sc-reticle"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab">좌우 반전 <i>E↔W</i></span>
+              <label class="switch"><input type="checkbox" id="sc-flipew"><span class="slider"></span></label></div>
+            <div class="switch-row sc-row"><span class="sc-lab">상하 반전 <i>N↔S</i></span>
+              <label class="switch"><input type="checkbox" id="sc-flipns"><span class="slider"></span></label></div>
+
+            <div class="sc-group">대상 궤적</div>
+            <div class="switch-row sc-row"><span class="sc-lab">궤적 표시</span>
+              <label class="switch"><input type="checkbox" id="sc-track"><span class="slider"></span></label></div>
+            <div class="sc-slider"><label for="sc-trackh">± 시간</label><input type="range" id="sc-trackh" min="1" max="6" step="1"><b id="sc-trackh-v">3h</b></div>
           </div>
           <div class="sky-hint" id="sky-hint">휠 줌 · 드래그 팬 · Shift+드래그 회전 · 클릭 선택</div>
         </div>
@@ -626,6 +646,6 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=1"></script>
-<script src="/static/app.js?v=147"></script>
+<script src="/static/app.js?v=150"></script>
 </body>
 </html>

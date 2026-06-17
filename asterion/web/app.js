@@ -158,7 +158,8 @@ let skyFlip = (() => { try { return JSON.parse(localStorage.getItem("asterion.sk
 function saveSkyFlip() { try { localStorage.setItem("asterion.skyflip", JSON.stringify(skyFlip)); } catch (e) { /* noop */ } }
 // Sky 표시 커스텀 — 카탈로그 레이어/한계등급/궤적 토글 (localStorage 영속, 드로어로 편집)
 const SKYCUSTOM_DEF = { messier: true, ngc: true, stars: true, planets: true,
-                        labels: true, starMag: 4.5, track: false, trackH: 3 };
+                        labels: true, starMag: 4.5, dsoMag: 12, grid: true, reticle: true,
+                        track: false, trackH: 3 };
 let skyCustom = (() => {
   try { return Object.assign({}, SKYCUSTOM_DEF, JSON.parse(localStorage.getItem("asterion.skycustom") || "{}")); }
   catch (e) { return Object.assign({}, SKYCUSTOM_DEF); }
@@ -199,6 +200,7 @@ function drawSkyCatalog(ctx, proj, fovHalf, lat, lstH) {
   if (skyCustom.messier) dso.push(C.messier);
   if (skyCustom.ngc) dso.push(C.ngc);
   dso.forEach((grp) => grp.forEach((o) => {
+    if (o.mag > skyCustom.dsoMag) return;        // DSO 한계등급
     const [alt, az] = radecToAltaz(o.ra, o.dec, lat, lstH);
     if (alt < -2) return;                        // 지평선 아래는 생략
     const q = proj(alt, az); if (q[2] > fovHalf) return;
@@ -229,22 +231,39 @@ function drawSkyCatalog(ctx, proj, fovHalf, lat, lstH) {
 }
 // 대상 궤적 — RA/Dec를 LST±trackH시간에 걸쳐 투영(지평선 평행 호) + 정시 틱
 function drawSkyTrack(ctx, proj, fovHalf, ra, dec, lat, lstH, rgb) {
-  ctx.strokeStyle = `rgba(${rgb},.5)`; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-  ctx.beginPath(); let pen = false;
-  const pts = [];
+  const pts = [];          // [screenQ, alt, dh]
   for (let dh = -skyCustom.trackH; dh <= skyCustom.trackH + 1e-6; dh += 0.2) {
     const [alt, az] = radecToAltaz(ra, dec, lat, lstH + dh);
-    pts.push([alt, az, dh]);
-    const q = proj(alt, az);
-    if (q[2] > fovHalf * 1.2 || alt < -2) { pen = false; continue; }
-    if (!pen) { ctx.moveTo(q[0], q[1]); pen = true; } else ctx.lineTo(q[0], q[1]);
+    pts.push([proj(alt, az), alt, dh]);
   }
-  ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle = `rgba(${rgb},.7)`;
-  for (const [alt, az, dh] of pts) {
-    if (Math.abs(dh - Math.round(dh)) > 0.01 || alt < 0) continue;
-    const q = proj(alt, az); if (q[2] > fovHalf) continue;
-    ctx.beginPath(); ctx.arc(q[0], q[1], 1.6, 0, TAU); ctx.fill();
+  // 본선 — 어두운 케이싱 위에 밝은 색 점선(분주한 카탈로그 배경에서도 또렷)
+  const stroke = (style, lw, dash) => {
+    ctx.strokeStyle = style; ctx.lineWidth = lw; ctx.setLineDash(dash);
+    ctx.beginPath(); let pen = false;
+    for (const [q, alt] of pts) {
+      if (q[2] > fovHalf * 1.2 || alt < -2) { pen = false; continue; }
+      if (!pen) { ctx.moveTo(q[0], q[1]); pen = true; } else ctx.lineTo(q[0], q[1]);
+    }
+    ctx.stroke();
+  };
+  stroke("rgba(6,9,15,.85)", 3.6, []);              // 케이싱(가독)
+  stroke(`rgba(${rgb},.95)`, 1.8, [5, 4]);          // 본선(밝게·굵게)
+  ctx.setLineDash([]);
+  // 정시 틱 + 라벨('지금'·양끝만 → 클러터 방지)
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "700 8.5px " + SKYFONT;
+  for (const [q, alt, dh] of pts) {
+    if (Math.abs(dh - Math.round(dh)) > 0.01 || alt < 0 || q[2] > fovHalf) continue;
+    const now = Math.abs(dh) < 0.01;
+    ctx.beginPath(); ctx.arc(q[0], q[1], now ? 3.6 : 2.4, 0, TAU);
+    ctx.fillStyle = "rgba(6,9,15,.9)"; ctx.fill();                 // 틱 케이싱
+    ctx.beginPath(); ctx.arc(q[0], q[1], now ? 2.7 : 1.7, 0, TAU);
+    ctx.fillStyle = `rgb(${rgb})`; ctx.fill();                     // 틱 색
+    if (now || Math.abs(dh) === skyCustom.trackH) {                // 라벨(외곽선으로 가독)
+      const lab = now ? "지금" : (dh > 0 ? `+${dh}h` : `${dh}h`);
+      const ly = q[1] - (now ? 10 : 9);
+      ctx.lineWidth = 2.6; ctx.strokeStyle = "rgba(6,9,15,.9)"; ctx.strokeText(lab, q[0], ly);
+      ctx.fillStyle = `rgb(${rgb})`; ctx.fillText(lab, q[0], ly);
+    }
   }
 }
 
@@ -302,7 +321,10 @@ function skyProj(cx, cy, R, sgx, sgy, B, alt, az) {
   const rx = sr * (x / hyp), ry = sr * (y / hyp);
   return [cx + sgx * (rx * cr - ry * srr), cy - sgy * (rx * srr + ry * cr), c];
 }
-// '하늘을 잡고 끄는' 느낌 — 시야중심 alt/az를 직접 이동(극점 안전, 천정에서도 안 튐).
+// '하늘을 잡고 끄는' 느낌 — 시야중심 alt/az를 직접 이동.
+// 천정/천저를 넘기면 '롤오버': 고도 반사(90° 기준=시선방향 보존) + 방위 180° + roll에 π
+// → 죽은 방향 없이 연속(천정에서 ~1° 미세 스킵만). 한 이벤트 고도변화는 ±80°로 캡 →
+// 빠른 플릭이 한 번에 양극을 넘어 텔레포트되는 일 방지(작은 패널에서 발생 가능했음).
 function panByScreen(ddx, ddy) {
   if (!skyGeom) return;
   const sgx = skyFlip.ew ? -1 : 1, sgy = skyFlip.ns ? -1 : 1;
@@ -310,8 +332,13 @@ function panByScreen(ddx, ddy) {
   const cr = Math.cos(-skyView.roll), srr = Math.sin(-skyView.roll);
   const right = ux * cr - uy * srr, up = ux * srr + uy * cr;            // roll 해제
   const deg = (skyView.fov * 0.5) / skyGeom.R;                          // px당 각(°)
-  skyView.cAlt = clamp(skyView.cAlt - up * deg, -89, 89);              // 위로 끌면 시선 내려감
-  skyView.cAz = ((skyView.cAz - right * deg) % 360 + 360) % 360;        // 오른쪽으로 끌면 왼쪽 봄
+  const dAlt = clamp(up * deg, -80, 80);                                // 1이벤트 고도 변화 캡
+  let na = skyView.cAlt - dAlt;                                         // 위로 끌면 시선 내려감
+  let naz = skyView.cAz - right * deg;                                  // 오른쪽으로 끌면 왼쪽 봄
+  if (na > 90) { na = 180 - na; naz += 180; skyView.roll += Math.PI; }  // 천정 넘김(캡 덕에 1회면 충분)
+  else if (na < -90) { na = -180 - na; naz += 180; skyView.roll += Math.PI; }  // 천저 넘김
+  skyView.cAlt = clamp(na, -89.5, 89.5);                               // 특이점 밴드(>89.74°) 회피
+  skyView.cAz = ((naz % 360) + 360) % 360;
 }
 
 function drawSky(s) {   // 모든 인스턴스(.js-c-sky: 원본 + 관제 탭 복제)에 그린다
@@ -365,11 +392,12 @@ function drawSkyOn(cv, s) {
     }
     ctx.stroke();
   };
-  for (let az = 0; az < 360; az += 30) {            // 방위선(자오선)
+  if (skyCustom.grid) for (let az = 0; az < 360; az += 30) {   // 방위선(자오선) — 격자 토글
     const pts = []; for (let al = 0; al <= 88; al += 3) pts.push([al, az]);
     skyPath(pts, "rgba(150,180,225,.08)", 1);
   }
-  [0, 30, 60].forEach((al) => {                     // 고도선 (0=지평선)
+  // 고도선 — 지평선(0)은 항상(하늘/땅 경계), 30·60°는 격자 토글에 따름
+  (skyCustom.grid ? [0, 30, 60] : [0]).forEach((al) => {
     const pts = []; for (let az = 0; az <= 360; az += 3) pts.push([al, az]);
     skyPath(pts, al === 0 ? "rgba(150,180,225,.34)" : "rgba(150,180,225,.13)", al === 0 ? 1.4 : 1);
     if (al > 0) {
@@ -470,27 +498,29 @@ function drawSkyOn(cv, s) {
     skyTarget._alt = tAlt; skyTarget._az = tAz;    // 도달 판정용 현재 위치
   }
 
-  // 망원경 포인팅 (청록 십자 / 슬루 중 호박색)
+  // 망원경 포인팅 — 레티클(토글)은 '그리기'만 게이팅, 슬루→추종 상태기계는 항상 동작.
   if (md) {
     const [tx, ty] = proj(md.alt, md.az);
-    const col = m.slewing ? "#fbbf24" : "#4cc9f0";
-    const soft = m.slewing ? "rgba(251,191,36,.28)" : "rgba(76,201,240,.26)";
-    ctx.beginPath(); ctx.arc(tx, ty, 11, 0, TAU);          // 외곽 희미한 링
-    ctx.strokeStyle = soft; ctx.lineWidth = 1; ctx.stroke();
-    ctx.strokeStyle = col; ctx.lineWidth = 1.6;            // 본 레티클
-    ctx.beginPath(); ctx.arc(tx, ty, 6.5, 0, TAU); ctx.stroke();
-    ctx.beginPath();                                        // 갭 십자
-    ctx.moveTo(tx - 13, ty); ctx.lineTo(tx - 4, ty);
-    ctx.moveTo(tx + 4, ty); ctx.lineTo(tx + 13, ty);
-    ctx.moveTo(tx, ty - 13); ctx.lineTo(tx, ty - 4);
-    ctx.moveTo(tx, ty + 4); ctx.lineTo(tx, ty + 13);
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(tx, ty, 1.6, 0, TAU); ctx.fillStyle = col; ctx.fill();
-    ctx.fillStyle = col; ctx.font = "9px " + SKYFONT;       // 위치 라벨(alt/az)
-    ctx.textAlign = "center"; ctx.textBaseline = "top";
-    ctx.fillText(`${m.alt.toFixed(0)}° / ${m.az.toFixed(0)}°`, tx, ty + 15);
+    if (skyCustom.reticle) {                                // 청록 십자 / 슬루 중 호박색
+      const col = m.slewing ? "#fbbf24" : "#4cc9f0";
+      const soft = m.slewing ? "rgba(251,191,36,.28)" : "rgba(76,201,240,.26)";
+      ctx.beginPath(); ctx.arc(tx, ty, 11, 0, TAU);          // 외곽 희미한 링
+      ctx.strokeStyle = soft; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = 1.6;            // 본 레티클
+      ctx.beginPath(); ctx.arc(tx, ty, 6.5, 0, TAU); ctx.stroke();
+      ctx.beginPath();                                       // 갭 십자
+      ctx.moveTo(tx - 13, ty); ctx.lineTo(tx - 4, ty);
+      ctx.moveTo(tx + 4, ty); ctx.lineTo(tx + 13, ty);
+      ctx.moveTo(tx, ty - 13); ctx.lineTo(tx, ty - 4);
+      ctx.moveTo(tx, ty + 4); ctx.lineTo(tx, ty + 13);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(tx, ty, 1.6, 0, TAU); ctx.fillStyle = col; ctx.fill();
+      ctx.fillStyle = col; ctx.font = "9px " + SKYFONT;      // 위치 라벨(alt/az)
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText(`${m.alt.toFixed(0)}° / ${m.az.toFixed(0)}°`, tx, ty + 15);
+    }
 
-    // 슬루 완료 → 추종(파랑)으로 전환 (마커 유지 — 추적 대상 표시)
+    // 슬루 완료 → 추종(파랑)으로 전환 (마커 유지 — 추적 대상 표시; 레티클 off여도 동작)
     if (skyTarget && skyTarget.state === "slewing" && !m.slewing) {
       const ta = skyTarget._alt != null ? skyTarget._alt : skyTarget.alt;
       const tz = skyTarget._az != null ? skyTarget._az : skyTarget.az;
@@ -584,12 +614,17 @@ function skySelectAt(px, py, clientX, clientY) {
     (name ? `<div class="sm-line">${name}${desig ? ` <span class="sm-desig">${desig}</span>` : ""}</div>` : "") +
     `<div class="sm-line${name ? " sm-sub" : ""}">ALT ${alt.toFixed(1)}° · AZ ${az.toFixed(1)}°</div>` +
     `<div class="sm-line sm-sub">RA ${fmtRa(ra)} · DEC ${fmtDec(dec)}</div>` +
-    `<div class="ctrl-row"><button class="btn btn-go" id="sm-goto">GoTo</button>` +
-    `<button class="btn" id="sm-close">닫기</button></div>`;
-  const wrap = $("sky-wrap").getBoundingClientRect();
-  menu.style.left = clamp(clientX - wrap.left + 8, 0, wrap.width - 180) + "px";
-  menu.style.top = clamp(clientY - wrap.top + 8, 0, wrap.height - 96) + "px";
+    `<div class="ctrl-row"><button class="btn btn-go btn-sm" id="sm-goto">GoTo</button>` +
+    `<button class="btn btn-sm" id="sm-close">✕</button></div>`;
+  // 클릭 지점에서 디스크 중심 '반대' 사분면으로 펼친다 → 마커/대상을 안 가림.
   menu.style.display = "block";
+  const wrap = $("sky-wrap").getBoundingClientRect();
+  const relX = clientX - wrap.left, relY = clientY - wrap.top, gap = 12;
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  const left = relX > wrap.width / 2 ? relX - mw - gap : relX + gap;
+  const top = relY > wrap.height / 2 ? relY - mh - gap : relY + gap;
+  menu.style.left = clamp(left, 4, Math.max(4, wrap.width - mw - 4)) + "px";
+  menu.style.top = clamp(top, 4, Math.max(4, wrap.height - mh - 4)) + "px";
   $("sm-goto").onclick = async () => {
     hideSkyMenu();
     if (skyTarget) skyTarget.state = "slewing";       // 주황→초록
@@ -2674,55 +2709,41 @@ $("btn-setpark").onclick = () => post("/api/actions/mount/setpark");
 })();
 // 뷰 리셋 (줌·팬·회전 초기화)
 { const rb = $("btn-sky-reset"); if (rb) rb.onclick = resetSkyView; }
-// 돔 방위 반전 버튼 (E↔W, N↔S)
-[["btn-flip-ew", "ew"], ["btn-flip-ns", "ns"]].forEach(([id, key]) => {
-  const b = $(id); if (!b) return;
-  b.classList.toggle("on", !!skyFlip[key]);
-  b.onclick = () => {
-    skyFlip[key] = !skyFlip[key];
-    b.classList.toggle("on", !!skyFlip[key]);
-    saveSkyFlip();
-    if (lastStatus) drawSky(lastStatus);
-  };
-});
-// 표시 설정 드로어 — 카탈로그 레이어/한계등급/궤적 토글 (skyCustom ↔ 컨트롤)
+// 표시 설정 드로어 — 앱 공용 스위치/슬라이더. 레이어·한계등급·기준선·방위·궤적.
 (() => {
-  const cfgBtn = $("btn-sky-cfg"), drawer = $("sky-custom");
+  const cfgBtn = $("btn-sky-cfg"), drawer = $("sky-custom"), closeBtn = $("sc-close");
   if (!cfgBtn || !drawer) return;
-  cfgBtn.onclick = () => {
-    const show = drawer.hasAttribute("hidden");
-    if (show) drawer.removeAttribute("hidden"); else drawer.setAttribute("hidden", "");
-    cfgBtn.classList.toggle("on", show);
+  const setOpen = (open) => {
+    if (open) drawer.removeAttribute("hidden"); else drawer.setAttribute("hidden", "");
+    cfgBtn.classList.toggle("on", open);
   };
+  cfgBtn.onclick = () => setOpen(drawer.hasAttribute("hidden"));
+  if (closeBtn) closeBtn.onclick = () => setOpen(false);
   const redraw = () => { if (lastStatus) drawSky(lastStatus); };
-  // 체크박스 5종
+  // 레이어/기준선 토글 → skyCustom
   [["sc-messier", "messier"], ["sc-ngc", "ngc"], ["sc-stars", "stars"],
-   ["sc-planets", "planets"], ["sc-labels", "labels"], ["sc-track", "track"]
+   ["sc-planets", "planets"], ["sc-labels", "labels"], ["sc-grid", "grid"],
+   ["sc-reticle", "reticle"], ["sc-track", "track"]
   ].forEach(([id, key]) => {
     const el = $(id); if (!el) return;
     el.checked = !!skyCustom[key];
     el.onchange = () => { skyCustom[key] = el.checked; saveSkyCustom(); redraw(); };
   });
-  // 별 한계등급 슬라이더
-  const sm = $("sc-starmag"), smv = $("sc-starmag-v");
-  if (sm) {
-    sm.value = skyCustom.starMag; if (smv) smv.textContent = Number(skyCustom.starMag).toFixed(1);
-    sm.oninput = () => {
-      skyCustom.starMag = Number(sm.value);
-      if (smv) smv.textContent = skyCustom.starMag.toFixed(1);
-      saveSkyCustom(); redraw();
-    };
-  }
-  // 궤적 ±시간 슬라이더
-  const th = $("sc-trackh"), thv = $("sc-trackh-v");
-  if (th) {
-    th.value = skyCustom.trackH; if (thv) thv.textContent = skyCustom.trackH + "h";
-    th.oninput = () => {
-      skyCustom.trackH = Number(th.value);
-      if (thv) thv.textContent = skyCustom.trackH + "h";
-      saveSkyCustom(); redraw();
-    };
-  }
+  // 방위 반전 토글 → skyFlip (별도 저장소)
+  [["sc-flipew", "ew"], ["sc-flipns", "ns"]].forEach(([id, key]) => {
+    const el = $(id); if (!el) return;
+    el.checked = !!skyFlip[key];
+    el.onchange = () => { skyFlip[key] = el.checked; saveSkyFlip(); redraw(); };
+  });
+  // 한계등급/궤적 슬라이더
+  const slider = (id, vid, key, fmt) => {
+    const el = $(id), v = $(vid); if (!el) return;
+    el.value = skyCustom[key]; if (v) v.textContent = fmt(skyCustom[key]);
+    el.oninput = () => { skyCustom[key] = Number(el.value); if (v) v.textContent = fmt(skyCustom[key]); saveSkyCustom(); redraw(); };
+  };
+  slider("sc-starmag", "sc-starmag-v", "starMag", (x) => Number(x).toFixed(1));
+  slider("sc-dsomag", "sc-dsomag-v", "dsoMag", (x) => Number(x).toFixed(1));
+  slider("sc-trackh", "sc-trackh-v", "trackH", (x) => x + "h");
 })();
 
 // 카메라 / 캡처

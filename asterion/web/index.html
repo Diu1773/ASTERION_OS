@@ -8,7 +8,9 @@
 <link rel="icon" href="/static/logo.png?v=2">
 <!-- UI: Pretendard (한국어 product 폰트, 시스템 폴백). 숫자는 OS 기본 모노 사용 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
-<link rel="stylesheet" href="/static/style.css?v=088">
+<!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=107">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -65,7 +67,7 @@
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">Sky Panel</span><span class="card-tag">ALL-SKY</span></div>
         <div class="sky-wrap" id="sky-wrap">
-          <canvas id="sky-canvas" title="돔을 클릭하면 그 지점으로 GoTo"></canvas>
+          <canvas id="sky-canvas" class="js-c-sky" title="돔을 클릭하면 그 지점으로 GoTo"></canvas>
           <div class="sky-menu" id="sky-menu"></div>
           <div class="sky-flip">
             <button id="btn-flip-ew" class="flip-btn" title="동-서 반전">E↔W</button>
@@ -105,7 +107,7 @@
             </div>
           </div>
           <div class="af-gauge-col">
-            <canvas id="af-gauge"></canvas>
+            <canvas id="af-gauge" class="js-c-gauge"></canvas>
             <div class="af-readout">
               <div class="af-item"><span>필터</span><b id="af-filter">—</b></div>
               <div class="af-item"><span>프레임</span><b id="af-frame">—</b></div>
@@ -123,57 +125,69 @@
       <div class="muuri-item w6" data-panel="mount">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">마운트</span><span class="card-tag conn" id="conn-mount">MOUNT</span></div>
-        <div class="kv"><span>고도 ALT</span><b class="accent" id="m-alt">—</b></div>
-        <div class="kv"><span>방위 AZ</span><b class="accent" id="m-az">—</b></div>
-        <div class="kv"><span>적경 RA</span><b id="m-ra">—</b></div>
-        <div class="kv"><span>적위 DEC</span><b id="m-dec">—</b></div>
-        <div class="pills">
-          <span class="pill" id="m-track">TRACKING</span>
-          <span class="pill" id="m-slew">SLEWING</span>
-          <span class="pill" id="m-park">PARKED</span>
+        <!-- monitor: 계열별 2열 readout (ALT/AZ · RA/DEC) — 같은 포맷끼리 한 열 -->
+        <div class="readouts mount-ro">
+          <div class="kv"><span>ALT</span><b class="accent" id="m-alt">—</b></div>
+          <div class="kv"><span>AZ</span><b class="accent" id="m-az">—</b></div>
+          <div class="kv"><span>RA</span><b id="m-ra">—</b></div>
+          <div class="kv"><span>DEC</span><b id="m-dec">—</b></div>
         </div>
-        <div class="ctrl-row">
-          <input id="in-target" type="text" placeholder="대상 검색 (M42, NGC7789…)">
-          <button id="btn-resolve" class="btn">검색</button>
+        <div class="status-line">
+          <span class="st-chip" id="m-track">TRACKING</span>
+          <span class="st-chip" id="m-slew">SLEWING</span>
+          <span class="st-chip" id="m-park">PARKED</span>
         </div>
-        <div class="resolve-line" id="resolve-line"></div>
-        <div class="ctrl-row">
-          <input id="in-ra" type="text" placeholder="RA (h / hh:mm:ss)">
-          <input id="in-dec" type="text" placeholder="DEC (±dd:mm:ss)">
-          <button id="btn-goto-radec" class="btn">GoTo</button>
-        </div>
-        <div class="ctrl-row">
-          <input id="in-alt" type="number" placeholder="ALT°" min="0" max="89" step="0.1">
-          <input id="in-az" type="number" placeholder="AZ°" min="0" max="360" step="0.1">
-          <button id="btn-goto" class="btn">이동</button>
-        </div>
+        <!-- control zone -->
+        <div class="zone-act">
+          <div class="seg goto-seg" id="goto-seg">
+            <button class="seg-btn active" data-goto="target">대상</button>
+            <button class="seg-btn" data-goto="radec">RA/Dec</button>
+            <button class="seg-btn" data-goto="altaz">Alt/Az</button>
+          </div>
+          <div class="ctrl-row goto-mode" data-goto-mode="target">
+            <input id="in-target" type="text" placeholder="M42, NGC7789…">
+            <button id="btn-resolve" class="btn btn-go">GoTo</button>
+          </div>
+          <div class="ctrl-row goto-mode" data-goto-mode="radec" hidden>
+            <input id="in-ra" type="text" placeholder="RA (hh:mm:ss)">
+            <input id="in-dec" type="text" placeholder="DEC (±dd:mm:ss)">
+            <button id="btn-goto-radec" class="btn btn-go">GoTo</button>
+          </div>
+          <div class="ctrl-row goto-mode" data-goto-mode="altaz" hidden>
+            <input id="in-alt" type="number" placeholder="ALT°" min="0" max="89" step="0.1">
+            <input id="in-az" type="number" placeholder="AZ°" min="0" max="360" step="0.1">
+            <button id="btn-goto" class="btn btn-go">GoTo</button>
+          </div>
+          <div class="resolve-line" id="resolve-line"></div>
         <div class="jog-pad">
           <span></span>
           <button class="btn jog" data-jog="N">▲</button>
           <span></span>
           <button class="btn jog" data-jog="W">◀</button>
-          <select id="jog-step" title="조그 스텝(″)">
-            <option value="5">5″</option>
-            <option value="10" selected>10″</option>
-            <option value="30">30″</option>
-            <option value="60">1′</option>
-            <option value="300">5′</option>
-            <option value="1800">30′</option>
-          </select>
+          <span></span>
           <button class="btn jog" data-jog="E">▶</button>
           <span></span>
           <button class="btn jog" data-jog="S">▼</button>
           <span></span>
         </div>
-        <div class="ctrl-row">
-          <button id="btn-tracking" class="btn">Tracking</button>
-          <button id="btn-stop" class="btn btn-danger">STOP</button>
-        </div>
-        <div class="ctrl-row" id="park-row">
-          <button id="btn-park" class="btn">Park</button>
-          <button id="btn-unpark" class="btn">Unpark</button>
-          <button id="btn-home" class="btn">Home</button>
-          <button id="btn-setpark" class="btn" title="현재 위치를 파킹 위치로 저장">Set Park</button>
+          <div class="m-rate">
+            <span>조그 속도</span>
+            <div class="seg" id="m-rate-seg">
+              <button class="seg-btn" data-rate="slow">느림</button>
+              <button class="seg-btn active" data-rate="normal">보통</button>
+              <button class="seg-btn" data-rate="fast">빠름</button>
+            </div>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-tracking" class="btn">Tracking</button>
+            <button id="btn-stop" class="btn btn-danger">■ STOP</button>
+          </div>
+          <div class="ctrl-row mount-park" id="park-row">
+            <button id="btn-park" class="btn">Park</button>
+            <button id="btn-unpark" class="btn">Unpark</button>
+            <button id="btn-home" class="btn btn-sm">Home</button>
+            <button id="btn-setpark" class="btn btn-sm" title="현재 위치를 파킹 위치로 저장">Set Park</button>
+          </div>
         </div>
       </section>
       </div>
@@ -182,37 +196,43 @@
       <div class="muuri-item w6" data-panel="camera">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">카메라</span><span class="card-tag conn" id="conn-camera">CAMERA</span></div>
-        <div class="kv"><span>CCD 온도</span><b class="accent" id="c-temp">—</b></div>
-        <div class="kv"><span>상태</span><b id="c-state">—</b></div>
-        <div class="kv"><span>현재 필터</span><b id="c-filter">—</b></div>
-        <div class="ctrl-row">
-          <select id="sel-filter"></select>
-          <button id="btn-filter" class="btn">필터 이동</button>
+        <!-- monitor: CCD 온도 hero -->
+        <div class="hero"><b id="c-temp">—</b></div>
+        <div class="cam-sub">상태 <b id="c-state">—</b> · 필터 <b id="c-filter">—</b></div>
+        <!-- control zone -->
+        <div class="zone-act">
+          <div class="ctrl-row">
+            <select id="sel-filter"></select>
+            <button id="btn-filter" class="btn">필터 이동</button>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-cooler" class="btn">쿨러 ON/OFF</button>
+            <input id="c-setpoint" type="number" placeholder="설정 °C" step="1" style="max-width:84px">
+          </div>
+          <div class="cooler-ramp" id="c-cooler-ramp" hidden></div>
+          <div class="cap-form">
+            <label>노출 (s) <input id="cap-exp" type="number" value="2.0" step="0.1" min="0"></label>
+            <label>타입
+              <select id="cap-type">
+                <option>LIGHT</option><option>FLAT</option>
+                <option>DARK</option><option>BIAS</option>
+              </select>
+            </label>
+            <label>장수 (0=∞) <input id="cap-count" type="number" value="5" min="0"></label>
+            <label>간격 (s) <input id="cap-interval" type="number" value="1.0" step="0.1" min="0"></label>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-cap-once" class="btn btn-go">● 촬영</button>
+            <button id="btn-cap-loop" class="btn">▶ 연속</button>
+            <button id="btn-cap-stop" class="btn btn-danger" disabled>■</button>
+            <button id="btn-autosave" class="btn" title="FITS 자동 저장">💾</button>
+          </div>
+          <div class="result-strip">
+            <div class="rs-tile"><span>캡처</span><b id="cap-state">idle</b></div>
+            <div class="rs-tile"><span>중앙값</span><b id="cap-median">—</b></div>
+            <div class="rs-tile"><span>저장</span><b id="cap-file" class="small">—</b></div>
+          </div>
         </div>
-        <div class="ctrl-row">
-          <button id="btn-cooler" class="btn">쿨러 ON/OFF</button>
-          <input id="c-setpoint" type="number" placeholder="설정 °C" step="1" style="max-width:84px">
-        </div>
-        <div class="cap-form">
-          <label>노출 (s) <input id="cap-exp" type="number" value="2.0" step="0.1" min="0"></label>
-          <label>타입
-            <select id="cap-type">
-              <option>LIGHT</option><option>FLAT</option>
-              <option>DARK</option><option>BIAS</option>
-            </select>
-          </label>
-          <label>장수 (0=∞) <input id="cap-count" type="number" value="5" min="0"></label>
-          <label>간격 (s) <input id="cap-interval" type="number" value="1.0" step="0.1" min="0"></label>
-        </div>
-        <div class="ctrl-row">
-          <button id="btn-cap-once" class="btn btn-go">● 촬영</button>
-          <button id="btn-cap-loop" class="btn">▶ 연속</button>
-          <button id="btn-cap-stop" class="btn btn-danger" disabled>■</button>
-          <button id="btn-autosave" class="btn" title="FITS 자동 저장">💾</button>
-        </div>
-        <div class="kv"><span>캡처</span><b id="cap-state">idle</b></div>
-        <div class="kv"><span>직전 중앙값</span><b id="cap-median">—</b></div>
-        <div class="kv"><span>저장</span><b id="cap-file" class="small">—</b></div>
       </section>
       </div>
 
@@ -220,19 +240,33 @@
       <div class="muuri-item w6" data-panel="focuser">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">포커서</span><span class="card-tag conn" id="conn-focuser">FOCUSER</span></div>
-        <div class="kv"><span>위치</span><b class="accent" id="f-pos">—</b></div>
-        <div class="kv"><span>이동 중</span><b id="f-moving">—</b></div>
-        <div class="kv"><span>온도</span><b id="f-temp">—</b></div>
+        <!-- hero: 위치 (이 패널의 주인공 숫자) -->
+        <div class="hero"><b id="f-pos">—</b><span class="hero-u">steps</span></div>
+        <div class="foc-sub">이동 <b id="f-moving">—</b> · 온도 <b id="f-temp">—</b></div>
         <div class="f-bar"><div class="f-bar-fill" id="f-bar"></div></div>
-        <div class="ctrl-row">
-          <input id="f-target" type="number" placeholder="목표 스텝" min="0">
-          <button id="btn-f-go" class="btn">이동</button>
-        </div>
-        <div class="ctrl-row f-nudge">
-          <button class="btn" data-fn="-1000">−1000</button>
-          <button class="btn" data-fn="-100">−100</button>
-          <button class="btn" data-fn="100">+100</button>
-          <button class="btn" data-fn="1000">+1000</button>
+        <div class="zone-act">
+          <div class="ctrl-row">
+            <input id="f-target" type="number" placeholder="목표 스텝" min="0">
+            <button id="btn-f-go" class="btn btn-go">이동</button>
+          </div>
+          <div class="ctrl-row f-nudge" id="f-nudge">
+            <button class="btn" data-fn="-1000">−1000</button>
+            <button class="btn" data-fn="-100">−100</button>
+            <button class="btn" data-fn="100">+100</button>
+            <button class="btn" data-fn="1000">+1000</button>
+          </div>
+          <div class="f-rate">
+            <span>유지 속도</span>
+            <div class="seg" id="f-rate-seg">
+              <button class="seg-btn" data-rate="320">느림</button>
+              <button class="seg-btn active" data-rate="180">보통</button>
+              <button class="seg-btn" data-rate="90">빠름</button>
+            </div>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-f-stop" class="btn btn-danger">■ 정지</button>
+            <button id="btn-f-home" class="btn">⌂ 홈</button>
+          </div>
         </div>
       </section>
       </div>
@@ -283,9 +317,9 @@
       <div class="muuri-item w6" data-panel="weather">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">기상</span><span class="card-tag conn" id="conn-weather">WEATHER</span></div>
-        <div class="spark-row"><span class="sl">기온</span><canvas id="spark-temp"></canvas><span class="sv" id="w-temp">—</span></div>
-        <div class="spark-row"><span class="sl">습도</span><canvas id="spark-hum"></canvas><span class="sv" id="w-hum">—</span></div>
-        <div class="spark-row"><span class="sl">풍속</span><canvas id="spark-wind"></canvas><span class="sv" id="w-wind">—</span></div>
+        <div class="spark-row"><span class="sl">기온</span><canvas id="spark-temp" class="js-c-sp-temp"></canvas><span class="sv" id="w-temp">—</span></div>
+        <div class="spark-row"><span class="sl">습도</span><canvas id="spark-hum" class="js-c-sp-hum"></canvas><span class="sv" id="w-hum">—</span></div>
+        <div class="spark-row"><span class="sl">풍속</span><canvas id="spark-wind" class="js-c-sp-wind"></canvas><span class="sv" id="w-wind">—</span></div>
         <div class="kv" style="margin-top:10px"><span>이슬점</span><b id="w-dew">—</b></div>
         <div class="kv"><span>풍향</span><b id="w-winddir">—</b></div>
         <div class="kv"><span>운량 지수</span><b id="w-cloud">—</b></div>
@@ -382,7 +416,7 @@
       <div class="muuri-item w12" data-panel="timeline">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">야간 타임라인</span><span class="card-tag">NIGHT TIMELINE · KST</span></div>
-        <canvas id="timeline-canvas"></canvas>
+        <canvas id="timeline-canvas" class="js-c-tl"></canvas>
         <div class="tl-legend">
           <span><i style="background:#ffd884"></i> 태양</span>
           <span><i style="background:#4cc9f0"></i> 대상 <b id="tl-target">—</b></span>
@@ -456,6 +490,15 @@
       <div class="muuri-item w8" data-panel="connections">
       <section class="muuri-item-content card">
         <div class="card-head"><span class="card-title">장비 연결</span><span class="card-tag sys">DEVICES</span></div>
+        <div class="conn-toolbar">
+          <span class="ct-label">마스터</span>
+          <div class="seg" id="master-seg">
+            <button class="seg-btn" data-mode="real">Real</button>
+            <button class="seg-btn" data-mode="sim">Sim</button>
+          </div>
+          <button class="btn btn-go" id="btn-connect-all">전체 연결</button>
+          <button class="btn" id="btn-disconnect-all">전체 해제</button>
+        </div>
         <div class="conn-list" id="conn-list"></div>
         <div class="drawer-note devmode-only">
           드롭다운이 비어 있으면 ASCOM Platform / pywin32가 없거나 비-Windows 환경입니다.
@@ -491,6 +534,12 @@
         <div class="dev-dev"><div class="nm">현재 모드</div><span class="dl" id="set-mode">—</span></div>
         <div class="dev-dev"><div class="nm">항성시 LST</div><span class="dl" id="set-lst">—</span></div>
         <div class="dev-dev"><div class="nm">박명 상태</div><span class="dl" id="set-phase">—</span></div>
+        <div class="sysres">
+          <div class="dev-dev"><div class="nm">버전</div><span class="dl" id="sys-ver">—</span></div>
+          <div class="dev-dev"><div class="nm">업타임</div><span class="dl" id="sys-uptime">—</span></div>
+          <div class="dev-dev"><div class="nm">디스크 여유</div><span class="dl" id="sys-disk">—</span></div>
+          <div class="f-bar" style="margin-top:6px"><div class="f-bar-fill" id="sys-disk-bar"></div></div>
+        </div>
       </section>
       </div>
 
@@ -542,6 +591,6 @@
 
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
-<script src="/static/app.js?v=110"></script>
+<script src="/static/app.js?v=133"></script>
 </body>
 </html>

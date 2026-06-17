@@ -46,6 +46,9 @@ class StatusSampler:
         self.capture_status = lambda: {"active": False, "state": "idle"}
         self.orchestrator_status = lambda: {"running": False, "phase": "idle"}
         self.forge_status = lambda: {"enabled": False}
+        self.cooler_status = lambda: {"mode": "idle", "ramping": False}
+        # 쿨러 램프 틱(주입형) — 매 스냅샷마다 호출(safety_actuator와 동형). max ΔT 거버너.
+        self.cooler_tick: Any = None
         # 안전 액추에이터(주입형) — 매 스냅샷마다 호출. 샘플러는 '판정'만 하고
         # 실제 '행동'(EMERGENCY_CLOSE→돔 닫기/경보, 돔 슬레이빙)은 여기 위임.
         self.safety_actuator: Any = None
@@ -113,6 +116,12 @@ class StatusSampler:
                         await self.safety_actuator(snap)
                     except Exception:
                         self.events.log("status", "안전 액추에이터 오류:\n"
+                                        f"{traceback.format_exc()}", "error")
+                if self.cooler_tick is not None:
+                    try:
+                        await self.cooler_tick(snap)
+                    except Exception:
+                        self.events.log("status", "쿨러 램프 틱 오류:\n"
                                         f"{traceback.format_exc()}", "error")
                 now = time.time()
                 if now - self._last_weather_db >= 30.0:
@@ -323,6 +332,7 @@ class StatusSampler:
             "capture": capture,
             "orchestrator": orchestrator,
             "forge": self.forge_status(),
+            "cooler": self.cooler_status(),
             "telemetry_last": flat_telemetry,
             "defaults": {
                 "autoflat": self.cfg.get("autoflat", {}) or {},

@@ -15,6 +15,7 @@ from typing import Callable
 import numpy as np
 
 from .base import (
+    JOG_DEADMAN_S,
     CameraDriver, CameraStatus, DomeDriver, DomeStatus,
     FilterStatus, FilterWheelDriver,
     FocuserDriver, FocuserStatus, MountDriver, MountStatus,
@@ -62,6 +63,9 @@ class SimMount(MountDriver):
         self._track_radec: tuple[float, float] | None = None  # 트래킹 중 고정 RA/Dec
         # 슬루: (t0, dur, a0, z0, a1, z1) | None
         self._slew: tuple[float, float, float, float, float, float] | None = None
+        # 연속 조그: (axis, rate_deg_s, t_last) | None — status() 폴마다 속도 적분.
+        self._jog: tuple[int, float, float] | None = None
+        self._jog_deadline: float | None = None   # monotonic — keepalive 끊기면 자동 정지
         self._at_park = False
         self._park_altaz = (0.0, 90.0)    # 기본 파킹 위치 (set_park로 변경 가능)
         self._home_altaz = (45.0, 0.0)
@@ -76,6 +80,16 @@ class SimMount(MountDriver):
     def _current_altaz(self) -> tuple[float, float]:
         """슬루/트래킹을 반영한 현재 alt/az. 슬루 완료 시 상태를 정착시킨다."""
         from ..core import ephemeris
+        if self._jog is not None:   # 연속 조그 — 폴 간격만큼 속도 적분 (슬루보다 우선)
+            axis, rate, t_last = self._jog
+            now = time.time()
+            dt = now - t_last
+            if axis == 1:           # secondary = 고도
+                self._alt = max(-5.0, min(89.5, self._alt + rate * dt))
+            else:                   # primary = 방위
+                self._az = (self._az + rate * dt) % 360.0
+            self._jog = (axis, rate, now)
+            return self._alt, self._az
         if self._slew is not None:
             t0, dur, a0, z0, a1, z1 = self._slew
             f = min(1.0, max(0.0, (time.time() - t0) / dur))
@@ -96,6 +110,9 @@ class SimMount(MountDriver):
     def status(self) -> MountStatus:
         from ..core import ephemeris
         with self._lock:
+            if (self._jog is not None and self._jog_deadline is not None
+                    and time.monotonic() > self._jog_deadline):
+                self._settle_jog()      # keepalive 끊김 → 안전 정지
             slewing = self._slew is not None
             alt, az = self._current_altaz()
             ra, dec = ephemeris.altaz_to_radec(alt, az, self._lat, self._lst_fn())
@@ -108,9 +125,21 @@ class SimMount(MountDriver):
                 device_name="Sim Telescope",
             )
 
+    def _settle_jog(self) -> None:
+        """조그 종료 — 현재(적분된) 위치를 정착시키고, 트래킹 중이면 그 위치로 재고정."""
+        from ..core import ephemeris
+        self._alt, self._az = self._current_altaz()
+        self._jog = None
+        self._jog_deadline = None
+        if self._tracking:
+            self._track_radec = ephemeris.altaz_to_radec(
+                self._alt, self._az, self._lat, self._lst_fn())
+
     def _begin_slew(self, alt1: float, az1: float, min_dur: float = 2.0) -> None:
         a0, z0 = self._current_altaz()
         self._alt, self._az = a0, z0
+        self._jog = None          # 슬루(goto/park/home)는 진행 중 조그를 덮어쓴다
+        self._jog_deadline = None
         self._track_radec = None  # 정착 후 재고정
         self._at_park = False     # 움직이면 파킹 해제 (park()는 슬루 뒤 다시 True)
         dist = math.hypot(alt1 - a0, abs(self._az_delta(z0, az1)))
@@ -151,8 +180,36 @@ class SimMount(MountDriver):
         with self._lock:
             self._alt, self._az = self._current_altaz()
             self._slew = None
+            self._jog = None
+            self._jog_deadline = None
             self._tracking = False
             self._track_radec = None
+
+    def move_axis(self, axis: int, rate_deg_s: float) -> None:
+        with self._lock:
+            if float(rate_deg_s) == 0.0:        # 그 축 정지 → 위치 정착(+트래킹 재고정)
+                if self._jog is not None:
+                    self._settle_jog()
+                return
+            # 새 조그 시작 — 현재 위치를 정착시키고 슬루/트래킹 고정 해제
+            self._alt, self._az = self._current_altaz()
+            self._slew = None
+            self._track_radec = None
+            self._at_park = False
+            self._jog = (int(axis), float(rate_deg_s), time.time())
+            self._jog_deadline = time.monotonic() + JOG_DEADMAN_S
+
+    def jog_keepalive(self) -> None:
+        with self._lock:
+            if self._jog is not None:
+                self._jog_deadline = time.monotonic() + JOG_DEADMAN_S
+
+    def capabilities(self) -> dict:
+        return {
+            "can_move_axis_primary": True,
+            "can_move_axis_secondary": True,
+            "jog_rates": {"slow": 0.5, "normal": 2.0, "fast": 6.0},   # deg/s
+        }
 
     def park(self) -> None:
         with self._lock:
@@ -190,6 +247,11 @@ class SimFilterWheel(FilterWheelDriver):
         return FilterStatus(connected=self._connected, position=self._pos,
                             name=name, names=list(self._names),
                             device_name="Sim Filter Wheel")
+
+    def capabilities(self) -> dict:
+        return {"names": list(self._names),
+                "focus_offsets": [0] * len(self._names),
+                "slot_count": len(self._names)}
 
     def set_position(self, index: int) -> None:
         if not 0 <= index < len(self._names):
@@ -234,6 +296,13 @@ class SimCamera(CameraDriver):
         return CameraStatus(connected=self._connected, ccd_temp_c=self._temp,
                             cooler_on=self._cooler, state=self._state,
                             detail="", device_name="Sim Camera")
+
+    def capabilities(self) -> dict:
+        return {"gain_min": 0, "gain_max": 300, "offset_min": 0, "offset_max": 255,
+                "readout_modes": ["High Gain DR", "Low Gain HC"],
+                "can_set_ccd_temperature": True,
+                "exposure_min_s": 0.001, "exposure_max_s": 3600.0,
+                "pixel_size_um": 3.76}
 
     def expose(self, seconds: float, light: bool = True) -> np.ndarray:
         self._state = "exposing"
@@ -293,10 +362,25 @@ class SimFocuser(FocuserDriver):
                 device_name="Sim Focuser",
             )
 
+    def capabilities(self) -> dict:
+        return {"max_step": self._max, "step_size_um": 1.0,
+                "temp_comp_available": False, "unit": "steps",
+                "can_halt": True, "can_home": True}
+
     def move_to(self, position: int) -> None:
         with self._lock:
             self._tick()
             self._target = float(max(0, min(self._max, int(position))))
+
+    def halt(self) -> None:
+        with self._lock:
+            self._tick()
+            self._target = self._pos   # 현재 위치에 멈춤
+
+    def home(self) -> None:
+        with self._lock:
+            self._tick()
+            self._target = 0.0         # 홈 = 0 스텝
 
 
 class SimWeather(WeatherDriver):

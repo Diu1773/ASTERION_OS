@@ -21,10 +21,12 @@ from pydantic import BaseModel
 
 from . import __version__
 from .camera.capture import CaptureService
+from .camera.cooler import CoolerController
 from .config import Config
 from .core import ephemeris
 from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
+from .core.focus_offset import apply_filter_focus_offset
 from .archive import ArchiveRecovery
 from .core.ontology import (
     ActionLog, Db, Frame, ObservationSession, WeatherRecord, set_current_site,
@@ -116,6 +118,11 @@ class JogReq(BaseModel):
     arcsec: float = 10.0
 
 
+class MoveAxisReq(BaseModel):
+    direction: str            # N | S | E | W
+    rate: str = "normal"      # slow | normal | fast (서버가 caps로 deg/s 해석)
+
+
 class FocuserMoveReq(BaseModel):
     position: int
 
@@ -146,8 +153,15 @@ class DeviceConfigReq(BaseModel):
     backend: str | None = None  # "sim" | "ascom" | "pwi4"
 
 
+class SetupConfigReq(BaseModel):
+    device: str
+    setup: dict | None = None   # 그 장비 Setup 섹션 부분/전체 패치 (DEVICE_SETUP_CONTRACT §3)
+
+
 def create_app() -> FastAPI:
     cfg = Config.load(os.environ.get("ASTERION_CONFIG"))
+    import time as _time
+    app_start = _time.monotonic()   # 업타임 기준 (/api/sysinfo)
     # 사이트 식별자 — 모든 INSERT의 site 컬럼 기본값에 반영(멀티사이트 프리베이크). DB 쓰기 전에.
     set_current_site(str(cfg.get("site.name", "default")))
     lat = float(cfg.get("site.latitude", 36.6))
@@ -216,6 +230,11 @@ def create_app() -> FastAPI:
                             if orch.running() else None),
         preview_cb=publish_preview)
     sampler.capture_status = capture.status_dict
+    # 쿨러 램프 거버너 — setup.camera.max_dt_c(°C/min)대로 쿨다운/웜업 속도 제한(센서 보호).
+    # 틱은 샘플러 1Hz 루프가 구동, 상태는 /api/status snapshot.cooler로 노출.
+    cooler = CoolerController(cfg, drivers, events)
+    sampler.cooler_status = cooler.status_dict
+    sampler.cooler_tick = cooler.tick
     # Orchestrator — 승인된 ObservationPlan을 표준 과학 시퀀스로 실행(Ph7). 안전 게이트는
     # State Store의 safety 스냅샷을 소비하고, plate-solve/autofocus는 SIM 후크를 주입한다.
     # (real 모드용 실제 솔버/AF로 교체 전까지 SIM 후크는 즉시성공 — PLAN 결정 로그 참조.)
@@ -263,7 +282,9 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         events.attach_loop(asyncio.get_running_loop())
-        await conn.connect_all()
+        # 장비 연결은 백그라운드로 — 한 장비가 꺼져있거나 응답이 없어도 서버 기동(포트 bind)·
+        # 대시보드를 막지 않는다(관측 OS 견고성). 장비는 연결되는 대로 /api/status에 반영.
+        app.state.connect_task = asyncio.create_task(conn.connect_all())
         sampler.start()
         watchdog.start()
         events.log("system",
@@ -319,6 +340,21 @@ def create_app() -> FastAPI:
     @app.get("/api/status")
     async def api_status():
         return sampler.snapshot or {"mode": "starting"}
+
+    @app.get("/api/sysinfo")
+    async def api_sysinfo():
+        """런타임 자원 — 버전·업타임·디스크 여유(이미지 저장용). 1Hz status와 분리."""
+        import shutil
+        disk = None
+        try:
+            du = shutil.disk_usage(str(cfg.data_dir))
+            disk = {"free_gb": round(du.free / 1e9, 1),
+                    "used_pct": round((du.total - du.free) / du.total * 100)}
+        except Exception:
+            pass
+        return {"version": __version__,
+                "uptime_s": round(_time.monotonic() - app_start),
+                "disk": disk}
 
     @app.get("/api/logs")
     async def api_logs():
@@ -399,6 +435,59 @@ def create_app() -> FastAPI:
                                                      dra, ddec))
         return {"ok": True}
 
+    # 연속 조그(PWI4식 MoveAxis) — 버튼 유지 동안 축을 속도 슬루. 방향→축+부호는
+    # 서버가 단일 소스로 잡는다(N/S=secondary, E/W=primary). rate(느림/보통/빠름)는
+    # 가대 capabilities의 jog_rates(deg/s)로 해석; 없으면 보수적 기본값.
+    _JOG_RATE_FALLBACK = {"slow": 0.3, "normal": 1.5, "fast": 4.0}   # deg/s
+
+    @app.post("/api/actions/mount/move_axis")
+    async def mount_move_axis(req: MoveAxisReq):
+        d = req.direction.upper()
+        if d not in ("N", "S", "E", "W"):
+            raise HTTPException(400, "direction은 N/S/E/W")
+        axis = 1 if d in ("N", "S") else 0          # secondary=Dec/Alt, primary=RA/Az
+        sign = 1.0 if d in ("N", "E") else -1.0
+        cm = conn.caps("mount")
+        axis_ok = (cm.get("can_move_axis_secondary") if axis == 1
+                   else cm.get("can_move_axis_primary"))
+        if not axis_ok:
+            raise HTTPException(400, "이 가대는 해당 축의 연속 조그를 지원하지 않습니다")
+        rates = cm.get("jog_rates") or _JOG_RATE_FALLBACK
+        rate_deg_s = float(rates.get(req.rate, rates.get("normal", 1.5))) * sign
+        mount = drivers["mount"]
+        await bus.run("mount_move_axis", actor="operator",
+                      params={"direction": d, "rate": req.rate,
+                              "deg_s": round(rate_deg_s, 4), "axis": axis},
+                      func=lambda: asyncio.to_thread(mount.move_axis, axis, rate_deg_s))
+        return {"ok": True, "axis": axis, "deg_s": round(rate_deg_s, 4)}
+
+    @app.post("/api/actions/mount/jog_keepalive")
+    async def mount_jog_keepalive():
+        # 데드맨 재무장 — 고빈도라 감사로그를 남기지 않는다(bus.run 미경유).
+        mount = drivers["mount"]
+        ka = getattr(mount, "jog_keepalive", None)
+        if callable(ka):
+            await asyncio.to_thread(ka)
+        return {"ok": True}
+
+    @app.post("/api/actions/mount/jog_stop")
+    async def mount_jog_stop():
+        cm = conn.caps("mount")
+        # 조그 능력이 없으면 멈출 것도 없다 → 즉시 ok. (미연결/팬텀 ASCOM 가대에서
+        # COM 워커가 묶여 정지 호출이 블로킹되는 것을 방지 — 안전 정지 경로는 막히면 안 됨.)
+        if not (cm.get("can_move_axis_primary") or cm.get("can_move_axis_secondary")):
+            return {"ok": True}
+        mount = drivers["mount"]
+        def _stop_both():
+            for ax in (0, 1):
+                try:
+                    mount.move_axis(ax, 0.0)
+                except Exception:
+                    pass
+        await bus.run("mount_jog_stop", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(_stop_both))
+        return {"ok": True}
+
     @app.post("/api/actions/mount/tracking")
     async def mount_tracking(req: TrackingReq):
         mount = drivers["mount"]
@@ -453,20 +542,31 @@ def create_app() -> FastAPI:
         names = status.names
         if not 0 <= req.position < len(names):
             raise HTTPException(400, f"필터 위치 0~{len(names) - 1} 범위")
+        prev = status.position   # 교체 직전 필터 — 포커스 오프셋 델타의 기준
         await bus.run("filter_set", actor="operator",
                       params={"position": req.position,
                               "filter": names[req.position]},
                       func=lambda: asyncio.to_thread(fw.set_position, req.position))
-        return {"ok": True}
+        # 필터별 포커스 오프셋 자동 보정 (best-effort — 포커서 없거나 실패해도 교체는 성공)
+        applied = None
+        try:
+            applied = await apply_filter_focus_offset(
+                cfg, drivers,
+                lambda name, params, fn: bus.run(name, actor="operator",
+                                                 params=params, func=fn),
+                prev, req.position)
+        except Exception:
+            pass
+        return {"ok": True, "focus_offset": applied}
 
     @app.post("/api/actions/camera/cooler")
     async def camera_cooler(req: CoolerReq):
-        cam = drivers["camera"]
+        # 쿨러 램프 거버너 경유 — max_dt_c 설정 시 점진(쿨다운/웜업), 미설정 시 즉시.
         await bus.run("camera_cooler", actor="operator",
                       params={"on": req.on, "setpoint": req.setpoint},
-                      func=lambda: asyncio.to_thread(cam.set_cooler, req.on,
+                      func=lambda: asyncio.to_thread(cooler.request, req.on,
                                                      req.setpoint))
-        return {"ok": True}
+        return {"ok": True, "cooler": cooler.status_dict()}
 
     @app.post("/api/actions/camera/capture")
     async def camera_capture(req: CaptureStartReq):
@@ -510,6 +610,24 @@ def create_app() -> FastAPI:
                       params={"delta": int(req.delta), "target": target},
                       func=lambda: asyncio.to_thread(foc.move_to, target))
         return {"ok": True, "target": target}
+
+    @app.post("/api/actions/focuser/stop")
+    async def focuser_stop():
+        foc = drivers["focuser"]
+        if not hasattr(foc, "halt"):
+            raise HTTPException(400, "이 포커서는 정지를 지원하지 않습니다")
+        await bus.run("focuser_stop", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(foc.halt))
+        return {"ok": True}
+
+    @app.post("/api/actions/focuser/home")
+    async def focuser_home():
+        foc = drivers["focuser"]
+        if not hasattr(foc, "home"):
+            raise HTTPException(400, "이 포커서는 홈을 지원하지 않습니다")
+        await bus.run("focuser_home", actor="operator", params={},
+                      func=lambda: asyncio.to_thread(foc.home))
+        return {"ok": True}
 
     # ---------- 돔 ----------
 
@@ -672,6 +790,17 @@ def create_app() -> FastAPI:
         events.log("system", f"{REGISTRY[req.device].label} 설정 저장")
         return conn.describe()
 
+    @app.post("/api/system/setup-config")
+    async def system_setup_config(req: SetupConfigReq):
+        """per-device Setup(필터표·게인·Max ΔT 등) 저장 → config.local.json setup.{key}.*"""
+        _device_or_404(req.device)
+        try:
+            conn.set_setup(req.device, req.setup or {})
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        events.log("system", f"{REGISTRY[req.device].label} Setup 저장")
+        return conn.describe()
+
     @app.post("/api/system/setup")
     async def system_setup(req: DeviceReq):
         """ASCOM 드라이버 설정창(SetupDialog) — 포트 등 (NINA의 Properties 격)."""
@@ -708,6 +837,20 @@ def create_app() -> FastAPI:
         await bus.run("device_reconnect", actor="operator",
                       params={"device": req.device},
                       func=lambda: conn.reconnect(req.device, propagate=True),
+                      preconditions=conn_preconditions())
+        return conn.describe()
+
+    @app.post("/api/system/connect-all")
+    async def system_connect_all():
+        await bus.run("device_connect_all", actor="operator", params={},
+                      func=lambda: conn.connect_all(),
+                      preconditions=conn_preconditions())
+        return conn.describe()
+
+    @app.post("/api/system/disconnect-all")
+    async def system_disconnect_all():
+        await bus.run("device_disconnect_all", actor="operator", params={},
+                      func=lambda: conn.disconnect_all(),
                       preconditions=conn_preconditions())
         return conn.describe()
 

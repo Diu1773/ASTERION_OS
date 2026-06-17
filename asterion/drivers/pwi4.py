@@ -74,7 +74,7 @@ class Pwi4Mount(MountDriver):
             az_degs=self._f(d, "mount.azimuth_degs"),
             slewing=self._b(d, "mount.is_slewing"),
             tracking=self._b(d, "mount.is_tracking"),
-            detail="PWI4",
+            detail="",   # 정상 detail은 비움 — 프로토콜/어댑터는 웹에 노출하지 않는다
             device_name="PlaneWave (PWI4)",
         )
 

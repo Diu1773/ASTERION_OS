@@ -25,6 +25,12 @@ def _round(v: float | None, n: int) -> float | None:
     return None if v is None else round(v, n)
 
 
+# 연속 조그(MoveAxis) 데드맨 — 클라이언트 keepalive가 이 시간 안에 안 오면 드라이버가
+# 축을 0으로 멈춘다(탭 종료·네트워크 단절·pointerup 유실에도 가대가 폭주하지 않게).
+# 프론트 keepalive(0.5s)의 ~3배 여유 → 일시적 지연으로 헛멈춤이 나지 않는다.
+JOG_DEADMAN_S = 1.6
+
+
 @dataclass
 class MountStatus:
     connected: bool = False
@@ -179,6 +185,13 @@ class MountDriver(abc.ABC):
 
     @abc.abstractmethod
     def stop(self) -> None: ...
+
+    # 연속 조그(velocity slew) — 기본 미지원. 지원 드라이버(sim/ascom)가 오버라이드.
+    # axis: 0=primary(RA/Az), 1=secondary(Dec/Alt). rate_deg_s: 부호=방향, 0=그 축 정지.
+    # PWI4 등 MoveAxis가 없는 백엔드는 이 기본을 상속 → capabilities()에 can_move_axis가
+    # 없어 프론트가 조그 패드를 '비활성(숨김 아님)'으로 표시한다.
+    def move_axis(self, axis: int, rate_deg_s: float) -> None:
+        raise NotImplementedError("이 마운트는 연속 조그를 지원하지 않습니다")
 
     # 파킹/홈 — 기본은 미지원. 지원 드라이버(sim/ascom)가 오버라이드한다.
     def park(self) -> None:

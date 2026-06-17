@@ -52,6 +52,15 @@ class DriverContext:
 
     @property
     def filter_names(self) -> list[str]:
+        # Setup(운영자 필터표 setup.filterwheel.filters)이 있으면 그 이름을 우선 사용,
+        # 없으면 config.toml [filters].names. (DEVICE_SETUP_CONTRACT §8 — 마이그레이션)
+        setup = self.cfg.get("setup.filterwheel.filters", None)
+        if isinstance(setup, list):
+            names = [str(f.get("name", "")).strip()
+                     for f in setup if isinstance(f, dict)]
+            names = [n for n in names if n]
+            if names:
+                return names
         return list(self.cfg.get("filters.names", ["B", "V", "R", "I"]))
 
 
@@ -85,8 +94,10 @@ def _sim_camera(ctx: DriverContext):
 
 def _ascom_camera(ctx: DriverContext):
     from .ascom import AscomCamera
+    g = ctx.cfg.get("setup.camera.gain", None)   # Setup 게인 (없으면 드라이버 기본)
     return AscomCamera(str(ctx.cfg.get("drivers.ascom.camera_progid", "")),
-                       saturation=int(ctx.cfg.get("camera.saturation_adu", 65535)))
+                       saturation=int(ctx.cfg.get("camera.saturation_adu", 65535)),
+                       gain=(int(g) if g is not None else None))
 
 
 def _zwo_camera(ctx: DriverContext):
@@ -94,7 +105,8 @@ def _zwo_camera(ctx: DriverContext):
     return ZwoCamera(
         lib_path=str(ctx.cfg.get("drivers.zwo.lib_path", "")),
         camera_index=int(ctx.cfg.get("drivers.zwo.camera_index", 0)),
-        gain=int(ctx.cfg.get("drivers.zwo.gain", 0)),
+        # Setup 게인 우선, 없으면 기존 drivers.zwo.gain (DEVICE_SETUP_CONTRACT §8)
+        gain=int(ctx.cfg.get("setup.camera.gain", ctx.cfg.get("drivers.zwo.gain", 0))),
         saturation=int(ctx.cfg.get("camera.saturation_adu", 65535)),
     )
 
@@ -291,6 +303,9 @@ class ConnectionManager:
         self.cfg = cfg
         self.events = events
         self.drivers: dict[str, Any] = {}
+        # connect 시 1회 읽어 캐시하는 정적 capability(필터 offset·게인범위 등).
+        # 절대 1Hz status에 넣지 않는다(COM 폴링 폭주 방지) — describe()로만 노출.
+        self._caps: dict[str, dict] = {}
         self.ctx = DriverContext(cfg, twilight, sun_alt_fn, lst_fn, self.drivers)
         self._lock = threading.RLock()
         self.build_all()  # 초기 빌드 (연결은 lifespan/connect_all에서)
@@ -314,6 +329,11 @@ class ConnectionManager:
     @property
     def master_mode(self) -> str:
         return str(self.cfg.get("drivers.mode", "sim"))
+
+    def caps(self, key: str) -> dict:
+        """connect 시 캐시된 정적 capability (없으면 {}). 액션 핸들러가 게이팅·
+        파라미터 해석(예: 조그 rate→deg/s)에 쓴다. COM을 건드리지 않는다."""
+        return self._caps.get(key, {})
 
     def selected_backend(self, key: str) -> str:
         """운영자가 REAL용으로 골라둔 백엔드 kind (마스터가 sim이어도 유지).
@@ -354,13 +374,19 @@ class ConnectionManager:
             self.drivers.clear()
             self.drivers.update(new)
             self.drivers["mode"] = self._derive_mode()
+            self._caps.clear()   # 재빌드 = 미연결 → capability 캐시 무효
             for drv in old.values():
                 _safe_close(drv)
         return self.drivers
 
     async def connect_all(self) -> None:
+        # 동시 연결 — 한 장비가 응답을 안 줘도 나머지 장비·서버 기동을 막지 않는다.
+        await asyncio.gather(*(self.connect(key) for key in REGISTRY),
+                             return_exceptions=True)
+
+    async def disconnect_all(self) -> None:
         for key in REGISTRY:
-            await self.connect(key)
+            await self.disconnect(key)
 
     def _rebuild_slot(self, key: str) -> Any:
         """슬롯을 현재 config대로 새(미연결) 인스턴스로 교체하고 옛 것을 돌려준다."""
@@ -369,6 +395,7 @@ class ConnectionManager:
             self.drivers[key] = self._make(key)
             self.drivers["mode"] = self._derive_mode()
             self.connected_at.pop(key, None)
+            self._caps.pop(key, None)   # 슬롯 교체 = 미연결 → capability 무효
         return old
 
     async def _connect_unlocked(self, key: str,
@@ -379,6 +406,14 @@ class ConnectionManager:
         try:
             await asyncio.to_thread(drv.connect)
             self.connected_at[key] = time.time()  # 연결 직후 호밍 유예의 기준 시각
+            capfn = getattr(drv, "capabilities", None)   # connect 시 1회 정적 capability 캐시
+            if callable(capfn):
+                try:
+                    self._caps[key] = await asyncio.to_thread(capfn) or {}
+                except Exception:
+                    self._caps[key] = {}
+            else:
+                self._caps[key] = {}
             self._log(f"{REGISTRY[key].label} 연결 "
                       f"({'SIM' if getattr(drv, 'is_sim', False) else type(drv).__name__})")
         except Exception as exc:  # noqa: BLE001
@@ -493,6 +528,16 @@ class ConnectionManager:
                 raise ValueError(f"{key}: 지원하지 않는 백엔드 '{backend}'")
             self.cfg.set(f"drivers.{key}", backend)
 
+    def set_setup(self, key: str, patch: dict) -> None:
+        """per-device Setup 값을 오버레이 setup.{key}.* 에 저장 (config.toml은 불변).
+        patch = 그 장비 Setup 섹션의 부분/전체 dict (예 {"filters":[...]}, {"gain":5}).
+        최상위 키 병합 — 리스트(필터표)는 통째 교체, 스칼라/dict 키는 갱신."""
+        if key not in REGISTRY:
+            raise ValueError(f"알 수 없는 장비: {key}")
+        cur = dict(self.cfg.get(f"setup.{key}", {}) or {})
+        cur.update(patch or {})
+        self.cfg.set(f"setup.{key}", cur)
+
     def describe(self) -> dict[str, Any]:
         """SYSTEM 탭용 장비 설정/역량 목록. 실시간 연결상태·장비명은
         /api/status 스냅샷에서 가져온다 (여기선 COM을 건드리지 않음).
@@ -514,6 +559,10 @@ class ConnectionManager:
                 "has_url": cfg_kind == "url" and bool(spec.url_key),
                 "progid": str(self.cfg.get(spec.progid_key, "")) if spec.progid_key else "",
                 "url": str(self.cfg.get(spec.url_key, "")) if spec.url_key else "",
+                # Setup(운영자 값) + caps(드라이버가 connect 시 알려준 정적 능력).
+                # 둘 다 정적이라 여기 실어 보냄 — 라이브 상태는 /api/status.
+                "setup": self.cfg.get(f"setup.{key}", {}) or {},
+                "caps": self._caps.get(key, {}),
             })
         return {"mode": self.drivers.get("mode", "sim"),
                 "master_mode": self.master_mode, "devices": devices}

@@ -24,8 +24,9 @@
   --err: #F87171;
   --idle: #8B95A7;
   --violet: #9A8CC4;                     /* 차트 등 다계열에서만 (장식 X) */
-  /* OS 기본 모노 — 도트 박힌 웹폰트 대신 시스템 모노(또렷한 숫자/좌표) */
-  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Consolas, "D2Coding", monospace;
+  /* 숫자/영문 계기 폰트 — IBM Plex Mono(계기·엔지니어링 인상). 시스템 모노는 다크에서
+     너무 얇아 'AI스러운' 인상이라 교체. 미로드 시 시스템 모노로 폴백. 오프라인 대비 로컬 vendoring 권장 */
+  --mono: "B612 Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "D2Coding", monospace;
   /* Pretendard 우선, 없으면 OS 네이티브(San Francisco / Segoe UI / 맑은 고딕) */
   --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
   --radius: 16px;
@@ -76,7 +77,7 @@ body {
 .clocks { display: flex; gap: 18px; margin-left: 10px; }
 .clock { display: flex; flex-direction: column; align-items: flex-start; }
 .clock .lbl { color: var(--faint); font-size: 9px; letter-spacing: 1.5px; }
-.clock .val { font-family: var(--mono); font-size: 15px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+.clock .val { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 
 .spacer { flex: 1; }
 
@@ -273,7 +274,7 @@ body.solo .gt-newwin { display: none; }
 /* 라벨-값을 가깝게(왼쪽 그룹) — 넓은 카드에서 가운데가 텅 비지 않게. 라벨 폭으로 값 정렬. */
 .kv { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 2.5px 0; }
 .kv > span { color: var(--dim); font-size: 12px; min-width: 92px; flex: none; }
-.kv > b { font-family: var(--mono); font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
+.kv > b { font-family: var(--mono); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
 .kv > b.accent { color: var(--text); }
 
 .pills { display: flex; gap: 7px; margin: 10px 0 2px; }
@@ -283,6 +284,53 @@ body.solo .gt-newwin { display: none; }
   transition: .2s;
 }
 .pill.on { color: var(--ok); border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.1); }
+
+/* 가대 패널 애프터 — 계열별 2열 readout · 인라인 상태 · 구역분리 */
+.readouts { display: grid; grid-template-rows: repeat(2, auto); grid-auto-flow: column; column-gap: 22px; row-gap: 4px; }
+.readouts .kv { padding: 0; }
+.readouts .kv > span { min-width: 0; }
+.status-line { display: flex; gap: 14px; margin-top: 9px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .5px; }
+.st-chip { color: var(--faint); }
+.st-chip::before { content: "○ "; }
+.st-chip.on { color: var(--ok); }
+.st-chip.on::before { content: "● "; }
+.zone-act { margin-top: 20px; }
+.goto-seg { margin-bottom: 8px; }
+.goto-mode[hidden] { display: none; }   /* .ctrl-row{display:flex}가 [hidden]을 이기는 것 방지 */
+.mount-park { gap: 8px; flex-wrap: wrap; }
+.sysres { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--edge); }
+/* hero 숫자(포커서 위치·카메라 온도 등 패널 주인공 값) */
+.hero { display: flex; align-items: baseline; gap: 7px; margin-top: 2px; }
+.hero > b { font-family: var(--mono); font-weight: 700; font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text); }
+.hero .hero-u { color: var(--dim); font-size: 12px; }
+.hero .hero-sub { color: var(--dim); font-size: 11px; margin-left: auto; align-self: center; }
+.foc-sub, .cam-sub { color: var(--dim); font-size: 11px; margin-top: 7px; }
+.foc-sub b, .cam-sub b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+/* 결과 3-타일 strip (캡처 상태·중앙값·저장 등 출력값) */
+.result-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge); }
+.rs-tile { background: var(--panel-2); border: 1px solid var(--edge); border-radius: var(--radius-sm); padding: 6px 8px; text-align: center; min-width: 0; }
+.rs-tile > span { display: block; color: var(--dim); font-size: 10px; margin-bottom: 2px; }
+.rs-tile > b { font-family: var(--mono); font-size: 13px; color: var(--text); font-weight: 600; }
+.rs-tile > b.small { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 오토플랫 폼: 숫자 우측정렬(자리수 정렬) — 필터순서(텍스트)는 좌측 유지 */
+.af-form input[type="number"] { text-align: right; }
+/* 버튼 누름 피드백(기본 UX) + 포커서 유지(hold) 상태 표시 + 유지 속도 */
+.btn:active { transform: scale(.96); }
+.f-nudge .btn { touch-action: none; user-select: none; }
+.f-nudge .btn.held { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); transform: scale(.95); }
+.f-rate { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.f-rate > span { color: var(--dim); font-size: 11px; }
+.f-rate .seg { padding: 3px; }
+.f-rate .seg-btn { padding: 4px 11px; font-size: 11px; }
+/* 가대 조그 — 누르고 유지 시 '눌린' 표시 + rate 세그먼트(포커서와 동일 패턴) */
+.jog-pad .btn.jog { touch-action: none; user-select: none; }
+.jog-pad .btn.jog.held { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); transform: scale(.95); }
+.m-rate { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.m-rate > span { color: var(--dim); font-size: 11px; }
+.m-rate .seg { padding: 3px; }
+.m-rate .seg-btn { padding: 4px 11px; font-size: 11px; }
+/* 쿨러 램프(Max ΔT) 진행 표시 — 냉각/웜업 중에만 */
+.cooler-ramp { margin-top: 5px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
 
 /* ---------------- controls ---------------- */
 .ctrl-row { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
@@ -319,7 +367,7 @@ select { color-scheme: dark; }
 
 /* ---------------- sky dome ---------------- */
 .sky-wrap { display: flex; justify-content: center; margin-bottom: 10px; position: relative; }
-#sky-canvas { width: 100%; max-width: 460px; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
+#sky-canvas, .js-c-sky { width: 100%; max-width: 460px; aspect-ratio: 1 / 1; display: block; cursor: crosshair; }
 .sky-flip { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
 .flip-btn {
   background: rgba(12, 15, 22, .7); border: 1px solid var(--edge); color: var(--dim);
@@ -426,7 +474,7 @@ select { color-scheme: dark; }
 .btn-sm { padding: 6px 10px; font-size: 11.5px; }
 
 /* ---------------- night timeline ---------------- */
-#timeline-canvas { width: 100%; height: 180px; display: block; }
+#timeline-canvas, .js-c-tl { width: 100%; height: 180px; display: block; }
 .tl-legend {
   display: flex; gap: 16px; justify-content: center; margin-top: 8px;
   color: var(--dim); font-size: 10.5px; flex-wrap: wrap;
@@ -481,7 +529,7 @@ select { color-scheme: dark; }
 .af-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px 12px; }
 .af-form label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 11px; }
 .af-gauge-col { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-#af-gauge { width: 100%; max-width: 280px; aspect-ratio: 2 / 1.25; }
+#af-gauge, .js-c-gauge { width: 100%; max-width: 280px; aspect-ratio: 2 / 1.25; }
 .af-readout { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
 .af-item { display: flex; flex-direction: column; align-items: center; }
 .af-item span { color: var(--faint); font-size: 9.5px; letter-spacing: .8px; text-transform: uppercase; }
@@ -616,6 +664,30 @@ select { color-scheme: dark; }
 .drawer-label { color: var(--dim); font-size: 11px; letter-spacing: .8px; text-transform: uppercase; margin-bottom: 9px; }
 .drawer-note { color: var(--faint); font-size: 10.5px; margin-top: 10px; line-height: 1.55; }
 
+/* 디바이스 Setup 런처(연결 카드 ⚙) + Setup 드로어 */
+.cd-setup { background: none; border: 1px solid var(--edge); color: var(--dim);
+  border-radius: 7px; font-size: 12px; line-height: 1; padding: 4px 7px; cursor: pointer;
+  flex: none; transition: color .15s, border-color .15s; }
+.cd-setup:hover { color: var(--text); border-color: var(--edge-strong); }
+#setup-body .setup-id { display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; }
+#setup-body .setup-id b { font-family: var(--mono); font-weight: 600; font-size: 12px; }
+#setup-body .setup-id .cd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
+#setup-body .setup-id .cd-dot.on { background: var(--ok); }
+#setup-body .setup-src { margin-left: auto; color: var(--faint); font-size: 10px; }
+.setup-tbl { display: grid; grid-template-columns: 22px minmax(0, 1fr) 54px 50px; gap: 5px 5px; align-items: center; }
+.setup-tbl .sth { color: var(--dim); font-size: 9.5px; letter-spacing: .3px; text-transform: uppercase; }
+.setup-tbl .spos { color: var(--faint); font-family: var(--mono); font-size: 12px; text-align: center; }
+.setup-tbl input { padding: 5px 6px; font-size: 12px; min-width: 0; width: 100%; }
+.setup-tbl .sf-off, .setup-tbl .sf-flat { text-align: right; }
+.setup-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 12px; }
+.setup-field { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 11px; min-width: 0; }
+.setup-field input, .setup-field select { width: 100%; min-width: 0; max-width: 100%; }
+.setup-hint { color: var(--faint); font-weight: 400; font-size: 10px; }
+.setup-na { color: var(--warn); font-weight: 400; font-size: 10px; }
+.setup-field input:disabled, .setup-field select:disabled { opacity: .4; cursor: not-allowed; }
+.setup-foot { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--edge); }
+.setup-path { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+
 .seg { display: flex; background: var(--panel-2); border: 1px solid var(--edge); border-radius: var(--radius-sm); padding: 4px; gap: 4px; }
 .seg-btn {
   flex: 1; padding: 9px; border: none; background: transparent; color: var(--dim);
@@ -658,50 +730,10 @@ select { color-scheme: dark; }
    display(예: .conn-dev-cfg의 flex)를 유지해야 라벨·드롭다운이 안 겹친다. */
 body:not(.devmode) .devmode-only { display: none; }
 
-/* 단일 패널 임베드(?panel=) — 관제 탭 라이브 미러용. 크롬을 숨기고 대상 패널만
-   화면을 채운다. 다른 패널은 .workspace 안에 display:none으로 남아 applyStatus의
-   전역 id 접근을 깨지 않는다. */
-body.panel-solo > .topbar,
-body.panel-solo > .tabbar,
-body.panel-solo > .workspace,
-body.panel-solo > .log-dock { display: none !important; }
-#panel-solo-host { display: none; }
-body.panel-solo { background: transparent; }
-body.panel-solo #panel-solo-host {
-  display: block; position: fixed; inset: 0; padding: 6px; overflow: auto;
-}
-body.panel-solo .solo-panel-item {
-  width: 100% !important; transform: none !important; position: static !important;
-  margin: 0 !important;
-}
-body.panel-solo .solo-panel-item .card { min-height: calc(100vh - 12px); box-sizing: border-box; }
-/* 미러(임베드)는 자연 높이로 — 부모가 iframe을 콘텐츠 높이에 맞춘다(자동 높이) */
-body.panel-solo.mirror-embed .solo-panel-item .card { min-height: 0; }
-body.panel-solo.mirror-embed #panel-solo-host { overflow: hidden; padding: 0; }
-/* 카드 속 카드 방지: 미러 안쪽 패널의 헤더·테두리·배경 제거 → 바깥 래퍼가 카드/헤더 담당 */
-body.panel-solo.mirror-embed .solo-panel-item .card {
-  border: none; background: transparent; box-shadow: none; backdrop-filter: none;
-  border-radius: 0; padding: 4px 8px;
-}
-body.panel-solo.mirror-embed .solo-panel-item .card > .card-head { display: none; }
-/* (미러 Sky viz-fill 제거 — iframe 안 높이 불안정으로 폭주) → 자연 크기 + 돔 max-width만 캡해
-   devices 탭(viz-fill ~360px)과 비슷하게. viz-fill 없이 max-width만이라 루프 없이 안정. */
-body.mirror-embed [data-panel="sky"] #sky-canvas { max-width: 360px; }
-body.panel-solo .card-head { cursor: default; }
-.panel-solo-missing { padding: 20px; color: var(--text); font-family: var(--mono); }
-
-/* 관제 탭 라이브 미러 타일 (iframe 복제) + '+ 패널' 팔레트 */
-.panel-mirror .mirror-body { padding: 0; }
-.mirror-frame {
-  width: 100%; height: 320px; border: 0; display: block; background: transparent;
-}
-/* 관제(MCT) 미러 타일: iframe이 래퍼 박스를 꽉 채움 → 한 패널처럼 (카드 속 카드 X) */
+/* 관제(MCT) 복제 타일 — native 카드 복제(cloneNode)라 device 패널과 동일하게 보이게.
+   카드 패딩 0 + 헤더 자체 여백(원본 콕핏과 동일). 복제본은 읽기전용 모니터링 뷰. */
 .grid-stack .panel-mirror .grid-stack-item-content.card { padding: 0; }
-.grid-stack .panel-mirror .card-head { padding: 6px 12px 7px; }   /* 카드 패딩 0이라 헤더가 자체 여백 */
-.grid-stack .panel-mirror .mirror-body { flex: 1; min-height: 0; }
-.grid-stack .panel-mirror .mirror-frame { height: 100%; }
-/* 드래그/리사이즈 중엔 iframe이 포인터를 먹지 않게 (안 그러면 커서가 미러 위로 가는 순간 드래그 끊김) */
-body.gs-dragging .mirror-frame { pointer-events: none; }
+.grid-stack .panel-mirror .card-head { padding: 6px 12px 7px; }
 .pt-mirror-x { color: var(--err); font-weight: 700; }
 .gt-addpanel { margin-left: 6px; }
 .panel-palette {
@@ -733,6 +765,12 @@ body.gs-dragging .mirror-frame { pointer-events: none; }
 
 /* ---------------- 시스템 탭: 장비 연결 목록 ---------------- */
 .conn-list { display: flex; flex-direction: column; gap: 9px; }
+.conn-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.conn-toolbar .ct-label { color: var(--dim); font-size: 11px; }
+.conn-toolbar #master-seg { padding: 3px; }
+.conn-toolbar .seg-btn { padding: 4px 12px; font-size: 11px; }
+.conn-toolbar .btn { padding: 5px 13px; font-size: 11.5px; flex: none; }
+.conn-toolbar #btn-connect-all { margin-left: auto; }
 .conn-dev {
   background: var(--panel-2); border: 1px solid var(--edge); border-radius: var(--radius-sm);
   padding: 11px 13px;
@@ -810,9 +848,12 @@ body.gs-dragging .mirror-frame { pointer-events: none; }
 }
 .grid-stack .grid-stack-item:hover .ui-resizable-se { border-color: #4DB8FF; }
 /* viz-fill: Sky 돔이 칸 높이에 맞게 줄어든다 (정사각 강제·460px 캡 제거 → drawSky가 min(w,h)로 그림) */
-.grid-stack [data-panel="sky"] .grid-stack-item-content.card { overflow: hidden; }
-.grid-stack [data-panel="sky"] .sky-wrap { flex: 1 1 auto; min-height: 0; margin-bottom: 6px; }
-.grid-stack [data-panel="sky"] #sky-canvas {
+.grid-stack [data-panel="sky"] .grid-stack-item-content.card,
+.grid-stack [data-mirror="sky"] .grid-stack-item-content.card { overflow: hidden; }
+.grid-stack [data-panel="sky"] .sky-wrap,
+.grid-stack [data-mirror="sky"] .sky-wrap { flex: 1 1 auto; min-height: 0; margin-bottom: 6px; }
+.grid-stack [data-panel="sky"] #sky-canvas,
+.grid-stack [data-mirror="sky"] .js-c-sky {
   width: 100%; height: 100%; max-width: none; aspect-ratio: auto;
 }
 /* viz-fill: 프레임 뷰어·임베드(위성·CCTV)가 칸을 채운다 (폭기준 aspect 해제 → 칸 높이로 flex) */

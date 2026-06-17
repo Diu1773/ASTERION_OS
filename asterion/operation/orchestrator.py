@@ -29,6 +29,7 @@ from ..config import Config
 from ..core import fitsio
 from ..core.actions import ActionBus, ActionError
 from ..core.events import EventHub
+from ..core.focus_offset import apply_filter_focus_offset
 from ..core.ontology import (
     Db, Decision, FocusRun, Frame, ObservationSession, QualityMetric,
     TelescopeState, row_to_dict,
@@ -316,14 +317,22 @@ class ObservationOrchestrator:
     async def _do_filter(self, session_id: int, target_name: str, filt: str,
                          exposure: float, count: int, dither: float) -> int:
         fw = self.drivers["filterwheel"]
-        names = (await asyncio.to_thread(fw.status)).names
+        fw_st = await asyncio.to_thread(fw.status)
+        names = fw_st.names
         if filt not in names:
             self.events.log("orchestrator", f"[{filt}] 필터휠에 없음 — 건너뜀", "warn")
             return 0
         idx = names.index(filt)
+        prev = fw_st.position   # 교체 직전 필터 — 포커스 오프셋 델타 기준
         self._set(phase=f"{filt} 필터 이동", filter=filt, frame=0)
         await self._action("filter_set", {"filter": filt, "position": idx},
                            lambda: asyncio.to_thread(fw.set_position, idx))
+        # 필터별 포커스 오프셋 자동 보정 (best-effort)
+        try:
+            await apply_filter_focus_offset(self.cfg, self.drivers,
+                                            self._action, prev, idx)
+        except Exception:
+            self.events.log("orchestrator", "포커스 오프셋 적용 실패 — 건너뜀", "warn")
 
         mount = self.drivers["mount"]
         cam = self.drivers["camera"]

@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .llm import LLMError
+
 DEFAULT_SYSTEM = (
     "당신은 청람천문대 ASTERION OS의 관측 어시스턴트입니다. 도구로 관측소 상태·행성 "
     "위치·관측 계획을 확인하고 실행합니다. 사용자가 천체를 '보여달라'고 하면 먼저 "
@@ -41,23 +43,42 @@ class Agent:
         msgs.append({"role": "user", "content": message})
 
         transcript: list[dict] = []
-        for _ in range(self.max_iters):
-            m = await self.llm.chat(msgs, tools=self.tk.specs)
-            msgs.append(m)
-            tool_calls = m.get("tool_calls") or []
-            if not tool_calls:
-                return {"configured": True, "reply": m.get("content") or "",
-                        "transcript": transcript}
-            for tc in tool_calls:
-                fnc = tc.get("function", {})
-                name = fnc.get("name", "")
-                try:
-                    args = json.loads(fnc.get("arguments") or "{}")
-                except Exception:
-                    args = {}
-                result = await self.tk.call(name, args)
-                transcript.append({"tool": name, "args": args, "result": result})
-                msgs.append({"role": "tool", "tool_call_id": tc.get("id"),
-                             "content": json.dumps(result, ensure_ascii=False)})
+        try:
+            for _ in range(self.max_iters):
+                m = await self.llm.chat(msgs, tools=self.tk.specs)
+                msgs.append(m)
+                tool_calls = m.get("tool_calls") or []
+                if not tool_calls:
+                    return {"configured": True, "reply": m.get("content") or "",
+                            "transcript": transcript}
+                for tc in tool_calls:
+                    fnc = tc.get("function", {})
+                    name = fnc.get("name", "")
+                    try:
+                        args = json.loads(fnc.get("arguments") or "{}")
+                    except Exception:
+                        args = {}
+                    result = await self.tk.call(name, args)
+                    transcript.append({"tool": name, "args": args, "result": result})
+                    msgs.append({"role": "tool", "tool_call_id": tc.get("id"),
+                                 "content": json.dumps(result, ensure_ascii=False)})
+        except LLMError as e:
+            return {"configured": True, "transcript": transcript,
+                    "reply": self._explain(e), "error": True}
+        except Exception as e:   # 도구/네트워크 등 예기치 못한 오류도 채팅에 곱게
+            return {"configured": True, "transcript": transcript,
+                    "reply": f"⚠ 처리 중 오류: {e}", "error": True}
         return {"configured": True, "transcript": transcript,
                 "reply": "(도구 호출이 너무 많아 멈췄어요 — 질문을 더 좁혀줄래요?)"}
+
+    def _explain(self, e: LLMError) -> str:
+        """provider 오류를 사용자 행동으로 옮길 수 있는 한국어 안내로."""
+        if e.status in (401, 403):
+            return ("⚠ AI 키가 없거나 거부됐어요. asterion/config.local.json 의 "
+                    f"agent.api_key 를 확인해줘. (provider: {e.message})")
+        if e.status == 404 or "model" in e.message.lower():
+            return (f"⚠ 모델 '{self.llm.model}' 을(를) 못 찾았어요 — 헤더의 모델 선택에서 "
+                    f"다른 걸 골라줘. (provider: {e.message})")
+        if e.status == 429:
+            return f"⚠ 사용량/속도 한도(429) — 잠시 뒤 다시. (provider: {e.message})"
+        return f"⚠ AI 오류({e.status}): {e.message}"

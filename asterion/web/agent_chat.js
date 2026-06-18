@@ -1,5 +1,5 @@
 /* ASTERION 임베디드 AI 채팅 위젯 — 대시보드 우하단 떠다니는 버블.
- * Muuri 그리드와 완전 독립(자체 DOM+스타일, position:fixed). /api/agent/chat 호출.
+ * Gridstack 그리드와 완전 독립(자체 DOM+스타일, position:fixed). /api/agent/* 호출.
  * 백엔드 미설정([agent] 비움)이면 안내 메시지를 그대로 보여줌. */
 (function () {
   "use strict";
@@ -8,9 +8,11 @@
 
   var css = `
   #ast-chat-fab{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;
-    background:#1b6fe0;color:#fff;border:none;font-size:24px;cursor:pointer;z-index:99998;
-    box-shadow:0 4px 16px rgba(0,0,0,.4);transition:transform .15s}
+    background:#1b6fe0;color:#fff;border:none;cursor:pointer;z-index:99998;display:flex;
+    align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:transform .15s}
   #ast-chat-fab:hover{transform:scale(1.07)}
+  #ast-chat-fab svg{width:28px;height:28px;stroke:#fff;fill:none;stroke-width:1.8;
+    stroke-linecap:round;stroke-linejoin:round}
   #ast-chat-panel{position:fixed;right:20px;bottom:88px;width:370px;max-width:calc(100vw - 40px);
     height:540px;max-height:calc(100vh - 120px);background:#11151c;border:1px solid #2a3340;
     border-radius:14px;display:none;flex-direction:column;z-index:99999;overflow:hidden;
@@ -20,10 +22,16 @@
     align-items:center;justify-content:space-between}
   .ast-h b{font-size:14px} .ast-h .ast-sub{font-size:11px;color:#8b98a8}
   .ast-x{background:none;border:none;color:#8b98a8;font-size:18px;cursor:pointer}
+  .ast-modelbar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#10151d;
+    border-bottom:1px solid #2a3340;font-size:11px;color:#8b98a8}
+  .ast-modelbar select{flex:1;min-width:0;background:#0d1117;color:#e6edf3;border:1px solid #2a3340;
+    border-radius:7px;padding:4px 7px;font:12px/1.3 inherit;cursor:pointer}
   .ast-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
   .ast-m{max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
   .ast-u{align-self:flex-end;background:#1b6fe0;color:#fff;border-bottom-right-radius:4px}
   .ast-a{align-self:flex-start;background:#1e2630;border-bottom-left-radius:4px}
+  .ast-e{align-self:flex-start;background:#3a1d22;color:#ffd7d7;border:1px solid #6b2b34;
+    border-bottom-left-radius:4px}
   .ast-t{align-self:flex-start;font-size:11px;color:#7c8794;background:transparent;padding:0 4px}
   .ast-in{display:flex;gap:6px;padding:10px;border-top:1px solid #2a3340;background:#161c25}
   .ast-in textarea{flex:1;resize:none;height:38px;max-height:120px;background:#0d1117;color:#e6edf3;
@@ -33,12 +41,22 @@
   `;
   var st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
 
+  // 망원경 아이콘(인라인 SVG) — Gemini 스파클과 무관, 천문대 테마.
+  var TELESCOPE =
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M3 14l11.5-6.5 2 3.5L5 17.5z"/>'      // 경통
+    + '<path d="M14.5 7.5l3-1.7 2 3.5-3 1.7"/>'        // 대물부
+    + '<path d="M9 16l2.5 4.5M7 17l1.7 3"/>'           // 삼각대 다리
+    + '<circle cx="19" cy="5.5" r="1.3"/></svg>';      // 별
+
   var fab = document.createElement("button");
-  fab.id = "ast-chat-fab"; fab.title = "ASTERION 어시스턴트"; fab.textContent = "✨";
+  fab.id = "ast-chat-fab"; fab.title = "ASTERION 어시스턴트"; fab.innerHTML = TELESCOPE;
   var panel = document.createElement("div"); panel.id = "ast-chat-panel";
   panel.innerHTML =
     '<div class="ast-h"><div><b>ASTERION 어시스턴트</b> <span class="ast-sub" id="ast-status"></span></div>'
     + '<button class="ast-x" title="닫기">×</button></div>'
+    + '<div class="ast-modelbar"><label>모델</label>'
+    + '<select id="ast-model"><option>…</option></select></div>'
     + '<div class="ast-msgs" id="ast-msgs"></div>'
     + '<div class="ast-in"><textarea id="ast-ta" placeholder="예: 오늘 화성 보여줘"></textarea>'
     + '<button id="ast-send">전송</button></div>';
@@ -48,7 +66,9 @@
   var ta = panel.querySelector("#ast-ta");
   var sendBtn = panel.querySelector("#ast-send");
   var statusEl = panel.querySelector("#ast-status");
+  var modelSel = panel.querySelector("#ast-model");
   var history = [];   // [{role, content}]
+  var modelsLoaded = false;
 
   function add(cls, text) {
     var d = document.createElement("div"); d.className = "ast-m " + cls; d.textContent = text;
@@ -61,11 +81,47 @@
   fab.onclick = function () { toggle(!panel.classList.contains("open")); };
   panel.querySelector(".ast-x").onclick = function () { toggle(false); };
 
+  function setStatus(s) {
+    if (!s) { statusEl.textContent = ""; return; }
+    statusEl.textContent = s.configured ? ("· " + (s.model || "")) : "· 모델 미설정";
+  }
+
+  function loadModels() {
+    if (modelsLoaded) return;
+    fetch("/api/agent/models").then(function (r) { return r.json(); }).then(function (d) {
+      modelsLoaded = true;
+      var models = d.models || [];
+      modelSel.innerHTML = "";
+      if (!models.length) {
+        var o = document.createElement("option");
+        o.textContent = d.error ? ("(목록 불가: " + d.error + ")") : "(모델 없음)";
+        o.disabled = true; modelSel.appendChild(o); return;
+      }
+      models.forEach(function (m) {
+        var op = document.createElement("option"); op.value = m; op.textContent = m;
+        if (m === d.current) op.selected = true; modelSel.appendChild(op);
+      });
+      if (d.error) { var w = document.createElement("option");
+        w.textContent = "⚠ " + d.error; w.disabled = true; modelSel.appendChild(w); }
+    }).catch(function () { modelsLoaded = true; });
+  }
+
+  modelSel.onchange = function () {
+    var m = modelSel.value; if (!m) return;
+    fetch("/api/agent/model", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: m })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { setStatus({ configured: true, model: res.model });
+        add("ast-t", "모델 전환 → " + res.model); }
+    }).catch(function () {});
+  };
+
   function greet() {
     add("ast-a", "안녕하세요 — 청람천문대 ASTERION 어시스턴트예요. \"오늘 화성 보여줘\" 처럼 말해보세요.");
-    fetch("/api/agent/status").then(function (r) { return r.json(); }).then(function (s) {
-      statusEl.textContent = s.configured ? ("· " + (s.model || "")) : "· 모델 미설정";
-    }).catch(function () {});
+    fetch("/api/agent/status").then(function (r) { return r.json(); })
+      .then(setStatus).catch(function () {});
+    loadModels();
   }
 
   async function send() {
@@ -78,15 +134,18 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, history: history.slice(0, -1) })
       });
-      var data = await r.json();
+      var data;
+      try { data = await r.json(); }
+      catch (_) { data = { reply: "서버 응답을 읽지 못했어요 (HTTP " + r.status + ").", error: true }; }
       thinking.remove();
       (data.transcript || []).forEach(function (t) {
         add("ast-t", "🔧 " + t.tool + (t.result && t.result.error ? " ⚠" : ""));
       });
       var reply = data.reply || "(빈 응답)";
-      add("ast-a", reply); history.push({ role: "assistant", content: reply });
+      add(data.error ? "ast-e" : "ast-a", reply);
+      if (!data.error) history.push({ role: "assistant", content: reply });
     } catch (e) {
-      thinking.remove(); add("ast-a", "오류: " + e);
+      thinking.remove(); add("ast-e", "오류: " + e);
     } finally { sendBtn.disabled = false; ta.focus(); }
   }
   sendBtn.onclick = send;

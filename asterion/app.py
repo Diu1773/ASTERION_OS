@@ -898,7 +898,7 @@ def create_app() -> FastAPI:
     # Analysis 계층 라우트 (/api/sentinel/* 품질, /api/analysis/frames/* 픽셀,
     # /api/calibration/* 마스터, /api/forge/* 실시간 보정 토글).
     app.include_router(build_analysis_router(sentinel, framedata, calibration, forge))
-    # AI 에이전트 라우트 (/api/agent/chat·status) — 대시보드 채팅 위젯이 호출.
-    app.include_router(build_agent_router(agent))
+    # AI 에이전트 라우트 (/api/agent/chat·status·models·model) — 대시보드 채팅 위젯이 호출.
+    app.include_router(build_agent_router(agent, cfg))
 
     return app

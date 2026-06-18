@@ -34,6 +34,10 @@ from .core.ontology import (
 from .core.preview import stretch_to_png
 from .drivers import REGISTRY, ConnectionManager
 from .drivers.sim import TwilightSim
+from .agent.api import build_agent_router
+from .agent.core import Agent
+from .agent.llm import LLM
+from .agent.toolkit import ToolKit
 from .analysis.api import build_analysis_router
 from .analysis.calibration import CalibrationLibrary
 from .analysis.forge import Forge
@@ -268,6 +272,16 @@ def create_app() -> FastAPI:
             "gem_dec_offset_m": float(cfg.get("dome.gem_dec_offset_m", 0.0)),
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)))
+
+    # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. LLM은 provider 스왑(config
+    # [agent]: OpenAI/Groq/Ollama/자체). 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
+    agent = Agent(
+        LLM(base_url=str(cfg.get("agent.base_url", "")),
+            model=str(cfg.get("agent.model", "")),
+            api_key=str(cfg.get("agent.api_key", ""))),
+        ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
+                orchestrator=orch, bus=bus, drivers=drivers),
+        system_prompt=str(cfg.get("agent.system_prompt", "")))
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
     def conn_preconditions() -> list[tuple[str, bool, str]]:
@@ -884,5 +898,7 @@ def create_app() -> FastAPI:
     # Analysis 계층 라우트 (/api/sentinel/* 품질, /api/analysis/frames/* 픽셀,
     # /api/calibration/* 마스터, /api/forge/* 실시간 보정 토글).
     app.include_router(build_analysis_router(sentinel, framedata, calibration, forge))
+    # AI 에이전트 라우트 (/api/agent/chat·status) — 대시보드 채팅 위젯이 호출.
+    app.include_router(build_agent_router(agent))
 
     return app

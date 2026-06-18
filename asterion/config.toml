@@ -169,14 +169,29 @@ timeout_seconds = 12.0     # 프레임 1장 요청 타임아웃
 min_bytes = 4096           # 이보다 작으면 이미지로 안 봄(HTML 에러페이지 거름)
 
 [agent]
-# 대시보드 임베디드 AI 채팅. LLM은 벤더중립(OpenAI 호환) — base_url/model/api_key만 바꾸면
-# 어디든 붙는다. 비워두면 채팅창은 뜨되 "모델 미설정" 안내를 돌려준다(코어 영향 0).
-#  OpenAI : base_url="https://api.openai.com/v1"        model="gpt-4o-mini"   api_key="sk-..."
-#  Groq   : base_url="https://api.groq.com/openai/v1"   model="llama-3.3-70b-versatile"
-#  Ollama : base_url="http://127.0.0.1:11434/v1"        model="llama3.1"      (로컬·무료·키 불필요)
-base_url = ""
-model = ""
-api_key = ""
+# 대시보드 임베디드 AI 채팅. LLM은 벤더중립(OpenAI 호환) — 공급자를 여러 개 등록해두고
+# active 하나를 쓰며, 채팅 헤더에서 공급자·모델을 런타임에 바꾼다. 키는 공급자별로 분리돼
+# 헷갈리지 않는다. 실제 키는 git에 안 올라가는 config.local.json 에 넣어라(아래는 형식 안내).
+# 아무 공급자도 설정 안 되면 채팅창은 뜨되 "공급자 미설정" 안내만 돌려준다(코어 영향 0).
+#
+#   [agent]
+#   active = "groq"                 # 지금 쓸 공급자 이름(providers 키 중 하나)
+#
+#   [agent.providers.groq]          # 무료·빠름(키 필요, console.groq.com)
+#   base_url = "https://api.groq.com/openai/v1"
+#   api_key  = "gsk_..."
+#   model    = "llama-3.3-70b-versatile"
+#
+#   [agent.providers.openai]
+#   base_url = "https://api.openai.com/v1"
+#   api_key  = "sk-..."
+#   model    = "gpt-4o-mini"
+#
+#   [agent.providers.ollama]        # 로컬·무료·키 불필요(GPU 필요)
+#   base_url = "http://127.0.0.1:11434/v1"
+#   model    = "llama3.1"
+#
+# 레거시 평면 구조(base_url/model/api_key 직접)도 계속 지원 — 자동으로 단일 공급자로 감싼다.
 # system_prompt = ""   # 비우면 기본(관측 어시스턴트) 프롬프트 사용
 
 [db]

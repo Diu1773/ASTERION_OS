@@ -22,8 +22,10 @@
     align-items:center;justify-content:space-between}
   .ast-h b{font-size:14px} .ast-h .ast-sub{font-size:11px;color:#8b98a8}
   .ast-x{background:none;border:none;color:#8b98a8;font-size:18px;cursor:pointer}
-  .ast-modelbar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#10151d;
+  .ast-modelbar{display:flex;flex-direction:column;gap:6px;padding:7px 14px;background:#10151d;
     border-bottom:1px solid #2a3340;font-size:11px;color:#8b98a8}
+  .ast-mrow{display:flex;align-items:center;gap:8px}
+  .ast-mrow label{width:42px;flex:none;color:#8b98a8}
   .ast-modelbar select{flex:1;min-width:0;background:#0d1117;color:#e6edf3;border:1px solid #2a3340;
     border-radius:7px;padding:4px 7px;font:12px/1.3 inherit;cursor:pointer}
   .ast-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
@@ -55,8 +57,9 @@
   panel.innerHTML =
     '<div class="ast-h"><div><b>ASTERION 어시스턴트</b> <span class="ast-sub" id="ast-status"></span></div>'
     + '<button class="ast-x" title="닫기">×</button></div>'
-    + '<div class="ast-modelbar"><label>모델</label>'
-    + '<select id="ast-model"><option>…</option></select></div>'
+    + '<div class="ast-modelbar">'
+    + '<div class="ast-mrow"><label>공급자</label><select id="ast-provider"></select></div>'
+    + '<div class="ast-mrow"><label>모델</label><select id="ast-model"></select></div></div>'
     + '<div class="ast-msgs" id="ast-msgs"></div>'
     + '<div class="ast-in"><textarea id="ast-ta" placeholder="예: 오늘 화성 보여줘"></textarea>'
     + '<button id="ast-send">전송</button></div>';
@@ -67,8 +70,9 @@
   var sendBtn = panel.querySelector("#ast-send");
   var statusEl = panel.querySelector("#ast-status");
   var modelSel = panel.querySelector("#ast-model");
+  var provSel = panel.querySelector("#ast-provider");
   var history = [];   // [{role, content}]
-  var modelsLoaded = false;
+  var providersLoaded = false;
 
   function add(cls, text) {
     var d = document.createElement("div"); d.className = "ast-m " + cls; d.textContent = text;
@@ -83,13 +87,31 @@
 
   function setStatus(s) {
     if (!s) { statusEl.textContent = ""; return; }
-    statusEl.textContent = s.configured ? ("· " + (s.model || "")) : "· 모델 미설정";
+    if (!s.configured) { statusEl.textContent = "· 공급자 미설정"; return; }
+    var p = s.provider ? (s.provider + " / ") : "";
+    statusEl.textContent = "· " + p + (s.model || "");
+  }
+
+  function loadProviders() {
+    if (providersLoaded) return;
+    fetch("/api/agent/providers").then(function (r) { return r.json(); }).then(function (d) {
+      providersLoaded = true;
+      var provs = d.providers || [];
+      provSel.innerHTML = "";
+      if (!provs.length) {
+        var o = document.createElement("option");
+        o.textContent = "(공급자 없음)"; o.disabled = true; provSel.appendChild(o); return;
+      }
+      provs.forEach(function (p) {
+        var op = document.createElement("option"); op.value = p.name;
+        op.textContent = p.name + (p.has_key || /11434|ollama/.test(p.base_url) ? "" : " (키 없음)");
+        if (p.active) op.selected = true; provSel.appendChild(op);
+      });
+    }).catch(function () { providersLoaded = true; });
   }
 
   function loadModels() {
-    if (modelsLoaded) return;
     fetch("/api/agent/models").then(function (r) { return r.json(); }).then(function (d) {
-      modelsLoaded = true;
       var models = d.models || [];
       modelSel.innerHTML = "";
       if (!models.length) {
@@ -103,8 +125,22 @@
       });
       if (d.error) { var w = document.createElement("option");
         w.textContent = "⚠ " + d.error; w.disabled = true; modelSel.appendChild(w); }
-    }).catch(function () { modelsLoaded = true; });
+    }).catch(function () {});
   }
+
+  provSel.onchange = function () {
+    var name = provSel.value; if (!name) return;
+    fetch("/api/agent/provider", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        setStatus({ configured: res.configured, provider: name, model: res.model });
+        add("ast-t", "공급자 전환 → " + name + (res.model ? (" / " + res.model) : ""));
+        loadModels();   // 새 공급자의 모델 목록으로 갱신
+      } else { add("ast-t", "⚠ " + (res.error || "공급자 전환 실패")); }
+    }).catch(function () {});
+  };
 
   modelSel.onchange = function () {
     var m = modelSel.value; if (!m) return;
@@ -112,7 +148,7 @@
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: m })
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (res.ok) { setStatus({ configured: true, model: res.model });
+      if (res.ok) { setStatus({ configured: true, provider: provSel.value, model: res.model });
         add("ast-t", "모델 전환 → " + res.model); }
     }).catch(function () {});
   };
@@ -121,6 +157,7 @@
     add("ast-a", "안녕하세요 — 청람천문대 ASTERION 어시스턴트예요. \"오늘 화성 보여줘\" 처럼 말해보세요.");
     fetch("/api/agent/status").then(function (r) { return r.json(); })
       .then(setStatus).catch(function () {});
+    loadProviders();
     loadModels();
   }
 

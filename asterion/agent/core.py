@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .llm import LLMError
@@ -13,9 +14,27 @@ DEFAULT_SYSTEM = (
     "위치·관측 계획을 확인하고 실행합니다. 사용자가 천체를 '보여달라'고 하면 먼저 "
     "planet_position으로 가시성을 확인하고, 지평선/한계 아래면 그 이유를 설명한 뒤 "
     "visible_planets로 대안을 제시하세요. 실행계(goto/run/dome)는 안전게이트를 통과하며, "
-    "거부되면 그 사유를 사용자에게 그대로 전하세요. 한국어로 간결하고 친근하게, 추측하지 "
-    "말고 도구 결과에 근거해 답하세요."
+    "거부되면 그 사유를 사용자에게 그대로 전하세요. 도구는 제공된 함수 호출 기능으로만 "
+    "사용하고, 함수명과 인자를 규격에 정확히 맞추세요. 한국어로 간결하고 친근하게, "
+    "추측하지 말고 도구 결과에 근거해 답하세요."
 )
+
+# 일부 모델(예: Groq의 Llama)이 정규 tool_calls 대신 본문에 흘리는 인라인 함수태그.
+#   <function=visible_planets></function>  /  <function=goto_planet>{"name":"화성"}</function>
+_FUNC_TAG = re.compile(r"<function=([A-Za-z0-9_]+)\s*>(.*?)</function\s*>", re.DOTALL)
+
+
+def _parse_inline_calls(content: str) -> list[dict]:
+    out: list[dict] = []
+    for i, mt in enumerate(_FUNC_TAG.finditer(content or "")):
+        raw = (mt.group(2) or "").strip()
+        out.append({"id": f"inline{i}",
+                    "function": {"name": mt.group(1), "arguments": raw or "{}"}})
+    return out
+
+
+def _strip_tags(content: str) -> str:
+    return _FUNC_TAG.sub("", content or "").strip()
 
 
 class Agent:
@@ -45,12 +64,23 @@ class Agent:
         transcript: list[dict] = []
         try:
             for _ in range(self.max_iters):
-                m = await self.llm.chat(msgs, tools=self.tk.specs)
-                msgs.append(m)
+                m = await self._chat(msgs)
                 tool_calls = m.get("tool_calls") or []
+                content = m.get("content") or ""
+                # 정규 tool_calls가 없고 본문에 인라인 함수태그가 있으면 그걸 도구호출로 살림.
+                inline = not tool_calls and "<function=" in content
+                if inline:
+                    tool_calls = _parse_inline_calls(content)
                 if not tool_calls:
-                    return {"configured": True, "reply": m.get("content") or "",
+                    msgs.append(m)
+                    return {"configured": True, "reply": _strip_tags(content),
                             "transcript": transcript}
+                if inline:   # 태그를 정규 tool_calls 형태의 assistant 메시지로 교체
+                    msgs.append({"role": "assistant", "content": "",
+                                 "tool_calls": [{"id": tc["id"], "type": "function",
+                                                 "function": tc["function"]} for tc in tool_calls]})
+                else:
+                    msgs.append(m)
                 for tc in tool_calls:
                     fnc = tc.get("function", {})
                     name = fnc.get("name", "")
@@ -71,14 +101,38 @@ class Agent:
         return {"configured": True, "transcript": transcript,
                 "reply": "(도구 호출이 너무 많아 멈췄어요 — 질문을 더 좁혀줄래요?)"}
 
+    async def _chat(self, msgs: list[dict]):
+        """일부 모델이 간헐적으로 내는 tool-call 검증 실패(400)는 모델 생성 변동이라
+        같은 입력으로 재시도하면 대개 성공 — 그 경우만 재시도, 진짜 오류는 즉시 전파."""
+        last: LLMError | None = None
+        for _ in range(3):   # 최초 1 + 재시도 2
+            try:
+                return await self.llm.chat(msgs, tools=self.tk.specs)
+            except LLMError as e:
+                msg = e.message.lower()
+                transient = e.status == 400 and any(
+                    k in msg for k in ("tool", "function", "failed_generation"))
+                if not transient:
+                    raise
+                last = e
+        raise last   # 재시도 다 써도 안 되면 마지막 오류
+
     def _explain(self, e: LLMError) -> str:
         """provider 오류를 사용자 행동으로 옮길 수 있는 한국어 안내로."""
         if e.status in (401, 403):
             return ("⚠ AI 키가 없거나 거부됐어요. asterion/config.local.json 의 "
                     f"agent.api_key 를 확인해줘. (provider: {e.message})")
-        if e.status == 404 or "model" in e.message.lower():
+        msg = e.message.lower()
+        if e.status == 404 or ("model" in msg and any(
+                w in msg for w in ("not found", "does not exist", "decommission",
+                                   "no such", "unknown"))):
             return (f"⚠ 모델 '{self.llm.model}' 을(를) 못 찾았어요 — 헤더의 모델 선택에서 "
                     f"다른 걸 골라줘. (provider: {e.message})")
         if e.status == 429:
             return f"⚠ 사용량/속도 한도(429) — 잠시 뒤 다시. (provider: {e.message})"
+        if e.status == 400 and any(k in e.message.lower()
+                                   for k in ("tool", "function", "failed_generation")):
+            return ("⚠ 모델이 도구 호출을 제대로 못 만들었어요(재시도해도 실패). 헤더에서 "
+                    "도구 호출에 더 강한 모델로 바꿔보거나 질문을 더 단순하게 해줘. "
+                    f"(provider: {e.message})")
         return f"⚠ AI 오류({e.status}): {e.message}"

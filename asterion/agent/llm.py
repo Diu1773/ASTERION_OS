@@ -58,6 +58,8 @@ class LLM:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+            # 한 턴에 하나씩만 — 약한 모델의 병렬 도구호출 검증실패(400)를 줄인다.
+            payload["parallel_tool_calls"] = False
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             r = await c.post(f"{self.base_url}/chat/completions",
                              headers=self.headers, json=payload)

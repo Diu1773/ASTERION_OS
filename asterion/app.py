@@ -36,7 +36,7 @@ from .drivers import REGISTRY, ConnectionManager
 from .drivers.sim import TwilightSim
 from .agent.api import build_agent_router
 from .agent.core import Agent
-from .agent.llm import LLM
+from .agent.providers import ProviderHub
 from .agent.toolkit import ToolKit
 from .analysis.api import build_analysis_router
 from .analysis.calibration import CalibrationLibrary
@@ -273,12 +273,11 @@ def create_app() -> FastAPI:
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)))
 
-    # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. LLM은 provider 스왑(config
-    # [agent]: OpenAI/Groq/Ollama/자체). 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
+    # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. ProviderHub가 named
+    # provider(groq/openai/ollama/자체) 여러 개를 들고 active 하나를 LLM으로 노출 —
+    # 공급자/모델을 런타임에 스왑. 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
     agent = Agent(
-        LLM(base_url=str(cfg.get("agent.base_url", "")),
-            model=str(cfg.get("agent.model", "")),
-            api_key=str(cfg.get("agent.api_key", ""))),
+        ProviderHub(cfg),
         ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
                 orchestrator=orch, bus=bus, drivers=drivers),
         system_prompt=str(cfg.get("agent.system_prompt", "")))

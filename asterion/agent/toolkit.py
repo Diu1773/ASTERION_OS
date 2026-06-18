@@ -8,7 +8,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+
+from ..core.ontology import (
+    ActionLog, CalibrationProduct, Decision, Frame, FocusRun,
+    ObservationSession, TelemetrySample, WeatherRecord,
+)
 
 MIN_ALT_DEG = 5.0
 _BODIES = {"mercury", "venus", "mars", "jupiter", "saturn", "uranus",
@@ -20,13 +26,15 @@ _KO = {"수성": "mercury", "금성": "venus", "화성": "mars", "목성": "jupi
 
 class ToolKit:
     def __init__(self, *, cfg, snapshot_fn: Callable[[], dict], meridian,
-                 orchestrator, bus, drivers):
+                 orchestrator, bus, drivers, db=None, sentinel=None):
         self.cfg = cfg
         self.snapshot = snapshot_fn
         self.meridian = meridian
         self.orch = orchestrator
         self.bus = bus
         self.drivers = drivers
+        self.db = db
+        self.sentinel = sentinel
         self.lat = float(cfg.get("site.latitude", 36.64))
         self.lon = float(cfg.get("site.longitude", 127.49))
 
@@ -57,6 +65,20 @@ class ToolKit:
                {"plan_id": {"type": "integer"}}, ["plan_id"]),
             fn("dome_shutter", "돔 셔터 열기/닫기. 수동 셔터면 거부됨.",
                {"open": {"type": "boolean"}}, ["open"]),
+            fn("night_report",
+               "지난 관측 요약(프레임 수·타입/필터별·품질 합격/경고/불합격·날씨로 닫힌 시각"
+               "·세션 완료/중단·캘리브레이션 마스터·초점). '어젯밤 어땠어' 류 질문에.",
+               {"date": {"type": "string", "description": "YYYY-MM-DD(UTC). 비우면 최근 hours"},
+                "hours": {"type": "number", "description": "되돌아볼 시간(기본 24)"}}),
+            fn("diagnose",
+               "문제 진단 — 현재 상태 + 최근 실패한 액션(감사로그) + 안전판단 이력. "
+               "'마운트 왜 이래' 류 질문에.",
+               {"subsystem": {"type": "string",
+                              "description": "mount/dome/camera/focuser/weather(선택)"}}),
+            fn("telemetry_summary",
+               "텔레메트리 채널 추세(min/mean/max·최신·표본수). 채널 비우면 사용 가능 채널 목록.",
+               {"channel": {"type": "string", "description": "예: temperature, humidity(선택)"},
+                "hours": {"type": "number", "description": "되돌아볼 시간(기본 12)"}}),
         ]
 
     # ---------- 디스패치 ----------
@@ -158,3 +180,132 @@ class ToolKit:
         except Exception as exc:
             return {"ok": False, "reason": f"{exc}"}
         return {"ok": True, "open": bool(a.get("open"))}
+
+    # ---------- 5단: 리포트·진단 (읽기 전용 — ActionBus 불필요) ----------
+
+    def _since_iso(self, hours: float) -> str:
+        return (datetime.now(timezone.utc)
+                - timedelta(hours=hours)).isoformat(timespec="milliseconds")
+
+    @staticmethod
+    def _in_window(rows: list[dict], field: str, date: str, since: str) -> list[dict]:
+        if date:
+            return [r for r in rows if str(r.get(field, "")).startswith(date)]
+        return [r for r in rows if str(r.get(field, "")) >= since]
+
+    async def _t_night_report(self, a: dict) -> dict:
+        if self.db is None:
+            return {"error": "DB 미연결 — 리포트 불가"}
+        date = (a.get("date") or "").strip()
+        hours = float(a.get("hours") or 24)
+        since = self._since_iso(hours)
+        win = lambda rows, f: self._in_window(rows, f, date, since)
+
+        frames = win(self.db.recent(Frame, 4000), "date_obs_utc")
+        by_type: dict = {}
+        by_filter: dict = {}
+        flagged: dict = {}
+        for f in frames:
+            t = f.get("image_type", "?")
+            by_type[t] = by_type.get(t, 0) + 1
+            if t == "LIGHT" and f.get("filter_name"):
+                by_filter[f["filter_name"]] = by_filter.get(f["filter_name"], 0) + 1
+            fl = f.get("flag", "ok")
+            if fl != "ok":
+                flagged[fl] = flagged.get(fl, 0) + 1
+
+        quality = {"accepted": 0, "warning": 0, "rejected": 0}
+        examples: list = []
+        if self.sentinel is not None:
+            for f in frames[:200]:   # 상한 — 200장까지 판정(나머지는 표본)
+                v = self.sentinel.evaluate(f["id"])
+                if not v:
+                    continue
+                quality[v["verdict"]] = quality.get(v["verdict"], 0) + 1
+                if v["verdict"] == "rejected" and len(examples) < 5:
+                    examples.append({"frame_id": f["id"], "reason": v["reason"]})
+
+        wx = list(reversed(win(self.db.recent(WeatherRecord, 3000), "utc")))  # 시간순
+        unsafe_from = None
+        hum_max = cloud_max = None
+        prev_safe = None
+        for w in wx:
+            h, c = w.get("humidity"), w.get("cloud_score")
+            if h is not None:
+                hum_max = h if hum_max is None else max(hum_max, h)
+            if c is not None:
+                cloud_max = c if cloud_max is None else max(cloud_max, c)
+            if prev_safe is True and w.get("safe") is False and unsafe_from is None:
+                unsafe_from = w.get("utc")
+            prev_safe = w.get("safe")
+
+        sessions = [{"kind": s.get("kind"), "status": s.get("status"),
+                     "started": s.get("started_utc"), "ended": s.get("ended_utc")}
+                    for s in win(self.db.recent(ObservationSession, 200), "started_utc")]
+        masters = [{"kind": m.get("kind"), "filter": m.get("filter_name"),
+                    "n_frames": m.get("n_frames"), "created": m.get("created_utc")}
+                   for m in win(self.db.recent(CalibrationProduct, 200), "created_utc")]
+        focus = [{"filter": fr.get("filter_name"), "best_fwhm": fr.get("best_fwhm"),
+                  "utc": fr.get("utc")}
+                 for fr in win(self.db.recent(FocusRun, 100), "utc")]
+
+        return {
+            "window": {"date": date or None, "hours": None if date else hours},
+            "frames": {"total": len(frames), "by_type": by_type,
+                       "lights_by_filter": by_filter, "flagged": flagged},
+            "quality": quality, "rejected_examples": examples,
+            "weather": {"records": len(wx), "first_unsafe_utc": unsafe_from,
+                        "humidity_max": hum_max, "cloud_max": cloud_max},
+            "sessions": sessions, "calibration_masters": masters, "focus_runs": focus,
+        }
+
+    async def _t_diagnose(self, a: dict) -> dict:
+        sub = (a.get("subsystem") or "").strip().lower()
+        snap = self.snapshot() or {}
+        state = {k: snap.get(k) for k in
+                 ("mode", "safety", "mount", "dome", "camera", "weather", "orchestrator")}
+        if sub:
+            state = {k: v for k, v in state.items() if sub in k} or state
+
+        failures: list = []
+        decisions: list = []
+        if self.db is not None:
+            for r in self.db.recent(ActionLog, 60):
+                if r.get("success"):
+                    continue
+                if sub and sub not in str(r.get("action_type", "")).lower():
+                    continue
+                failures.append({"action": r.get("action_type"), "actor": r.get("actor"),
+                                 "message": r.get("message"), "utc": r.get("utc")})
+                if len(failures) >= 10:
+                    break
+            decisions = [{"source": d.get("source"), "rec": d.get("recommendation"),
+                          "outcome": d.get("outcome"), "utc": d.get("utc")}
+                         for d in self.db.recent(Decision, 8)]
+        return {"subsystem": sub or "전체", "current_state": state,
+                "recent_failures": failures, "recent_decisions": decisions}
+
+    async def _t_telemetry_summary(self, a: dict) -> dict:
+        if self.db is None:
+            return {"error": "DB 미연결"}
+        channel = (a.get("channel") or "").strip()
+        hours = float(a.get("hours") or 12)
+        since = self._since_iso(hours)
+        if not channel:
+            def _ch(s):
+                rows = s.query(TelemetrySample.channel).distinct().all()
+                return sorted({r[0] for r in rows})
+            return {"available_channels": self.db.query(_ch),
+                    "hint": "channel을 지정하면 추세를 줍니다."}
+        rows = self.db.telemetry_persisted(channel=channel, since_utc=since, limit=5000)
+        if not rows:
+            return {"channel": channel, "samples": 0, "note": f"최근 {hours}h 데이터 없음"}
+        vmins = [r["vmin"] for r in rows if r.get("vmin") is not None]
+        vmeans = [r["vmean"] for r in rows if r.get("vmean") is not None]
+        vmaxs = [r["vmax"] for r in rows if r.get("vmax") is not None]
+        latest = rows[0]   # desc 정렬 → 첫 행이 최신
+        return {"channel": channel, "hours": hours, "samples": len(rows),
+                "min": min(vmins) if vmins else None,
+                "mean": round(sum(vmeans) / len(vmeans), 3) if vmeans else None,
+                "max": max(vmaxs) if vmaxs else None,
+                "latest": {"utc": latest.get("utc"), "mean": latest.get("vmean")}}

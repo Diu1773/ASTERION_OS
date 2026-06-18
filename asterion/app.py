@@ -279,7 +279,7 @@ def create_app() -> FastAPI:
     agent = Agent(
         ProviderHub(cfg),
         ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
-                orchestrator=orch, bus=bus, drivers=drivers),
+                orchestrator=orch, bus=bus, drivers=drivers, db=db, sentinel=sentinel),
         system_prompt=str(cfg.get("agent.system_prompt", "")))
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.

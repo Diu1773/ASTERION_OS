@@ -733,66 +733,89 @@ function drawTimeline() {
   lastTimelineDraw = Date.now();
   document.querySelectorAll(".js-c-tl").forEach((cv) => drawTimelineOn(cv));
 }
+// 박명 밴드 — 태양 고도(td.sun_alt) → 차분한 네이비 단계. 표본 간격이 좁아
+// 밴드가 잘게 칠해져 경계가 자연스럽게 부드러움(별도 블러 불필요).
+function _bandColor(a) {
+  return a > 0 ? "#272f43" : a > -6 ? "#20283c" : a > -12 ? "#181f30"
+       : a > -18 ? "#111626" : "#080b12";
+}
 function drawTimelineOn(cv) {
   const { ctx, w, h } = hidpi(cv);
   ctx.clearRect(0, 0, w, h);
   const td = timelineData;
   const t0 = td.start, t1 = td.end;
-  const X = (t) => 40 + (t - t0) / (t1 - t0) * (w - 50);
-  const Y = (a) => (h - 18) - ((a - (-30)) / 120) * (h - 30);
+  const padL = 34, padR = 12, padT = 12, padB = 20;
+  const X = (t) => padL + (t - t0) / (t1 - t0) * (w - padL - padR);
+  const Y = (a) => (h - padB) - ((a - (-30)) / 120) * (h - padT - padB);
+  const plotH = h - padT - padB;
+  const nowT = Date.now() / 1000;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
 
-  // 하늘 밝기 밴드
+  // 박명 밴드 (일몰박명→천문야간)
   for (let i = 0; i < td.t.length - 1; i++) {
-    const a = td.sun_alt[i];
-    let col;
-    if (a > 0) col = "#27415e";
-    else if (a > -6) col = "#1d3148";
-    else if (a > -12) col = "#152438";
-    else if (a > -18) col = "#0e1a2c";
-    else col = "#070e1b";
-    ctx.fillStyle = col;
-    ctx.fillRect(X(td.t[i]), 12, X(td.t[i + 1]) - X(td.t[i]) + 1, h - 30);
+    ctx.fillStyle = _bandColor(td.sun_alt[i]);
+    ctx.fillRect(X(td.t[i]), padT, X(td.t[i + 1]) - X(td.t[i]) + 1, plotH);
   }
   // 플랫 창
   (td.flat_windows || []).forEach((wd) => {
-    ctx.fillStyle = "rgba(52,211,153,.20)";
-    ctx.fillRect(X(wd.start), 12, X(wd.end) - X(wd.start), h - 30);
+    ctx.fillStyle = "rgba(52,211,153,.15)";
+    ctx.fillRect(X(wd.start), padT, X(wd.end) - X(wd.start), plotH);
   });
-  // 지평선 (alt 0)
-  ctx.strokeStyle = "rgba(150,180,225,.25)"; ctx.setLineDash([3, 3]);
-  ctx.beginPath(); ctx.moveTo(40, Y(0)); ctx.lineTo(w - 10, Y(0)); ctx.stroke();
+  // 60° 보조선
+  ctx.strokeStyle = "rgba(120,140,170,.16)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, Y(60)); ctx.lineTo(w - padR, Y(60)); ctx.stroke();
+  // 지평선 0° (초록 점선)
+  ctx.strokeStyle = "rgba(131,196,90,.5)"; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.moveTo(padL, Y(0)); ctx.lineTo(w - padR, Y(0)); ctx.stroke();
+  // 30° 관측 한계 (앰버 점선)
+  ctx.strokeStyle = "rgba(205,163,95,.7)"; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(padL, Y(30)); ctx.lineTo(w - padR, Y(30)); ctx.stroke();
   ctx.setLineDash([]);
-  // 태양 곡선
-  ctx.beginPath();
-  td.t.forEach((t, i) => {
-    const x = X(t), y = Y(td.sun_alt[i]);
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  });
-  ctx.strokeStyle = "#ffd884"; ctx.lineWidth = 1.4; ctx.stroke();
-  // 대상 곡선
-  if (trackData && trackData.t) {
+
+  // 대상 곡선 (코랄) + peak + 현재고도점
+  if (trackData && trackData.t && trackData.t.length) {
     ctx.beginPath();
     trackData.t.forEach((t, i) => {
       const x = X(t), y = Y(trackData.alt[i]);
       i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     });
-    ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 2.4; ctx.stroke();
+    // peak
+    let pi = 0;
+    for (let i = 1; i < trackData.alt.length; i++)
+      if (trackData.alt[i] > trackData.alt[pi]) pi = i;
+    const px = X(trackData.t[pi]), py = Y(trackData.alt[pi]);
+    ctx.fillStyle = "#080b12"; ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 3.5, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#f0a098"; ctx.textAlign = "center";
+    ctx.font = "600 11px Pretendard,system-ui,sans-serif";
+    ctx.fillText(Math.round(trackData.alt[pi]) + "°", px, py - 7);
+    // 현재 고도점 (곡선 위 보간)
+    const tt = trackData.t, aa = trackData.alt;
+    if (nowT > tt[0] && nowT < tt[tt.length - 1]) {
+      let j = 0; while (j < tt.length - 1 && tt[j + 1] < nowT) j++;
+      const f = (nowT - tt[j]) / ((tt[j + 1] - tt[j]) || 1);
+      const na = aa[j] + (aa[j + 1] - aa[j]) * f;
+      ctx.fillStyle = "#ec7a73"; ctx.strokeStyle = "#080b12"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(X(nowT), Y(na), 3.8, 0, 7); ctx.fill(); ctx.stroke();
+    }
   }
-  // 현재 시각
-  const nowT = Date.now() / 1000;
+  // 현재 시각 세로선
   if (nowT > t0 && nowT < t1) {
-    ctx.strokeStyle = "#fb7185"; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.moveTo(X(nowT), 10); ctx.lineTo(X(nowT), h - 16);
-    ctx.stroke();
+    ctx.strokeStyle = "rgba(216,223,231,.6)"; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X(nowT), padT); ctx.lineTo(X(nowT), h - padB); ctx.stroke();
+    ctx.setLineDash([]);
   }
-  // 축 라벨
-  ctx.fillStyle = "#4b5d7c"; ctx.font = "9px monospace";
-  ctx.textAlign = "right";
-  [-18, 0, 30, 60, 90].forEach((a) => ctx.fillText(a + "°", 36, Y(a) + 3));
-  ctx.textAlign = "center";
+  // 축 라벨 (앱 글꼴 · 30°만 앰버)
+  ctx.textAlign = "right"; ctx.font = "500 10px Pretendard,system-ui,sans-serif";
+  [0, 30, 60, 90].forEach((a) => {
+    ctx.fillStyle = a === 30 ? "#cda35f" : "#aab4bf";
+    ctx.fillText(a + "°", padL - 4, Y(a) + 3);
+  });
+  ctx.fillStyle = "#828c99"; ctx.textAlign = "center";
   for (let t = Math.ceil(t0 / 10800) * 10800; t < t1; t += 10800) {
     const d = new Date(t * 1000);
-    ctx.fillText(String(d.getHours()).padStart(2, "0") + "h", X(t), h - 4);
+    ctx.fillText(String(d.getHours()).padStart(2, "0") + "h", X(t), h - 5);
   }
 }
 

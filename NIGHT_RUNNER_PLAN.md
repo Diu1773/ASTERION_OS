@@ -51,8 +51,9 @@
   done/failed 분류). 개별 실패는 흡수해 밤 계속, `_stop` 시 break. ✅검증(FakeOrch): ①slot순[2,1,3]
   전부 done ②중간실패→나머지 계속 ③정지→잔여 미실행(phase 정지됨) ④교차배제(nr중복·orch실행중 거부).
   풀스택 SIM e2e(실드라이버)는 S7 회귀에서.
-- [ ] **S4 — 안전 게이트/홀드**: 슬롯 진입 전 `safety_fn()` 소비, WEATHER_HOLD면 held→해제 대기,
-  타임아웃 시 skip. 검증: safety 스냅샷을 unsafe로 주입 → `held=True`, 안전복구 → 진행 재개.
+- [x] **S4 — 안전 게이트/홀드**: `_safety_hold`가 슬롯 진입 전 `safety_fn()` 소비 — SAFE_TO_OBSERVE면
+  즉시 진행, 아니면 held=True로 회복 대기. 회복→진행, hold_skip_seconds 초과→skip, 정지→중단.
+  ✅검증(주입 safety_fn): ①unsafe중 held=True→회복→done ②미회복→skip(orch 미호출) ③안전→정상.
 - [ ] **S5 — 슬롯 타이밍**: `respect_slots=True`에서 `slot_start`까지 대기(과거면 즉시, slot_end 경과 skip).
   검증: 가까운 미래 슬롯 1개 → 그 시각에 시작, 과거 슬롯 → 즉시, 만료 슬롯 → skip.
 - [ ] **S6 — REST + stop**: `POST /api/nightrunner/start`(body: 선택 plan_ids·respect_slots),
@@ -93,3 +94,7 @@
   _run_one에서 흡수(밤 안 멈춤), _stop은 루프 top에서 체크. 검증 경계: NightRunner 책임=시퀀싱이라
   FakeOrch로 결정론 검증(순서/실패continue/정지/교차배제), 실드라이버 풀스택 e2e는 S7로. 프로젝트에
   테스트 디렉터리 없음(Ph7도 애드혹) → FakeMer/FakeOrch 인라인 스크립트 검증 패턴 유지.`
+- `2026-06-20 S4 — _safety_hold(슬롯 진입 전). orchestrator.SAFE_TO_OBSERVE/watchtower.safety 재사용
+  (상태 동형). Orchestrator의 fail-closed는 '실패'지만 NightRunner는 '보류→회복/스킵'으로 밤을 잇는다
+  (전이 weather가 계획을 잃지 않게). poll=min(2.0,timeout), held/reason 상태 노출. config
+  nightrunner.hold_skip_seconds(기본1800). 검증: 주입 safety_fn으로 hold/skip/proceed 3케이스.`

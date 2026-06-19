@@ -18,9 +18,10 @@ from typing import Any
 
 from ..core.actions import ActionError
 from ..core.events import EventHub
+from ..watchtower import safety as _safety
 from . import meridian as M
 from .meridian import Meridian
-from .orchestrator import ObservationOrchestrator
+from .orchestrator import SAFE_TO_OBSERVE, ObservationOrchestrator
 
 
 class NightRunner:
@@ -129,6 +130,48 @@ class NightRunner:
             except asyncio.CancelledError:
                 pass
 
+    # ---------- 안전 게이트 (S4) ----------
+
+    def _safety_now(self) -> dict:
+        try:
+            return (self.safety_fn() or {}) if self.safety_fn else {}
+        except Exception:
+            return {"state": _safety.FAULT, "reasons": ["safety_fn 오류"]}
+
+    async def _safety_hold(self, item: dict) -> bool:
+        """슬롯 진입 전 안전 확인. 안전하면 즉시 True. unsafe면 held=True로 회복까지
+        대기하다 — 회복→True(진행), hold_skip_seconds 초과→False(skip), 정지요청→False.
+        Orchestrator의 fail-closed 게이트와 동형이되, '실패' 대신 '보류/스킵'으로 밤을 잇는다."""
+        if self.safety_fn is None:
+            return True
+        saf = self._safety_now()
+        if saf.get("state") in SAFE_TO_OBSERVE:
+            return True
+        timeout = float(self.cfg.get("nightrunner.hold_skip_seconds", 1800.0)
+                        if self.cfg else 1800.0)
+        poll = min(2.0, max(0.2, timeout))
+        waited = 0.0
+        self._set(held=True, reason=f"안전 보류({saf.get('state')})",
+                  phase=f"안전 대기 #{item['plan_id']}")
+        self.events.log("night_runner", f"안전 보류({saf.get('state')}) — 계획 "
+                        f"#{item['plan_id']} 대기. 사유: {saf.get('reasons')}", "warn")
+        while not self._stop.is_set():
+            await asyncio.sleep(poll)
+            waited += poll
+            saf = self._safety_now()
+            if saf.get("state") in SAFE_TO_OBSERVE:
+                self._set(held=False, reason=None)
+                self.events.log("night_runner",
+                                f"안전 회복({saf.get('state')}) — 계획 #{item['plan_id']} 진행")
+                return True
+            if waited >= timeout:
+                self._set(held=False, reason=None)
+                self.events.log("night_runner",
+                                f"안전 미회복 {waited:.0f}s — 계획 #{item['plan_id']} 스킵", "warn")
+                return False
+        self._set(held=False, reason=None)
+        return False
+
     # ---------- 실행 루프 ----------
 
     async def _loop(self, plan_ids: list[int] | None, respect_slots: bool) -> None:
@@ -146,6 +189,12 @@ class NightRunner:
                     break
                 self._set(current=item, queue=queue[idx + 1:],
                           phase=f"실행 #{item['plan_id']} {item['target']}")
+                if not await self._safety_hold(item):   # unsafe 회복 못하면 skip
+                    if self._stop.is_set():
+                        break
+                    skipped.append({**item, "reason": "안전 미회복(타임아웃)"})
+                    self._set(skipped=skipped)
+                    continue
                 result = await self._run_one(item)
                 (done if result == "done" else failed).append(item)
             self._set(phase="정지됨" if self._stop.is_set() else "완료")

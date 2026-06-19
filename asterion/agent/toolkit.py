@@ -82,9 +82,10 @@ class ToolKit:
                {"channel": {"type": "string", "description": "예: temperature, humidity(선택)"},
                 "hours": {"type": "number", "description": "되돌아볼 시간(기본 12)"}}),
             fn("plan_night",
-               "오늘 밤 관측 계획을 짜준다 — 앞으로 N시간 내 관측 가능한 대상(DSO)을 종류·개수로 "
-               "골라 ObservationPlan(초안) 여러 개 생성. 예: '오늘 밤 관측 계획 짜줘', "
-               "'은하 위주로 일정 잡아줘', '뭐 찍을지 정해줘'. 생성만 하고 실행은 사용자 승인 필요.",
+               "오늘 밤 관측 시간표를 짜준다 — 관측 가능 대상을 고도·관측창·달이격으로 점수내 "
+               "고르고, 자오선 근처에 비겹침 시간 슬롯으로 배분해 ObservationPlan(초안) 생성. "
+               "각 계획에 슬롯 시각(KST) 포함. 예: '오늘 밤 관측 계획 짜줘', '은하로 일정 잡아줘'. "
+               "생성만 하고 실행은 사용자 승인 필요.",
                {"hours": {"type": "number", "description": "앞으로 볼 시간(기본 8)"},
                 "type": {"type": "string", "description": "은하/성운/성단/galaxy/nebula 등(선택, 비우면 전체)"},
                 "count": {"type": "integer", "description": "생성할 계획 수(기본 5)"},
@@ -333,40 +334,65 @@ class ToolKit:
         return math.degrees(math.asin(max(-1.0, min(1.0, s))))
 
     def _night_plan(self, hours, types, count, strategy):
-        """무거운 계산(astropy 태양고도+샘플) — to_thread에서 실행. 각 DSO의 다크타임
-        중 최고고도 계산 → 종류/개수 필터 → ObservationPlan(draft) 생성."""
-        from astropy.coordinates import AltAz, EarthLocation, get_body
+        """Phase1 스케줄러(to_thread). 하드제약(고도≥30·다크) → 점수(고도+관측창+달이격,
+        imaging_broadband) → 비겹침 시간배분(transit순 greedy) → ObservationPlan(draft).
+        각 계획 strategy에 slot_start/slot_end(KST) 기록."""
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body
         from astropy.time import Time
         import astropy.units as u
         loc = EarthLocation(lat=self.lat * u.deg, lon=self.lon * u.deg, height=0 * u.m)
         now = Time.now()
-        N = 12
-        samp = []
+        N = 16
+        samp = []   # (시간오프셋h, LST, 태양고도)
         for i in range(N + 1):
             t = now + (i * hours / N) * u.hour
             lst = float(t.sidereal_time("mean", longitude=self.lon * u.deg).hour)
             sun = float(get_body("sun", t, loc)
                         .transform_to(AltAz(obstime=t, location=loc)).alt.deg)
-            samp.append((lst, sun))
-        dark = [s for s in samp if s[1] < -10]
+            samp.append((i * hours / N, lst, sun))
+        dark = [s for s in samp if s[2] < -10]
         use = dark or samp
-        scored = []
+        moon = get_body("moon", now + (hours / 2) * u.hour, loc)   # 중간시각 달(이격 근사)
+        cand = []
         for o in DSO:
             if types and o["t"] not in types:
                 continue
-            mx = max(self._radec_alt(o["ra"], o["dec"], lst) for lst, _ in use)
-            if mx >= 30:
-                scored.append((mx, o))
-        scored.sort(key=lambda x: -x[0])
-        out = []
-        for mx, o in scored[:max(1, count)]:
+            alts = [(off, self._radec_alt(o["ra"], o["dec"], lst)) for off, lst, _ in use]
+            peak_off, peak = max(alts, key=lambda x: x[1])
+            obs = [off for off, a in alts if a >= 30]
+            if peak < 30 or not obs:
+                continue   # 하드 제약: 고도 30° 못 넘으면 제외(위도/저고도 대상)
+            sep = float(SkyCoord(o["ra"] * 15 * u.deg, o["dec"] * u.deg).separation(moon).deg)
+            cand.append({"o": o, "peak": peak, "tr": peak_off,
+                         "win": (min(obs), max(obs)), "moon": sep})
+        for c in cand:   # imaging_broadband 점수: 고도 + 관측창길이 + 달이격
+            c["score"] = c["peak"] + (c["win"][1] - c["win"][0]) * 6 + c["moon"] * 0.15
+        cand.sort(key=lambda c: -c["score"])
+        sel = cand[:max(1, count)]
+        sel.sort(key=lambda c: c["tr"])   # 시간순으로 배치
+        dur = (len(strategy["filters"]) * strategy["exposure_s"]
+               * strategy["count_per_filter"]) / 3600 + 1 / 6   # +10분 오버헤드
+
+        def hm(off):
+            d = datetime.fromtimestamp(now.unix + off * 3600 + 9 * 3600, tz=timezone.utc)
+            return d.strftime("%H:%M")   # KST
+
+        cursor, out = 0.0, []
+        for c in sel:
+            s = max(cursor, c["win"][0])
+            if s >= c["win"][1]:
+                continue   # 남은 창에 슬롯 못 맞춤
+            e = min(s + dur, c["win"][1] + 0.15)
+            cursor = e
+            o = c["o"]
+            st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e))
             label = (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
             plan = self.meridian.create_plan(
-                target_name=label, ra_hours=o["ra"], dec_degs=o["dec"],
-                strategy=dict(strategy))
+                target_name=label, ra_hours=o["ra"], dec_degs=o["dec"], strategy=st2)
             out.append({"plan_id": plan.get("id"), "target": label,
                         "type": TYPE_KO.get(o["t"], o["t"]),
-                        "max_alt": round(mx, 1), "mag": o["mag"]})
+                        "slot": hm(s) + "–" + hm(e), "max_alt": round(c["peak"], 1),
+                        "moon_sep": round(c["moon"]), "mag": o["mag"]})
         return out, len(dark) > 0
 
     async def _t_plan_night(self, a: dict) -> dict:

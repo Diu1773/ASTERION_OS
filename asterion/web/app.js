@@ -1262,10 +1262,10 @@ const PROTO_GS_LAYOUT = {
   // 좁은 3열(readout이 space-between으로 폭 채워 narrow가 딱 맞음), 하단 Imaging 풀폭.
   sky:     { x: 0, y: 0,  w: 6, h: 11 },
   skyflat: { x: 6, y: 0,  w: 6, h: 11 },
-  mount:   { x: 0, y: 11, w: 4, h: 12 },
-  camera:  { x: 4, y: 11, w: 4, h: 12 },
-  focuser: { x: 8, y: 11, w: 4, h: 8  },
-  image:   { x: 8, y: 17, w: 4, h: 8  },
+  mount:   { x: 0, y: 11, w: 4, h: 15 },
+  camera:  { x: 4, y: 11, w: 4, h: 15 },
+  focuser: { x: 8, y: 11, w: 4, h: 9  },
+  image:   { x: 8, y: 20, w: 4, h: 8  },
   // 기상(env) — 좌측 안전·기상(바닥 y18), 우측 위성·CCTV 와이드(바닥 y18)
   safety:       { x: 0, y: 0, w: 4, h: 8  },
   weather:      { x: 0, y: 8, w: 4, h: 10 },
@@ -1280,9 +1280,9 @@ const PROTO_GS_LAYOUT = {
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
   actions: { x: 6, y: 10, w: 6,  h: 8  },
   // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
-  connections: { x: 0, y: 0,  w: 8,  h: 10 },
-  "log-sys":   { x: 8, y: 0,  w: 4,  h: 10 },
-  sysinfo:     { x: 0, y: 10, w: 12, h: 6  },
+  connections: { x: 0, y: 0,  w: 8,  h: 20 },
+  "log-sys":   { x: 8, y: 0,  w: 4,  h: 20 },
+  sysinfo:     { x: 0, y: 20, w: 12, h: 11 },
 };
 
 // 패널별 sizing 정의 — 비율잠금은 viz만(폼은 내용이 안 늘어나 무의미), control은 min/max로
@@ -1291,9 +1291,9 @@ const PROTO_GS_LAYOUT = {
 const PANEL_DEF = {
   sky:          { klass: "viz",     fills: true,     ar: [6, 7],  minW: 4, minH: 9,  defW: 6,  defH: 12, maxW: 9 },
   skyflat:      { klass: "mixed",   fills: "gauge",  ar: null,    minW: 6, minH: 9,  defW: 6,  defH: 10, maxW: 8 },
-  mount:        { klass: "control", fills: false,    ar: null,    minW: 4, minH: 9,  defW: 6,  defH: 12, maxW: 6, maxH: 14 },
-  camera:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 10, defW: 6,  defH: 12, maxW: 6, maxH: 14 },
-  focuser:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 5,  defW: 6,  defH: 8,  maxW: 8, maxH: 9 },
+  mount:        { klass: "control", fills: false,    ar: null,    minW: 4, minH: 9,  defW: 6,  defH: 14, maxW: 6, maxH: 16 },
+  camera:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 10, defW: 6,  defH: 15, maxW: 6, maxH: 17 },
+  focuser:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 5,  defW: 6,  defH: 9,  maxW: 8, maxH: 10 },
   image:        { klass: "viz",     fills: true,     ar: [3, 2],  minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   safety:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 5,  defH: 8,  maxW: 6, maxH: 8 },
   weather:      { klass: "mixed",   fills: false,    ar: null,    minW: 4, minH: 9,  defW: 5,  defH: 11, maxW: 7 },
@@ -1305,9 +1305,9 @@ const PANEL_DEF = {
   plots:        { klass: "viz",     fills: true,     ar: [12, 5], minW: 7, minH: 6,  defW: 12, defH: 9,  maxW: 12 },
   frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
-  connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 10, maxW: 12 },
-  "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 10, maxW: 12 },
-  sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 6,  maxW: 12, maxH: 6 },
+  connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 20, maxW: 12 },
+  "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 20, maxW: 12 },
+  sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 11, maxW: 12, maxH: 13 },
 };
 
 // 리사이즈 시 viz 패널을 정의된 비율(ar)로 스냅 (높이를 폭에 맞춤). control/mixed는 제외.

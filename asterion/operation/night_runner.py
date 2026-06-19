@@ -18,6 +18,7 @@ from typing import Any
 
 from ..core.actions import ActionError
 from ..core.events import EventHub
+from . import meridian as M
 from .meridian import Meridian
 from .orchestrator import ObservationOrchestrator
 
@@ -50,6 +51,50 @@ class NightRunner:
 
     def _set(self, **kw) -> None:
         self._state.update(kw)
+
+    # ---------- 슬롯 시각 (KST "HH:MM" → 야간분: 저녁<자정<새벽) ----------
+
+    @staticmethod
+    def _slot_min(hhmm) -> int | None:
+        if not hhmm or ":" not in str(hhmm):
+            return None
+        p = str(hhmm).split(":")
+        h, m = int(p[0]), int(p[1])
+        return (h + 24 if h < 12 else h) * 60 + m
+
+    @staticmethod
+    def _now_night_min() -> int:
+        from datetime import datetime, timedelta, timezone
+        kst = datetime.now(timezone.utc) + timedelta(hours=9)
+        return (kst.hour + 24 if kst.hour < 12 else kst.hour) * 60 + kst.minute
+
+    # ---------- 큐 구성 (S2) ----------
+
+    def _build_queue(self, plan_ids: list[int] | None, respect_slots: bool):
+        """실행 큐를 slot_start 순으로. respect_slots면 slot_end 지난 계획은 skip.
+        반환 (queue, skipped) — 각 항목 {plan_id,target,slot_start,slot_end[,reason]}."""
+        if plan_ids:
+            plans = [p for p in (self.meridian.get_plan(i) for i in plan_ids) if p]
+        else:
+            plans = self.meridian.list_plans(status=M.APPROVED)
+        deco = []
+        for p in plans:
+            pr = p.get("params") or {}
+            t = p.get("target") or {}
+            deco.append((self._slot_min(pr.get("slot_start")), p, pr, t,
+                         self._slot_min(pr.get("slot_end"))))
+        # slot_start 순(없으면 뒤로), 동률은 id로 안정 정렬
+        deco.sort(key=lambda d: (d[0] is None, d[0] or 0, d[1].get("id") or 0))
+        now_nm = self._now_night_min()
+        queue, skipped = [], []
+        for smin, p, pr, t, emin in deco:
+            item = {"plan_id": p.get("id"), "target": t.get("name") or "—",
+                    "slot_start": pr.get("slot_start"), "slot_end": pr.get("slot_end")}
+            if respect_slots and emin is not None and emin <= now_nm:
+                skipped.append({**item, "reason": "슬롯 종료 시각 경과"})
+            else:
+                queue.append(item)
+        return queue, skipped
 
     # ---------- 시작/정지 ----------
 
@@ -87,11 +132,16 @@ class NightRunner:
     # ---------- 실행 루프 ----------
 
     async def _loop(self, plan_ids: list[int] | None, respect_slots: bool) -> None:
-        """S1 스켈레톤 — 빈 루프. 큐구성(S2)·실행시퀀스(S3)·안전(S4)·타이밍(S5)에서 채운다."""
-        self._set(active=True, phase="시작")
+        """S2까지 — 큐 구성. 실행시퀀스(S3)·안전(S4)·타이밍(S5)은 이후 단계에서 채운다."""
+        self._set(active=True, phase="큐 구성")
         try:
+            queue, skipped = self._build_queue(plan_ids, respect_slots)
+            self._set(queue=queue, skipped=skipped)
             self.events.log("night_runner",
-                            "야간 운영 시작 (S1 스켈레톤 — 시퀀싱 미구현)")
-            self._set(phase="idle")
+                            f"야간 운영 큐 {len(queue)}개 (스킵 {len(skipped)})")
+            if not queue:
+                self._set(phase="대상 없음")
+                return
+            self._set(phase="대기 (실행 시퀀스 미구현 — S3)")
         finally:
             self._set(active=False, current=None)

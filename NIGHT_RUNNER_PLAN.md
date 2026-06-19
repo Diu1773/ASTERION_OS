@@ -43,8 +43,10 @@
 - [x] **S1 — 스켈레톤**: `night_runner.py` `NightRunner`(start/request_stop/wait/status_dict, 빈 루프) +
   `app.py` 배선 + status.py `night_runner` 키. ✅검증: uvicorn 기동→`GET /api/status.night_runner`=
   `{active:false,queue:[],done:[]…}`. (프리뷰 매니저가 포트를 못 띄워 uvicorn 직접 8533로 검증)
-- [ ] **S2 — 큐 구성**: 승인 계획을 `slot_start` 순 정렬해 큐. `slot_end` 지난 건 skip 표시.
-  검증: 승인 plan 3개 시드 → `status_dict().queue`가 슬롯순.
+- [x] **S2 — 큐 구성**: `_build_queue`가 승인 계획(또는 plan_ids)을 `slot_start`(야간분: 저녁<자정<새벽)
+  순 정렬. respect_slots면 `slot_end` 경과분은 skipped. ✅검증: 역순 입력 3개→큐 21:30/23:50/01:00.
+  ⚠️야간분 skip은 한낮 실행 시 저녁슬롯을 오탐(wrap) — **S5에서 실제 datetime 앵커로 정밀화**. 운영(야간)·
+  respect_slots=False에선 무관.
 - [ ] **S3 — 실행 시퀀스(슬롯무시 모드)**: `respect_slots=False`로 큐를 연달아
   `start_plan→wait`. 검증(SIM e2e): 승인 3개 → `start(respect_slots=False)` → 셋 다 `DONE`,
   `done` 리스트에 3개, Orchestrator 교차배제 동작.
@@ -82,3 +84,7 @@
   동형). REST는 S6로 미룸(S1 범위=status 노출만). 교차배제: start()가 self.running()+orch.running() 체크.
   검증: 프리뷰 매니저가 포트 바인딩 실패(코드무관, create_app() 91라우트 정상) → uvicorn 직접 8533 기동해
   /api/status.night_runner 확인. 이후 단계도 서버 필요시 uvicorn 직접 또는 FakeMer 스크립트로 검증.`
+- `2026-06-20 S2 — _build_queue: slot_start 야간분 정렬, respect_slots면 slot_end 경과 skip.
+  버그수정: night_runner.py에 'from . import meridian as M' 누락(NameError)→추가. 알려진 한계:
+  _now_night_min이 한낮(h<12 +24h wrap)엔 저녁슬롯을 과거로 오탐 → S5에서 슬롯을 '다가오는 밤'의
+  실제 datetime에 앵커링해 해결. respect_slots=False(즉시·테스트)는 이 경로 안 탐.`

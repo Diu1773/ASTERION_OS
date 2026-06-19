@@ -54,8 +54,10 @@
 - [x] **S4 — 안전 게이트/홀드**: `_safety_hold`가 슬롯 진입 전 `safety_fn()` 소비 — SAFE_TO_OBSERVE면
   즉시 진행, 아니면 held=True로 회복 대기. 회복→진행, hold_skip_seconds 초과→skip, 정지→중단.
   ✅검증(주입 safety_fn): ①unsafe중 held=True→회복→done ②미회복→skip(orch 미호출) ③안전→정상.
-- [ ] **S5 — 슬롯 타이밍**: `respect_slots=True`에서 `slot_start`까지 대기(과거면 즉시, slot_end 경과 skip).
-  검증: 가까운 미래 슬롯 1개 → 그 시각에 시작, 과거 슬롯 → 즉시, 만료 슬롯 → skip.
+- [x] **S5 — 슬롯 타이밍**: `_slot_dt`가 'HH:MM'을 'now-6h grace 이후 가장 이른 발생'에 datetime
+  앵커링(S2 야간분 wrap 제거 — 한낮 실행도 저녁슬롯 올바름). `_await_slot`: slot_start까지 대기(과거
+  grace내 즉시), slot_end 경과면 skip, stop이면 중단. `_build_queue`는 정렬 전용으로(skip 이관).
+  ✅검증: 앵커링 5케이스(낮/새벽/익일), await run/skip/immediate, _loop respect_slots True(대기후실행)·False(즉시).
 - [ ] **S6 — REST + stop**: `POST /api/nightrunner/start`(body: 선택 plan_ids·respect_slots),
   `POST /api/nightrunner/stop`. 검증(TestClient): start→status active, stop→중단·큐 비움.
 - [ ] **S7 — 회귀**: 기존 Orchestrator/Meridian SIM e2e가 여전히 PASS. 전체 한 번 더 그린.
@@ -98,3 +100,7 @@
   (상태 동형). Orchestrator의 fail-closed는 '실패'지만 NightRunner는 '보류→회복/스킵'으로 밤을 잇는다
   (전이 weather가 계획을 잃지 않게). poll=min(2.0,timeout), held/reason 상태 노출. config
   nightrunner.hold_skip_seconds(기본1800). 검증: 주입 safety_fn으로 hold/skip/proceed 3케이스.`
+- `2026-06-20 S5 — _slot_dt 앵커링: {T@어제,오늘,내일} 중 now-6h(grace) 이상 가장 이른 것 선택 →
+  한낮 실행도 저녁슬롯을 오늘로 올바르게(S2 wrap 완전 해결). _await_slot이 slot_start까지 대기(poll=
+  cfg nightrunner.poll_seconds 기본5)·slot_end 경과 skip. _build_queue는 정렬 전용으로(night-min skip
+  제거). _now_kst 메서드로 분리해 테스트 클럭 주입 가능. _now_night_min 제거(미사용).`

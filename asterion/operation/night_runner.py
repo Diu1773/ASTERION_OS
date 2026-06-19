@@ -64,16 +64,30 @@ class NightRunner:
         return (h + 24 if h < 12 else h) * 60 + m
 
     @staticmethod
-    def _now_night_min() -> int:
+    def _now_kst():
         from datetime import datetime, timedelta, timezone
-        kst = datetime.now(timezone.utc) + timedelta(hours=9)
-        return (kst.hour + 24 if kst.hour < 12 else kst.hour) * 60 + kst.minute
+        return datetime.now(timezone.utc) + timedelta(hours=9)
+
+    def _slot_dt(self, hhmm, now_kst, grace_h: float = 6.0):
+        """슬롯 'HH:MM'을 'now-grace 이후 가장 이른 발생'에 앵커한 KST datetime(없으면 None).
+        한낮 실행도 견고 — 저녁 슬롯이 12h+ 과거로 잡히던 야간분 wrap을 회피한다."""
+        from datetime import timedelta
+        if self._slot_min(hhmm) is None:
+            return None
+        p = str(hhmm).split(":")
+        base = now_kst.replace(hour=int(p[0]), minute=int(p[1]), second=0, microsecond=0)
+        cutoff = now_kst - timedelta(hours=grace_h)
+        cands = sorted(base + timedelta(days=d) for d in (-1, 0, 1))
+        for c in cands:
+            if c >= cutoff:
+                return c
+        return cands[-1]
 
     # ---------- 큐 구성 (S2) ----------
 
-    def _build_queue(self, plan_ids: list[int] | None, respect_slots: bool):
-        """실행 큐를 slot_start 순으로. respect_slots면 slot_end 지난 계획은 skip.
-        반환 (queue, skipped) — 각 항목 {plan_id,target,slot_start,slot_end[,reason]}."""
+    def _build_queue(self, plan_ids: list[int] | None):
+        """승인 계획(또는 plan_ids)을 slot_start(야간분) 순으로 정렬한 실행 큐. 슬롯 시각
+        없는 계획은 뒤로. slot_end 경과 skip은 S5 타이밍(_await_slot)에서 datetime으로 판정."""
         if plan_ids:
             plans = [p for p in (self.meridian.get_plan(i) for i in plan_ids) if p]
         else:
@@ -82,20 +96,12 @@ class NightRunner:
         for p in plans:
             pr = p.get("params") or {}
             t = p.get("target") or {}
-            deco.append((self._slot_min(pr.get("slot_start")), p, pr, t,
-                         self._slot_min(pr.get("slot_end"))))
+            deco.append((self._slot_min(pr.get("slot_start")), p, pr, t))
         # slot_start 순(없으면 뒤로), 동률은 id로 안정 정렬
         deco.sort(key=lambda d: (d[0] is None, d[0] or 0, d[1].get("id") or 0))
-        now_nm = self._now_night_min()
-        queue, skipped = [], []
-        for smin, p, pr, t, emin in deco:
-            item = {"plan_id": p.get("id"), "target": t.get("name") or "—",
-                    "slot_start": pr.get("slot_start"), "slot_end": pr.get("slot_end")}
-            if respect_slots and emin is not None and emin <= now_nm:
-                skipped.append({**item, "reason": "슬롯 종료 시각 경과"})
-            else:
-                queue.append(item)
-        return queue, skipped
+        return [{"plan_id": p.get("id"), "target": t.get("name") or "—",
+                 "slot_start": pr.get("slot_start"), "slot_end": pr.get("slot_end")}
+                for _, p, pr, t in deco]
 
     # ---------- 시작/정지 ----------
 
@@ -172,29 +178,64 @@ class NightRunner:
         self._set(held=False, reason=None)
         return False
 
+    # ---------- 슬롯 타이밍 (S5) ----------
+
+    async def _await_slot(self, item: dict) -> str:
+        """슬롯 진입 타이밍. slot_start까지 대기(과거(grace내)면 즉시 'run'), slot_end가 이미
+        지났으면 'skip', 정지요청이면 'stop'. 슬롯 시각 없는 계획은 즉시 'run'."""
+        from datetime import timedelta
+        s, e = item.get("slot_start"), item.get("slot_end")
+        sm = self._slot_min(s)
+        if sm is None:
+            return "run"
+        now = self._now_kst()
+        start_dt = self._slot_dt(s, now)
+        em = self._slot_min(e)
+        dur = (em - sm) if (em is not None and em >= sm) else None
+        end_dt = (start_dt + timedelta(minutes=dur)) if (dur is not None and start_dt) else None
+        if end_dt is not None and end_dt <= now:
+            return "skip"
+        poll = float(self.cfg.get("nightrunner.poll_seconds", 5.0) if self.cfg else 5.0)
+        while not self._stop.is_set():
+            now = self._now_kst()
+            remain = (start_dt - now).total_seconds()
+            if remain <= 0:
+                return "run"
+            self._set(phase=f"슬롯 대기 #{item['plan_id']} {s} (남은 {int(remain)}s)")
+            await asyncio.sleep(min(remain, poll))
+        return "stop"
+
     # ---------- 실행 루프 ----------
 
     async def _loop(self, plan_ids: list[int] | None, respect_slots: bool) -> None:
-        """S3 — 큐를 순서대로 실행(start_plan→wait→분류). 한 계획 실패는 _run_one에서
-        잡아 밤을 멈추지 않는다. 슬롯 대기(S5)·안전 게이트(S4)는 이후 단계에서 앞에 붙인다."""
+        """큐를 순서대로: (respect_slots면) 슬롯 대기 → 안전 게이트 → 실행 → 분류.
+        한 계획 실패/스킵은 흡수해 밤을 멈추지 않는다. _stop이면 잔여 중단."""
         self._set(active=True, phase="큐 구성")
-        done, failed = [], []
+        done, failed, skipped = [], [], []
         try:
-            queue, skipped = self._build_queue(plan_ids, respect_slots)
+            queue = self._build_queue(plan_ids)
             self._set(queue=list(queue), skipped=skipped, done=done, failed=failed)
-            self.events.log("night_runner",
-                            f"야간 운영 큐 {len(queue)}개 (스킵 {len(skipped)})")
+            self.events.log("night_runner", f"야간 운영 큐 {len(queue)}개")
             for idx, item in enumerate(queue):
                 if self._stop.is_set():
                     break
                 self._set(current=item, queue=queue[idx + 1:],
-                          phase=f"실행 #{item['plan_id']} {item['target']}")
+                          phase=f"준비 #{item['plan_id']} {item['target']}")
+                if respect_slots:   # 슬롯 시각까지 대기 / 종료경과면 skip
+                    action = await self._await_slot(item)
+                    if action == "stop":
+                        break
+                    if action == "skip":
+                        skipped.append({**item, "reason": "슬롯 종료 시각 경과"})
+                        self._set(skipped=skipped)
+                        continue
                 if not await self._safety_hold(item):   # unsafe 회복 못하면 skip
                     if self._stop.is_set():
                         break
                     skipped.append({**item, "reason": "안전 미회복(타임아웃)"})
                     self._set(skipped=skipped)
                     continue
+                self._set(phase=f"실행 #{item['plan_id']} {item['target']}")
                 result = await self._run_one(item)
                 (done if result == "done" else failed).append(item)
             self._set(phase="정지됨" if self._stop.is_set() else "완료")

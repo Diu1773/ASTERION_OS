@@ -402,7 +402,8 @@ class ToolKit:
             e = min(s + dur, c["win"][1] + 0.15)
             cursor = e
             o, label = c["o"], c["label"]
-            st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e))
+            st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e),
+                       slot_peak_alt=round(c["peak"], 1), slot_moon_sep=round(c["moon"]))
             plan = self.meridian.create_plan(
                 target_name=label, ra_hours=o["ra"], dec_degs=o["dec"], strategy=st2)
             out.append({"plan_id": plan.get("id"), "target": label,

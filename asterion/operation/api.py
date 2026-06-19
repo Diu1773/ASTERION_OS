@@ -78,6 +78,11 @@ def build_operation_router(meridian: Meridian, orchestrator: Any = None) -> APIR
             raise HTTPException(404, f"계획 #{plan_id} 없음")
         return {"deleted": plan_id}
 
+    @router.get("/api/meridian/goal")
+    async def get_goal():
+        """현재 활성 관측 목표(UserGoal). PLAN 탭 'AI 야간 계획' 헤더 표시용."""
+        return meridian.active_goal() or {}
+
     # ---------- 실행 제어 (Orchestrator) ----------
 
     @router.post("/api/meridian/plans/{plan_id}/run")

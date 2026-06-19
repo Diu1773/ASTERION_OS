@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=133">
+<link rel="stylesheet" href="/static/style.css?v=134">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -468,6 +468,31 @@
   <section class="tab-pane" data-pane="plan">
     <div class="muuri" id="grid-plan">
 
+      <!-- AI 야간 계획 (스케줄러가 짠 비겹침 슬롯 시퀀스) -->
+      <div class="muuri-item w12" data-panel="schedule">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">AI 야간 계획</span><span class="card-tag accent">NIGHT SCHEDULE</span></div>
+        <div class="sch-bar">
+          <span class="sch-goal" id="sch-goal">목표 미설정</span>
+          <span class="spacer"></span>
+          <span class="tn-seg sch-seg" id="sch-filter">
+            <button class="on" data-s="draft">초안</button>
+            <button data-s="approved">승인됨</button>
+            <button data-s="">전체</button>
+          </span>
+          <button class="btn btn-sm" id="sch-refresh" title="계획 다시 불러오기">↻ 새로고침</button>
+        </div>
+        <canvas id="sch-canvas" class="js-c-sch"></canvas>
+        <div class="sch-empty" id="sch-empty">아직 계획이 없어요. 어시스턴트에게 <b>“오늘 밤 계획 짜줘”</b>라고 해보세요.</div>
+        <div class="tbl-scroll sch-scroll">
+          <table class="tbl sch-tbl">
+            <thead><tr><th>#</th><th>슬롯 · KST</th><th>대상</th><th>필터·노출</th><th>최고</th><th>달</th><th>상태</th><th></th></tr></thead>
+            <tbody id="sch-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+
       <!-- 야간 타임라인 -->
       <div class="muuri-item w12" data-panel="timeline">
       <section class="muuri-item-content card">
@@ -704,7 +729,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=163"></script>
+<script src="/static/app.js?v=165"></script>
 <script src="/static/agent_chat.js?v=4" defer></script>
 </body>
 </html>

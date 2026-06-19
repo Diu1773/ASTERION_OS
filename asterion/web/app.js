@@ -1094,6 +1094,214 @@ function wireFov() {
   renderFov();
 }
 
+// ---------- AI 야간 계획 (PLAN 탭) ----------
+// 스케줄러(plan_night)가 만든 비겹침 ObservationPlan 슬롯을 마스터 타임라인(슬롯별
+// 고도곡선이 끊겼다 이어지는 핸드오프)과 순서표로. 슬롯=params.slot_start/end("HH:MM"
+// KST). 행마다 승인/실행/삭제·FOV(클릭 시 아래 FOV·야간타임라인에 반영).
+const schState = { status: "draft" };
+let schPlans = [], schGoal = null, schSegsCache = [], schWired = false;
+
+function _slotMin(hhmm) {   // "HH:MM"(KST) → 야간분(저녁<자정<새벽 순서 보존: 12시 미만은 +24h)
+  if (!hhmm || String(hhmm).indexOf(":") < 0) return null;
+  const p = String(hhmm).split(":"), h = +p[0], m = +p[1];
+  return (h < 12 ? h + 24 : h) * 60 + m;
+}
+function _schEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function _peakAlt(ra, dec) {   // 대상 밤시간 최고고도 — params에 없을 때 클라 계산(computeTonight식)
+  if (!lastStatus || !timelineData || ra == null) return null;
+  const lat = (lastStatus.geo && lastStatus.geo.lat) != null ? lastStatus.geo.lat : 36.6;
+  const lstNow = (lastStatus.time && lastStatus.time.lst_hours) != null ? lastStatus.time.lst_hours : 0;
+  const tNow = Date.now() / 1000, td = timelineData;
+  let mx = -90;
+  for (let i = 0; i < td.t.length; i++)
+    if (td.sun_alt[i] < 0) {
+      const a = radecToAltaz(ra, dec, lat, _tnLST(td.t[i], lstNow, tNow))[0];
+      if (a > mx) mx = a;
+    }
+  return mx > -90 ? mx : null;
+}
+
+async function loadSchedule() {
+  try {
+    const q = schState.status ? "?status=" + schState.status : "";
+    schPlans = await (await fetch("/api/meridian/plans" + q)).json();
+    if (!Array.isArray(schPlans)) schPlans = [];
+  } catch (e) { schPlans = []; }
+  try { schGoal = await (await fetch("/api/meridian/goal")).json(); } catch (e) { schGoal = null; }
+  renderSchedule();
+}
+
+function _schSegs() {
+  return (schPlans || []).map((p) => {
+    const pr = p.params || {}, t = p.target || {};
+    return {
+      p, a: _slotMin(pr.slot_start), b: _slotMin(pr.slot_end),
+      name: t.name || p.target_name || "—",
+      ra: t.ra_hours, dec: t.dec_degs,
+      peak: pr.slot_peak_alt != null ? pr.slot_peak_alt : _peakAlt(t.ra_hours, t.dec_degs),
+      moon: pr.slot_moon_sep, status: p.approval_status,
+    };
+  });
+}
+
+function renderSchedule() {
+  const goalEl = $("sch-goal");
+  if (goalEl) {
+    const g = schGoal && schGoal.goal_type;
+    const setn = g && schGoal.params && schGoal.params.set;
+    goalEl.textContent = g
+      ? ("목표 · " + (g === "campaign" ? "캠페인" + (setn ? " " + setn : "") : g))
+      : "목표 미설정";
+    goalEl.classList.toggle("on", !!g);
+  }
+  schSegsCache = _schSegs().sort((x, y) =>   // 시간표는 슬롯 시작순(슬롯없는 건 뒤로)
+    x.a == null ? (y.a == null ? 0 : 1) : (y.a == null ? -1 : x.a - y.a));
+  const empty = $("sch-empty"), cv = $("sch-canvas");
+  if (empty) empty.hidden = schSegsCache.length > 0;
+  if (cv) cv.style.display = schSegsCache.length ? "" : "none";
+  if (cv && schSegsCache.length)
+    drawScheduleTimeline(cv, schSegsCache.filter((s) => s.a != null && s.b != null));
+  renderScheduleTable(schSegsCache);
+}
+
+const _SCH_ST = { draft: ["초안", "st-draft"], approved: ["승인", "st-ok"],
+  done: ["완료", "st-done"], running: ["실행중", "st-run"], aborted: ["중단", "st-draft"] };
+function renderScheduleTable(segs) {
+  const tb = $("sch-tbody"); if (!tb) return;
+  tb.innerHTML = "";
+  segs.forEach((s, i) => {
+    const pr = s.p.params || {};
+    const exp = pr.exposure_s != null ? pr.exposure_s + "s×" + (pr.count_per_filter || 1) : "";
+    const filt = ((pr.filters || []).join("·") + " " + exp).trim() || "—";
+    const slot = (pr.slot_start || "—") + "–" + (pr.slot_end || "—");
+    const st = _SCH_ST[s.status] || [s.status || "—", "st-draft"];
+    const can = s.ra != null && s.dec != null;
+    const act = s.status === "draft"
+      ? `<button class="sch-x act" data-act="approve" data-id="${s.p.id}">승인</button>`
+      : (s.status === "approved" ? `<button class="sch-x act go" data-act="run" data-id="${s.p.id}">실행</button>` : "");
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td class="sch-n">${i + 1}</td>` +
+      `<td class="mono">${slot}</td>` +
+      `<td>${_schEsc(s.name)}</td>` +
+      `<td class="sch-dim">${_schEsc(filt)}</td>` +
+      `<td class="mono">${s.peak != null ? Math.round(s.peak) + "°" : "—"}</td>` +
+      `<td class="mono">${s.moon != null ? s.moon + "°" : "—"}</td>` +
+      `<td><span class="sch-badge ${st[1]}">${st[0]}</span></td>` +
+      `<td class="sch-acts">${can ? `<button class="sch-x" data-act="fov" data-id="${s.p.id}">FOV</button>` : ""}${act}` +
+      `<button class="sch-x del" data-act="del" data-id="${s.p.id}" title="삭제">✕</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll("button[data-act]").forEach((b) => {
+    b.onclick = () => schAction(b.dataset.act, +b.dataset.id);
+  });
+}
+
+async function schAction(act, id) {
+  if (act === "fov") {
+    const s = schSegsCache.find((x) => x.p.id === id);
+    if (s && s.ra != null) tnPick(s.ra, s.dec, s.name);
+    return;
+  }
+  try {
+    if (act === "approve") await post(`/api/meridian/plans/${id}/approve`);
+    else if (act === "run") await post(`/api/meridian/plans/${id}/run`);
+    else if (act === "del") {
+      const r = await fetch(`/api/meridian/plans/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("삭제 실패");
+    }
+  } catch (e) { /* post가 UI 로그 남김 */ }
+  loadSchedule();
+}
+
+function drawScheduleTimeline(cv, segs) {
+  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
+  if (!segs.length) return;
+  const padL = 26, padR = 10, padT = 12, padB = 16;
+  let t0 = Math.min.apply(null, segs.map((s) => s.a));
+  let t1 = Math.max.apply(null, segs.map((s) => s.b));
+  const span = Math.max(45, t1 - t0); t0 -= span * 0.04; t1 += span * 0.04;
+  const X = (m) => padL + (m - t0) / (t1 - t0) * (w - padL - padR);
+  const Y = (a) => (h - padB) - clamp(a, 0, 90) / 90 * (h - padT - padB);
+  // 기준선: 지평선 0°(초록) · 관측한계 30°(앰버)
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(131,196,90,.4)"; ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(padL, Y(0)); ctx.lineTo(w - padR, Y(0)); ctx.stroke();
+  ctx.strokeStyle = "rgba(205,163,95,.55)"; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(padL, Y(30)); ctx.lineTo(w - padR, Y(30)); ctx.stroke();
+  ctx.setLineDash([]);
+  // 현재 야간분 + LST 보간용 기준
+  const nd = new Date(); let nowM = nd.getHours() * 60 + nd.getMinutes();
+  if (nd.getHours() < 12) nowM += 1440;
+  const tNow = Date.now() / 1000;
+  const haveSky = lastStatus && timelineData;
+  const lat = (haveSky && lastStatus.geo && lastStatus.geo.lat != null) ? lastStatus.geo.lat : 36.6;
+  const lstNow = (haveSky && lastStatus.time && lastStatus.time.lst_hours != null) ? lastStatus.time.lst_hours : 0;
+  // 슬롯 블록 + 고도곡선 (끊겼다 이어지는 핸드오프)
+  segs.forEach((s) => {
+    const xa = X(s.a), xb = X(s.b), bw = Math.max(2, xb - xa);
+    ctx.fillStyle = "rgba(236,122,115,.10)";
+    ctx.fillRect(xa, padT, bw, h - padT - padB);
+    ctx.strokeStyle = "rgba(236,122,115,.45)";
+    ctx.beginPath(); ctx.moveTo(xa, padT); ctx.lineTo(xa, h - padB); ctx.stroke();
+    if (s.ra != null && haveSky) {
+      ctx.beginPath();
+      const N = 14;
+      for (let k = 0; k <= N; k++) {
+        const m = s.a + (s.b - s.a) * k / N;
+        const alt = radecToAltaz(s.ra, s.dec, lat, _tnLST(tNow + (m - nowM) * 60, lstNow, tNow))[0];
+        const x = X(m), y = Y(alt);
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 2.2; ctx.stroke(); ctx.lineWidth = 1;
+    }
+    ctx.fillStyle = "#e7edf2"; ctx.textAlign = "left";
+    ctx.font = "600 10.5px 'IBM Plex Sans KR',Pretendard,system-ui,sans-serif";
+    if (bw > 28) {
+      const nm = s.name.length > 13 ? s.name.slice(0, 12) + "…" : s.name;
+      ctx.fillText(nm, xa + 4, padT + 11);
+    }
+    if (bw > 42) {
+      ctx.fillStyle = "#8a94a1"; ctx.font = "500 9px 'IBM Plex Mono',ui-monospace,monospace";
+      ctx.fillText(s.p.params.slot_start || "", xa + 4, h - padB - 4);
+    }
+  });
+  // 현재 시각 세로선
+  if (nowM > t0 && nowM < t1) {
+    ctx.strokeStyle = "rgba(216,223,231,.6)"; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(X(nowM), padT); ctx.lineTo(X(nowM), h - padB); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // 고도 축
+  ctx.textAlign = "right"; ctx.font = "500 9.5px 'IBM Plex Sans KR',Pretendard,sans-serif";
+  [0, 30, 60, 90].forEach((a) => {
+    ctx.fillStyle = a === 30 ? "#cda35f" : "#8a94a1";
+    ctx.fillText(a + "°", padL - 3, Y(a) + 3);
+  });
+  // 시 눈금 (KST)
+  ctx.fillStyle = "#6b7280"; ctx.textAlign = "center";
+  ctx.font = "500 9px 'IBM Plex Mono',ui-monospace,monospace";
+  for (let m = Math.ceil(t0 / 60) * 60; m < t1; m += 60) {
+    const hr = ((Math.floor(m / 60)) % 24 + 24) % 24;
+    ctx.fillText(String(hr).padStart(2, "0") + "h", X(m), h - 3);
+  }
+}
+
+function wireSchedule() {
+  if (schWired) return; schWired = true;
+  const seg = $("sch-filter");
+  if (seg) seg.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on"); schState.status = b.dataset.s; loadSchedule();
+    };
+  });
+  const rf = $("sch-refresh"); if (rf) rf.onclick = loadSchedule;
+}
+
 // ---------- 시계열 플롯 빌더 ----------
 
 const PALETTE = ["#4cc9f0", "#34d399", "#fbbf24", "#fb7185",
@@ -1252,7 +1460,7 @@ const PROTO_TABS = (() => {
 const PROTO_GS_H = {
   sky: 9, skyflat: 9, mount: 6, camera: 6, focuser: 5, image: 7,
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
-  timeline: 6, plots: 9, frames: 7, actions: 7,
+  schedule: 14, timeline: 6, plots: 9, frames: 7, actions: 7,
   connections: 7, "log-sys": 7, sysinfo: 5,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
@@ -1272,9 +1480,10 @@ const PROTO_GS_LAYOUT = {
   "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
   "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
   // 계획(plan)
-  timeline: { x: 0, y: 0,  w: 12, h: 9 },
-  fov:      { x: 0, y: 9,  w: 12, h: 13 },
-  tonight:  { x: 0, y: 22, w: 12, h: 17 },
+  schedule: { x: 0, y: 0,  w: 12, h: 14 },
+  timeline: { x: 0, y: 14, w: 12, h: 9 },
+  fov:      { x: 0, y: 23, w: 12, h: 13 },
+  tonight:  { x: 0, y: 36, w: 12, h: 17 },
   // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
   plots:   { x: 0, y: 0,  w: 12, h: 10 },
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
@@ -1299,6 +1508,7 @@ const PANEL_DEF = {
   weather:      { klass: "mixed",   fills: false,    ar: null,    minW: 4, minH: 9,  defW: 5,  defH: 11, maxW: 7 },
   "embed-sat":  { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
+  schedule:     { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 11, defW: 12, defH: 14, maxW: 12 },
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
   fov:          { klass: "viz",     fills: false,    ar: null,    minW: 8, minH: 10, defW: 12, defH: 13, maxW: 12 },
   tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
@@ -1813,6 +2023,7 @@ function showTab(tab) {
   if (PROTO_TABS.has(tab) && typeof GridStack !== "undefined") ensureGridStack(tab);
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
+  if (tab === "plan") loadSchedule();   // AI 야간 계획 — 표시될 때 최신 plan 불러오기(캔버스 폭 확보 후)
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }
@@ -2850,6 +3061,7 @@ async function init() {
   kickSky();                            // 돔 애니메이션 (필요할 때만)
   wireTonight();                        // 오늘밤 베스트 토글/정렬 바인딩
   wireFov();                            // FOV 시뮬레이션 입력 바인딩
+  wireSchedule();                       // AI 야간 계획 — 상태필터/새로고침 바인딩
 }
 
 // ---------- 버튼 핸들러 ----------

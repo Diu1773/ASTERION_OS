@@ -132,16 +132,47 @@ class NightRunner:
     # ---------- 실행 루프 ----------
 
     async def _loop(self, plan_ids: list[int] | None, respect_slots: bool) -> None:
-        """S2까지 — 큐 구성. 실행시퀀스(S3)·안전(S4)·타이밍(S5)은 이후 단계에서 채운다."""
+        """S3 — 큐를 순서대로 실행(start_plan→wait→분류). 한 계획 실패는 _run_one에서
+        잡아 밤을 멈추지 않는다. 슬롯 대기(S5)·안전 게이트(S4)는 이후 단계에서 앞에 붙인다."""
         self._set(active=True, phase="큐 구성")
+        done, failed = [], []
         try:
             queue, skipped = self._build_queue(plan_ids, respect_slots)
-            self._set(queue=queue, skipped=skipped)
+            self._set(queue=list(queue), skipped=skipped, done=done, failed=failed)
             self.events.log("night_runner",
                             f"야간 운영 큐 {len(queue)}개 (스킵 {len(skipped)})")
-            if not queue:
-                self._set(phase="대상 없음")
-                return
-            self._set(phase="대기 (실행 시퀀스 미구현 — S3)")
+            for idx, item in enumerate(queue):
+                if self._stop.is_set():
+                    break
+                self._set(current=item, queue=queue[idx + 1:],
+                          phase=f"실행 #{item['plan_id']} {item['target']}")
+                result = await self._run_one(item)
+                (done if result == "done" else failed).append(item)
+            self._set(phase="정지됨" if self._stop.is_set() else "완료")
+            self.events.log("night_runner",
+                            f"야간 운영 종료 — 완료 {len(done)} / 실패 {len(failed)} / 스킵 {len(skipped)}")
+        except Exception as e:   # 루프 자체 보호(개별 계획 오류는 _run_one에서 흡수)
+            self.events.log("night_runner", f"야간 운영 루프 오류: {e}", "error")
+            self._set(phase="오류")
         finally:
             self._set(active=False, current=None)
+
+    async def _run_one(self, item: dict) -> str:
+        """한 계획을 Orchestrator로 실행하고 최종 plan 상태를 'done'/'failed'로 분류한다.
+        실패해도 예외를 전파하지 않는다 — 밤은 다음 계획으로 계속된다."""
+        pid = item["plan_id"]
+        try:
+            await self.orch.start_plan(pid)
+            await self.orch.wait()
+        except ActionError as e:
+            self.events.log("night_runner", f"계획 #{pid} 시작 거부: {e}", "warn")
+            return "failed"
+        except Exception as e:   # noqa: BLE001 — 실행 오류로 밤 전체가 멈추면 안 됨
+            self.events.log("night_runner", f"계획 #{pid} 실행 오류: {e}", "warn")
+            return "failed"
+        plan = self.meridian.get_plan(pid)
+        st = (plan or {}).get("approval_status")
+        ok = st == M.DONE
+        self.events.log("night_runner",
+                        f"계획 #{pid} {'완료' if ok else '미완료(' + str(st) + ')'}")
+        return "done" if ok else "failed"

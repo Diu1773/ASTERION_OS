@@ -47,9 +47,10 @@
   순 정렬. respect_slots면 `slot_end` 경과분은 skipped. ✅검증: 역순 입력 3개→큐 21:30/23:50/01:00.
   ⚠️야간분 skip은 한낮 실행 시 저녁슬롯을 오탐(wrap) — **S5에서 실제 datetime 앵커로 정밀화**. 운영(야간)·
   respect_slots=False에선 무관.
-- [ ] **S3 — 실행 시퀀스(슬롯무시 모드)**: `respect_slots=False`로 큐를 연달아
-  `start_plan→wait`. 검증(SIM e2e): 승인 3개 → `start(respect_slots=False)` → 셋 다 `DONE`,
-  `done` 리스트에 3개, Orchestrator 교차배제 동작.
+- [x] **S3 — 실행 시퀀스**: `_loop`이 큐를 순서대로 `_run_one`(start_plan→wait→get_plan 상태로
+  done/failed 분류). 개별 실패는 흡수해 밤 계속, `_stop` 시 break. ✅검증(FakeOrch): ①slot순[2,1,3]
+  전부 done ②중간실패→나머지 계속 ③정지→잔여 미실행(phase 정지됨) ④교차배제(nr중복·orch실행중 거부).
+  풀스택 SIM e2e(실드라이버)는 S7 회귀에서.
 - [ ] **S4 — 안전 게이트/홀드**: 슬롯 진입 전 `safety_fn()` 소비, WEATHER_HOLD면 held→해제 대기,
   타임아웃 시 skip. 검증: safety 스냅샷을 unsafe로 주입 → `held=True`, 안전복구 → 진행 재개.
 - [ ] **S5 — 슬롯 타이밍**: `respect_slots=True`에서 `slot_start`까지 대기(과거면 즉시, slot_end 경과 skip).
@@ -88,3 +89,7 @@
   버그수정: night_runner.py에 'from . import meridian as M' 누락(NameError)→추가. 알려진 한계:
   _now_night_min이 한낮(h<12 +24h wrap)엔 저녁슬롯을 과거로 오탐 → S5에서 슬롯을 '다가오는 밤'의
   실제 datetime에 앵커링해 해결. respect_slots=False(즉시·테스트)는 이 경로 안 탐.`
+- `2026-06-20 S3 — _loop 큐 순회 + _run_one(start_plan→wait→get_plan 상태 분류). 개별 실패는
+  _run_one에서 흡수(밤 안 멈춤), _stop은 루프 top에서 체크. 검증 경계: NightRunner 책임=시퀀싱이라
+  FakeOrch로 결정론 검증(순서/실패continue/정지/교차배제), 실드라이버 풀스택 e2e는 S7로. 프로젝트에
+  테스트 디렉터리 없음(Ph7도 애드혹) → FakeMer/FakeOrch 인라인 스크립트 검증 패턴 유지.`

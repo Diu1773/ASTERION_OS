@@ -15,7 +15,7 @@ import json
 from typing import Any
 
 from ..core.events import EventHub
-from ..core.ontology import Db, ObservationPlan, Target
+from ..core.ontology import Db, ObservationPlan, Target, UserGoal
 
 # 계획 승인/실행 상태 — Orchestrator와 공유.
 DRAFT = "draft"
@@ -72,6 +72,41 @@ class Meridian:
             "target": ({"id": t.id, "name": t.name, "ra_hours": t.ra_hours,
                         "dec_degs": t.dec_degs} if t else None),
         }
+
+    # ---------- 목표(UserGoal) — 스케줄러가 읽는 고수준 의도 ----------
+
+    def set_goal(self, goal_type: str, params: dict | None = None,
+                 required_filters: str = "", priority: int = 0) -> dict[str, Any]:
+        """관측 목표 설정. params는 quality_thresholds_json에 보관(set·필터·노출 등).
+        최신 row가 활성 목표(active_goal)."""
+        g = self.db.add(UserGoal(
+            goal_type=goal_type, required_filters=required_filters,
+            quality_thresholds_json=json.dumps(params or {}, ensure_ascii=False),
+            priority=priority))
+        self.events.log("meridian", f"목표 설정 — {goal_type} {params or ''}")
+        return {"id": g.id, "goal_type": goal_type, "params": params or {}}
+
+    def active_goal(self) -> dict[str, Any] | None:
+        def _q(s):
+            row = s.query(UserGoal).order_by(UserGoal.id.desc()).first()
+            if not row:
+                return None
+            try:
+                params = json.loads(row.quality_thresholds_json or "{}")
+            except Exception:
+                params = {}
+            return {"id": row.id, "goal_type": row.goal_type, "params": params,
+                    "priority": row.priority}
+        return self.db.query(_q)
+
+    def done_target_names(self) -> set[str]:
+        """이미 관측 완료(done 계획)된 대상 이름 집합 — 캠페인 '안 찍은 것' 판정용."""
+        def _q(s):
+            rows = (s.query(Target.name)
+                    .join(ObservationPlan, ObservationPlan.target_id == Target.id)
+                    .filter(ObservationPlan.approval_status == DONE).distinct().all())
+            return {r[0] for r in rows}
+        return self.db.query(_q)
 
     # ---------- CRUD ----------
 

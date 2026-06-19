@@ -93,6 +93,15 @@ class ToolKit:
                 "count_per_filter": {"type": "integer", "description": "필터당 장수(선택)"},
                 "filters": {"type": "array", "items": {"type": "string"},
                             "description": "필터 목록(선택, 기본 L)"}}),
+            fn("set_goal",
+               "관측 목표 설정 — 이후 plan_night이 이 목표를 따른다. goal_type=campaign이면 "
+               "set(messier/all/galaxies/nebulae)의 '아직 안 찍은 것'만 + 긴급도(곧 지는 것 먼저)로 "
+               "짠다. 예: '메시에 채우기를 목표로 해', '은하 캠페인 시작'.",
+               {"goal_type": {"type": "string",
+                              "description": "campaign / imaging_broadband / imaging_narrowband"},
+                "set": {"type": "string", "description": "campaign 대상군: messier/all/galaxies/nebulae(선택)"},
+                "filters": {"type": "array", "items": {"type": "string"}},
+                "exposure_s": {"type": "number"}, "count_per_filter": {"type": "integer"}}),
         ]
 
     # ---------- 디스패치 ----------
@@ -333,7 +342,7 @@ class ToolKit:
         s = math.sin(d) * math.sin(p) + math.cos(d) * math.cos(p) * math.cos(hr)
         return math.degrees(math.asin(max(-1.0, min(1.0, s))))
 
-    def _night_plan(self, hours, types, count, strategy):
+    def _night_plan(self, hours, types, count, strategy, campaign=False, exclude=None, idpred=None):
         """Phase1 스케줄러(to_thread). 하드제약(고도≥30·다크) → 점수(고도+관측창+달이격,
         imaging_broadband) → 비겹침 시간배분(transit순 greedy) → ObservationPlan(draft).
         각 계획 strategy에 slot_start/slot_end(KST) 기록."""
@@ -357,19 +366,27 @@ class ToolKit:
         for o in DSO:
             if types and o["t"] not in types:
                 continue
+            if idpred and not idpred(o):
+                continue   # 캠페인 세트(메시에 등) 밖 제외
+            label = (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
+            if exclude and label in exclude:
+                continue   # 이미 관측 완료 — 캠페인 '안 찍은 것'만
             alts = [(off, self._radec_alt(o["ra"], o["dec"], lst)) for off, lst, _ in use]
             peak_off, peak = max(alts, key=lambda x: x[1])
             obs = [off for off, a in alts if a >= 30]
             if peak < 30 or not obs:
                 continue   # 하드 제약: 고도 30° 못 넘으면 제외(위도/저고도 대상)
             sep = float(SkyCoord(o["ra"] * 15 * u.deg, o["dec"] * u.deg).separation(moon).deg)
-            cand.append({"o": o, "peak": peak, "tr": peak_off,
+            cand.append({"o": o, "label": label, "peak": peak, "tr": peak_off,
                          "win": (min(obs), max(obs)), "moon": sep})
         for c in cand:   # imaging_broadband 점수: 고도 + 관측창길이 + 달이격
             c["score"] = c["peak"] + (c["win"][1] - c["win"][0]) * 6 + c["moon"] * 0.15
-        cand.sort(key=lambda c: -c["score"])
+        if campaign:   # 긴급도 — 관측창 빨리 끝나는(곧 지는) 것 먼저
+            cand.sort(key=lambda c: (c["win"][1], -c["peak"]))
+        else:
+            cand.sort(key=lambda c: -c["score"])
         sel = cand[:max(1, count)]
-        sel.sort(key=lambda c: c["tr"])   # 시간순으로 배치
+        sel.sort(key=lambda c: c["tr"])   # 배치는 시간순
         dur = (len(strategy["filters"]) * strategy["exposure_s"]
                * strategy["count_per_filter"]) / 3600 + 1 / 6   # +10분 오버헤드
 
@@ -384,9 +401,8 @@ class ToolKit:
                 continue   # 남은 창에 슬롯 못 맞춤
             e = min(s + dur, c["win"][1] + 0.15)
             cursor = e
-            o = c["o"]
+            o, label = c["o"], c["label"]
             st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e))
-            label = (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
             plan = self.meridian.create_plan(
                 target_name=label, ra_hours=o["ra"], dec_degs=o["dec"], strategy=st2)
             out.append({"plan_id": plan.get("id"), "target": label,
@@ -395,22 +411,52 @@ class ToolKit:
                         "moon_sep": round(c["moon"]), "mag": o["mag"]})
         return out, len(dark) > 0
 
+    @staticmethod
+    def _dso_label(o):
+        return (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
+
+    async def _t_set_goal(self, a: dict) -> dict:
+        if self.meridian is None:
+            return {"error": "계획 모듈 미연결"}
+        gt = (a.get("goal_type") or "campaign").strip()
+        params = {k: a[k] for k in ("set", "filters", "exposure_s", "count_per_filter")
+                  if a.get(k) not in (None, "")}
+        self.meridian.set_goal(gt, params)
+        return {"ok": True, "goal_type": gt, "params": params,
+                "note": "목표 저장됨 — 이제 '계획 짜줘' 하면 이 목표대로 시간표를 짭니다."}
+
     async def _t_plan_night(self, a: dict) -> dict:
         if self.meridian is None:
             return {"error": "계획 모듈 미연결"}
         hours = float(a.get("hours") or 8)
-        types = match_type(a.get("type"))
         count = int(a.get("count") or 5)
+        goal = self.meridian.active_goal()
+        campaign = bool(goal and goal.get("goal_type") == "campaign")
+        gp = goal.get("params", {}) if goal else {}
+        setname = (gp.get("set") or "") if campaign else ""
+        types = match_type(a.get("type")) or (match_type(setname) if campaign else None)
+        idpred = (lambda o: o["id"].startswith("M")) if setname.lower() in ("messier", "메시에") else None
+        exclude = self.meridian.done_target_names() if campaign else None
+        src = gp if campaign else a
         strategy = {
-            "filters": a.get("filters") or ["L"],
-            "exposure_s": float(a.get("exposure_s", 120.0)),
-            "count_per_filter": int(a.get("count_per_filter", 10)),
+            "filters": src.get("filters") or a.get("filters") or ["L"],
+            "exposure_s": float(src.get("exposure_s", a.get("exposure_s", 120.0))),
+            "count_per_filter": int(src.get("count_per_filter", a.get("count_per_filter", 10))),
             "binning": 1, "dither_arcsec": 0.0, "priority": 0,
         }
         created, had_dark = await asyncio.to_thread(
-            self._night_plan, hours, types, count, strategy)
-        return {"created": created, "count": len(created), "window_hours": hours,
-                "type": a.get("type") or "전체",
-                "note": ("승인 대기(draft) — 실행하려면 사용자 승인 필요" if created
-                         else "조건에 맞는 관측 가능 대상이 없어요(고도 30°↑·밤시간 기준)"),
-                "dark_window": had_dark}
+            self._night_plan, hours, types, count, strategy, campaign, exclude, idpred)
+        out = {"created": created, "count": len(created), "window_hours": hours,
+               "dark_window": had_dark,
+               "note": ("승인 대기(draft) — 실행하려면 사용자 승인 필요" if created
+                        else "조건에 맞는 관측 가능 대상이 없어요(고도 30°↑·밤시간 기준)")}
+        if campaign:
+            done = exclude or set()
+            inset = [o for o in DSO if (not idpred or idpred(o)) and (not types or o["t"] in types)]
+            out["campaign"] = {"set": setname or "all",
+                               "total": len(inset),
+                               "done": sum(1 for o in inset if self._dso_label(o) in done),
+                               "ordered_by": "긴급도(곧 지는 것 먼저)"}
+        else:
+            out["type"] = a.get("type") or "전체"
+        return out

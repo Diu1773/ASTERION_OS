@@ -47,6 +47,7 @@ from .operation.api import build_operation_router
 from .operation.hooks import sim_autofocus, sim_platesolve
 from .operation.meridian import Meridian
 from .operation.orchestrator import ObservationOrchestrator
+from .operation.night_runner import NightRunner
 from .satellite import SatelliteProxy
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
 from .watchtower.dome_guard import DomeGuard
@@ -249,6 +250,11 @@ def create_app() -> FastAPI:
         safety_fn=lambda: sampler.snapshot.get("safety"),
         platesolve_fn=sim_platesolve, autofocus_fn=sim_autofocus)
     sampler.orchestrator_status = orch.status_dict
+    # Night Runner — 무인 야간 운영기(NIGHT_RUNNER_PLAN.md). 승인된 시간표를 슬롯 순서대로
+    # Orchestrator 위에서 시퀀싱한다(장비 직접조작 X). 안전 스냅샷을 슬롯 진입 전 소비.
+    night_runner = NightRunner(meridian, orch, events, cfg=cfg,
+                               safety_fn=lambda: sampler.snapshot.get("safety"))
+    sampler.night_runner_status = night_runner.status_dict
     # Sentinel — 프레임 품질 평가(Ph8, 로드맵 §10.4). 적재된 QualityMetric/Frame 지표로 판정.
     sentinel = Sentinel(cfg, db)
     # FrameData — 이미지/픽셀 뷰어 백엔드(저장 FITS→히스토그램/라인프로파일/통계 JSON).

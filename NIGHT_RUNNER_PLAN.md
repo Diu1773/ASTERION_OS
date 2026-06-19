@@ -40,8 +40,9 @@
 - 상태는 `app.py`가 `/api/status`의 `night_runner` 키로 노출(Orchestrator처럼).
 
 ## 3. 단계별 체크리스트 (각 단계 = 1커밋, 검증 후 다음)
-- [ ] **S1 — 스켈레톤**: `night_runner.py` `NightRunner`(start/stop/status_dict, 빈 루프) +
-  `app.py` 배선 + `/api/status`에 `night_runner` 키. 검증: 서버 기동, `GET /api/status`에 키 보임.
+- [x] **S1 — 스켈레톤**: `night_runner.py` `NightRunner`(start/request_stop/wait/status_dict, 빈 루프) +
+  `app.py` 배선 + status.py `night_runner` 키. ✅검증: uvicorn 기동→`GET /api/status.night_runner`=
+  `{active:false,queue:[],done:[]…}`. (프리뷰 매니저가 포트를 못 띄워 uvicorn 직접 8533로 검증)
 - [ ] **S2 — 큐 구성**: 승인 계획을 `slot_start` 순 정렬해 큐. `slot_end` 지난 건 skip 표시.
   검증: 승인 plan 3개 시드 → `status_dict().queue`가 슬롯순.
 - [ ] **S3 — 실행 시퀀스(슬롯무시 모드)**: `respect_slots=False`로 큐를 연달아
@@ -76,5 +77,8 @@
 7. 범위는 **Night Runner(S1~S7)**. 끝나기 전 스트레치로 새지 말 것.
 
 ## 6. 결정 로그 (루프가 추가)
-- (예: `2026-06-20 S3 — start_plan→wait 시퀀스, SIM 3계획 DONE 확인. 교차배제는 orchestrator.running() 체크로.`)
--
+- `2026-06-20 S1 — NightRunner 스켈레톤. Orchestrator 패턴 미러(_task/_stop/_state, status_dict/running/
+  request_stop/wait). status는 sampler.night_runner_status 콜백→스냅샷 "night_runner" 키(orchestrator와
+  동형). REST는 S6로 미룸(S1 범위=status 노출만). 교차배제: start()가 self.running()+orch.running() 체크.
+  검증: 프리뷰 매니저가 포트 바인딩 실패(코드무관, create_app() 91라우트 정상) → uvicorn 직접 8533 기동해
+  /api/status.night_runner 확인. 이후 단계도 서버 필요시 uvicorn 직접 또는 FakeMer 스크립트로 검증.`

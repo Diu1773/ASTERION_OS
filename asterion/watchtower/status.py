@@ -45,6 +45,7 @@ class StatusSampler:
         self.autoflat_status = lambda: {"running": False, "phase": "idle"}
         self.capture_status = lambda: {"active": False, "state": "idle"}
         self.orchestrator_status = lambda: {"running": False, "phase": "idle"}
+        self.night_runner_status = lambda: {"active": False, "phase": "idle"}
         self.forge_status = lambda: {"enabled": False}
         self.cooler_status = lambda: {"mode": "idle", "ramping": False}
         # 쿨러 램프 틱(주입형) — 매 스냅샷마다 호출(safety_actuator와 동형). max ΔT 거버너.
@@ -348,6 +349,7 @@ class StatusSampler:
             "autoflat": autoflat,
             "capture": capture,
             "orchestrator": orchestrator,
+            "night_runner": self.night_runner_status(),
             "forge": self.forge_status(),
             "cooler": self.cooler_status(),
             "sky_bodies": self._sky_bodies,

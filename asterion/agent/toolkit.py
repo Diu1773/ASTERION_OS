@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from ..core.dso_catalog import DSO, TYPE_KO, match_type
 from ..core.ontology import (
     ActionLog, CalibrationProduct, Decision, Frame, FocusRun,
     ObservationSession, TelemetrySample, WeatherRecord,
@@ -79,6 +81,17 @@ class ToolKit:
                "텔레메트리 채널 추세(min/mean/max·최신·표본수). 채널 비우면 사용 가능 채널 목록.",
                {"channel": {"type": "string", "description": "예: temperature, humidity(선택)"},
                 "hours": {"type": "number", "description": "되돌아볼 시간(기본 12)"}}),
+            fn("plan_night",
+               "오늘 밤 자동 관측계획 — 앞으로 N시간 내 관측 가능한 DSO를 종류·개수로 골라 "
+               "ObservationPlan(draft) 여러 개 생성. '오늘 밤 은하로 채워줘' 류. 생성 후 사용자 "
+               "승인 필요(바로 실행 안 함).",
+               {"hours": {"type": "number", "description": "앞으로 볼 시간(기본 8)"},
+                "type": {"type": "string", "description": "은하/성운/성단/galaxy/nebula 등(선택, 비우면 전체)"},
+                "count": {"type": "integer", "description": "생성할 계획 수(기본 5)"},
+                "exposure_s": {"type": "number", "description": "노출초(선택)"},
+                "count_per_filter": {"type": "integer", "description": "필터당 장수(선택)"},
+                "filters": {"type": "array", "items": {"type": "string"},
+                            "description": "필터 목록(선택, 기본 L)"}}),
         ]
 
     # ---------- 디스패치 ----------
@@ -309,3 +322,69 @@ class ToolKit:
                 "mean": round(sum(vmeans) / len(vmeans), 3) if vmeans else None,
                 "max": max(vmaxs) if vmaxs else None,
                 "latest": {"utc": latest.get("utc"), "mean": latest.get("vmean")}}
+
+    # ---------- 2단: 자동 야간계획 (plan_night) ----------
+
+    def _radec_alt(self, ra_h, dec_d, lst_h):
+        ha = (lst_h - ra_h) * 15.0
+        ha = ((ha + 180) % 360 + 360) % 360 - 180
+        hr = math.radians(ha); d = math.radians(dec_d); p = math.radians(self.lat)
+        s = math.sin(d) * math.sin(p) + math.cos(d) * math.cos(p) * math.cos(hr)
+        return math.degrees(math.asin(max(-1.0, min(1.0, s))))
+
+    def _night_plan(self, hours, types, count, strategy):
+        """무거운 계산(astropy 태양고도+샘플) — to_thread에서 실행. 각 DSO의 다크타임
+        중 최고고도 계산 → 종류/개수 필터 → ObservationPlan(draft) 생성."""
+        from astropy.coordinates import AltAz, EarthLocation, get_body
+        from astropy.time import Time
+        import astropy.units as u
+        loc = EarthLocation(lat=self.lat * u.deg, lon=self.lon * u.deg, height=0 * u.m)
+        now = Time.now()
+        N = 12
+        samp = []
+        for i in range(N + 1):
+            t = now + (i * hours / N) * u.hour
+            lst = float(t.sidereal_time("mean", longitude=self.lon * u.deg).hour)
+            sun = float(get_body("sun", t, loc)
+                        .transform_to(AltAz(obstime=t, location=loc)).alt.deg)
+            samp.append((lst, sun))
+        dark = [s for s in samp if s[1] < -10]
+        use = dark or samp
+        scored = []
+        for o in DSO:
+            if types and o["t"] not in types:
+                continue
+            mx = max(self._radec_alt(o["ra"], o["dec"], lst) for lst, _ in use)
+            if mx >= 30:
+                scored.append((mx, o))
+        scored.sort(key=lambda x: -x[0])
+        out = []
+        for mx, o in scored[:max(1, count)]:
+            label = (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
+            plan = self.meridian.create_plan(
+                target_name=label, ra_hours=o["ra"], dec_degs=o["dec"],
+                strategy=dict(strategy))
+            out.append({"plan_id": plan.get("id"), "target": label,
+                        "type": TYPE_KO.get(o["t"], o["t"]),
+                        "max_alt": round(mx, 1), "mag": o["mag"]})
+        return out, len(dark) > 0
+
+    async def _t_plan_night(self, a: dict) -> dict:
+        if self.meridian is None:
+            return {"error": "계획 모듈 미연결"}
+        hours = float(a.get("hours") or 8)
+        types = match_type(a.get("type"))
+        count = int(a.get("count") or 5)
+        strategy = {
+            "filters": a.get("filters") or ["L"],
+            "exposure_s": float(a.get("exposure_s", 120.0)),
+            "count_per_filter": int(a.get("count_per_filter", 10)),
+            "binning": 1, "dither_arcsec": 0.0, "priority": 0,
+        }
+        created, had_dark = await asyncio.to_thread(
+            self._night_plan, hours, types, count, strategy)
+        return {"created": created, "count": len(created), "window_hours": hours,
+                "type": a.get("type") or "전체",
+                "note": ("승인 대기(draft) — 실행하려면 사용자 승인 필요" if created
+                         else "조건에 맞는 관측 가능 대상이 없어요(고도 30°↑·밤시간 기준)"),
+                "dark_window": had_dark}

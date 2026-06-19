@@ -1,8 +1,8 @@
-# ASTREION OS Design Direction
+# ASTERION OS Design Direction
 
 ## Core Principle
 
-ASTREION OS is not a generic dark dashboard, sci-fi HUD, cyberpunk control panel, or AI-generated SaaS mockup.
+ASTERION OS is not a generic dark dashboard, sci-fi HUD, cyberpunk control panel, or AI-generated SaaS mockup.
 
 It is a professional autonomous observatory operating system.
 
@@ -21,11 +21,11 @@ The dashboard, homepage, command palette, telemetry cards, alert system, sky vis
 
 ## Name
 
-**ASTREION OS**
+**ASTERION OS**
 
 ## Description
 
-ASTREION OS is an autonomous observatory operating system that integrates telescope control, weather monitoring, target selection, scheduling, image quality assessment, and astronomical data analysis into one operational intelligence platform.
+ASTERION OS is an autonomous observatory operating system that integrates telescope control, weather monitoring, target selection, scheduling, image quality assessment, and astronomical data analysis into one operational intelligence platform.
 
 ## Design Keywords
 
@@ -75,9 +75,9 @@ Each area should have one dominant reference and one secondary reference.
 
 ---
 
-# 3. ASTREION Product Areas
+# 3. ASTERION Product Areas
 
-## 3.1 ASTREION Home
+## 3.1 ASTERION Home
 
 Purpose: public-facing product/brand website.
 
@@ -110,7 +110,7 @@ Should not feel like:
 Example hero concept:
 
 ```text
-ASTREION OS
+ASTERION OS
 Autonomous Observatory Intelligence Platform
 
 Plan, execute, monitor, and analyze astronomical observations through one integrated operating system.
@@ -129,7 +129,7 @@ Command-palette preview:
 
 ---
 
-## 3.2 ASTREION Console
+## 3.2 ASTERION Console
 
 Purpose: main Muuri-based integrated observatory dashboard.
 
@@ -201,7 +201,7 @@ Card hierarchy:
 
 ---
 
-## 3.3 ASTREION Command
+## 3.3 ASTERION Command
 
 Purpose: command palette for fast OS-like operation.
 
@@ -238,7 +238,7 @@ It is a fast interaction layer above the dashboard.
 
 ---
 
-## 3.4 ASTREION Telemetry
+## 3.4 ASTERION Telemetry
 
 Purpose: equipment, weather, and data quality metrics.
 
@@ -288,7 +288,7 @@ Do not use graph colors as decoration.
 
 ---
 
-## 3.5 ASTREION Watchtower
+## 3.5 ASTERION Watchtower
 
 Purpose: weather, safety, and system closure logic.
 
@@ -330,11 +330,11 @@ Wait until civil twilight ends
 ```
 
 Watchtower should not be just a weather card.
-It is the safety decision layer of ASTREION OS.
+It is the safety decision layer of ASTERION OS.
 
 ---
 
-## 3.6 ASTREION Skygraph
+## 3.6 ASTERION Skygraph
 
 Purpose: astronomical ontology and target-centered data structure.
 
@@ -375,7 +375,7 @@ It is the semantic map of the observatory.
 
 ---
 
-## 3.7 ASTREION Meridian
+## 3.7 ASTERION Meridian
 
 Purpose: observation request and scheduling workflow.
 
@@ -391,7 +391,7 @@ Design direction:
 * Constraint input
 * Priority assignment
 * Schedule submission
-* Autonomous scheduling by ASTREION OS
+* Autonomous scheduling by ASTERION OS
 
 Example workflow:
 
@@ -426,7 +426,7 @@ Meridian should feel like a scientific observation planner, not a generic form.
 
 ---
 
-## 3.8 ASTREION Skyview
+## 3.8 ASTERION Skyview
 
 Purpose: sky visualization and celestial context.
 
@@ -464,75 +464,56 @@ Avoid:
 
 # 4. Visual System
 
+> **Resolved 2026-06 — supersedes the earlier navy / glass direction.** Anchor reference: **NASA Open MCT (Espresso theme).** The principle behind every rule below: separate surfaces by *luminance*, reserve colour for *state*, and remove effects rather than add them. Near-black navy + cyan + glow + 16px radius reads as "AI SaaS / sci-fi"; a neutral mid-charcoal + one restrained accent reads as "instrument."
+
 ## Color
 
-Use a restrained dark theme.
-
-Background:
+Neutral charcoal dark theme — **not** near-black, **not** blue-tinted. Surfaces are opaque and separated by small luminance steps (~+8% per level), not by borders.
 
 ```css
---background: #080A0F;
---surface-1: rgba(18, 22, 30, 0.82);
---surface-2: rgba(25, 30, 40, 0.76);
---border: rgba(255, 255, 255, 0.07);
-```
+--bg-0:    #2a2a2c;   /* app background — neutral charcoal, zero blue tint */
+--bg-1:    #242427;   /* darker surface: drawers / overlay base */
+--panel:   #323236;   /* cards = body +~8% (opaque) */
+--panel-2: #3a3a3e;   /* inner surfaces: inputs, bars, buttons = +~14% */
+--edge:        rgba(255,255,255,.06);   /* hairline — used sparingly */
+--edge-strong: rgba(255,255,255,.12);
 
-Text:
+--text:  #ECEEF1;   /* primary: titles + emphasised values */
+--dim:   #AAB0B8;   /* secondary: labels */
+--faint: #767880;   /* meta, tags (de-emphasised) */
 
-```css
---text-primary: #E6EAF0;
---text-secondary: #9AA4B2;
---text-muted: #687386;
---text-disabled: #3F4858;
-```
+--accent:      #4DB8FF;                 /* interaction / selection ONLY */
+--accent-soft: rgba(77,184,255,.16);
 
-Accent:
-
-```css
---accent: #4DB8FF;
-```
-
-Status:
-
-```css
---safe: #4ADE80;
---warning: #FBBF24;
---danger: #F87171;
---idle: #8B95A7;
+--ok: #5FD08A;  --warn: #E3B341;  --err: #E5706E;  --idle: #8B8D95;
 ```
 
 Rules:
 
-* Accent color is not decoration.
-* Status colors are used only for actual system state.
-* Avoid random purple, cyan, green, yellow combinations.
-* Do not make everything glow.
+* Background is neutral mid-charcoal. Counterintuitively, *lighter + neutral* looks more professional than *darker + navy*.
+* Separate surfaces by **luminance steps**, not 1px borders. A border is a hairline, used only where luminance alone is not enough.
+* Base text is gray (`--dim`); reserve near-white (`--text`) for titles and emphasised numeric values.
+* `--accent` is the only chromatic colour in the chrome — it marks the *active / selected* element, never decoration. (Open MCT works because ~95% of it is neutral, so one accent reads as "active.")
+* No glow, no coloured shadows, no `backdrop-filter` blur on inline panels.
 
 ---
 
 ## Typography
 
-Use two font systems only.
-
-Primary UI font:
+One engineered family covering Korean + Latin + numerals.
 
 ```css
-Inter, Pretendard, system-ui, -apple-system, BlinkMacSystemFont, sans-serif
-```
-
-Monospace font:
-
-```css
-SF Mono, JetBrains Mono, IBM Plex Mono, monospace
+--sans: "IBM Plex Sans KR", Pretendard, -apple-system, "Malgun Gothic", system-ui, sans-serif;
+--mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
 ```
 
 Rules:
 
-* Use primary font for labels, buttons, titles, descriptions.
-* Use monospace only for time, coordinates, sensor values, exposure values, and technical status.
-* Do not use monospace everywhere.
-* Do not overuse uppercase.
-* Do not add excessive letter-spacing.
+* UI font for labels, buttons, titles, descriptions. (Inter dropped — too generic / "SaaS-default".)
+* Monospace **only** for time, coordinates, sensor values, exposure values, and technical status — not labels or buttons.
+* In a telemetry UI the *numeric mono* carries most of the perceived "font feel" — choose it deliberately.
+* Do not overuse uppercase or letter-spacing.
+* **Offline domes:** vendor the fonts locally (no CDN `<link>`) so the console runs without internet.
 
 Type scale:
 
@@ -548,61 +529,58 @@ Small metadata: 11px / 500
 
 ---
 
-## Cards
+## Surfaces & elevation
 
-Cards should feel like macOS dark material panels.
+Opaque charcoal panels, separated by luminance — not glass, not glow.
 
-Card style:
+```css
+--radius:    8px;   /* cards — not 16px; instrument, not toy. Use 6 for sharper. */
+--radius-sm: 5px;   /* buttons, chips, inputs */
+
+--shadow:         0 1px 2px rgba(0,0,0,.35);   /* inline panels = nearly flat */
+--shadow-overlay: 0 8px 28px rgba(0,0,0,.55);  /* ONLY menus / drawers / overlays */
+```
 
 ```css
 .card {
-  border-radius: 16px;
-  background: rgba(18, 22, 30, 0.78);
-  backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  background: var(--panel);          /* opaque charcoal */
+  border: 1px solid var(--edge);     /* hairline */
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* no backdrop-filter */
 }
 ```
 
+Elevation is purposeful — inline panels stay flat; only true overlays (menus, drawers) float.
+
 Avoid:
 
-* glowing blue borders
-* thick outlines
-* overly bright card backgrounds
-* decorative badges
+* glowing borders, coloured shadows, glassmorphism blur
+* a border on every surface (separate by luminance instead)
+* 16px+ radii (toy-like)
+* decorative badges, decorative uppercase tags
 * every card looking equally important
 
 ---
 
 ## Buttons
 
-Button types:
+Hierarchy comes from **fill weight, not colour or glow**: solid → surface → text-only.
 
-1. Primary action
-
-   * Execute
-   * Start
-   * GoTo
-   * Submit
-
-2. Secondary action
-
-   * Configure
-   * Open
-   * Preview
-
-3. Danger action
-
-   * Stop
-   * Abort
-   * Emergency close
+| Tier | Style | Use | Count |
+|------|-------|-----|-------|
+| **1 · Primary** | solid accent fill, light text | the main verb (Start, GoTo, Submit) | **one per panel** |
+| **2 · Secondary** | surface fill (`--panel-2`), muted text | common controls (Tracking, Park, Configure) | many |
+| **3 · Ghost** | text only, no fill / border | cancel, close, clear | many |
+| **4 · Danger** | calm: soft-red text on faint red fill | destructive (Stop) | as needed |
+| **5 · Emergency** | solid red, always prominent | safety-critical only (Emergency stop, Close dome) | rare |
 
 Rules:
 
-* Buttons should be calm and operational.
-* No neon glow.
-* Danger buttons should be used only for dangerous actions.
-* Use clear labels.
+* Hover = `filter: brightness(1.1)`. **Never** a border-highlight or glow.
+* Exactly one Primary per context. If two buttons look primary, neither reads as primary.
+* Danger is calm by default and intensifies on hover — don't make every Stop a glowing red, or the colour stops meaning "danger."
+* Emergency is the *one* exception to "calm": always loud red, and separated by spacing to prevent mis-clicks.
 
 ---
 
@@ -625,7 +603,7 @@ Suggested first layout:
 
 ```text
 Top Bar
-- ASTREION OS
+- ASTERION OS
 - UTC / KST / LST
 - Simulation status
 - Safety status
@@ -651,7 +629,7 @@ Row 3
 
 # 6. Main Rule for Claude
 
-When implementing ASTREION OS, do not simply make it look futuristic.
+When implementing ASTERION OS, do not simply make it look futuristic.
 
 Make it look operational.
 

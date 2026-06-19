@@ -8,7 +8,7 @@
 
   var css = `
   #ast-chat-fab{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;
-    background:#1b6fe0;color:#fff;border:none;cursor:pointer;z-index:99998;display:flex;
+    background:#2585cc;color:#fff;border:none;cursor:pointer;z-index:99998;display:flex;
     align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:transform .15s}
   #ast-chat-fab:hover{transform:scale(1.07)}
   #ast-chat-fab svg{width:28px;height:28px;stroke:#fff;fill:none;stroke-width:1.8;
@@ -30,7 +30,7 @@
     border-radius:7px;padding:4px 7px;font:12px/1.3 inherit;cursor:pointer}
   .ast-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
   .ast-m{max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
-  .ast-u{align-self:flex-end;background:#1b6fe0;color:#fff;border-bottom-right-radius:4px}
+  .ast-u{align-self:flex-end;background:#2585cc;color:#fff;border-bottom-right-radius:4px}
   .ast-a{align-self:flex-start;background:#1e2630;border-bottom-left-radius:4px}
   .ast-e{align-self:flex-start;background:#3a1d22;color:#ffd7d7;border:1px solid #6b2b34;
     border-bottom-left-radius:4px}
@@ -38,7 +38,7 @@
   .ast-in{display:flex;gap:6px;padding:10px;border-top:1px solid #2a3340;background:#161c25}
   .ast-in textarea{flex:1;resize:none;height:38px;max-height:120px;background:#0d1117;color:#e6edf3;
     border:1px solid #2a3340;border-radius:8px;padding:8px;font:14px/1.4 inherit}
-  .ast-in button{background:#1b6fe0;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer}
+  .ast-in button{background:#2585cc;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer}
   .ast-in button:disabled{opacity:.5;cursor:default}
   `;
   var st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);

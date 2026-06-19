@@ -5,33 +5,33 @@
    ============================================================ */
 
 :root {
-  --bg-0: #080A0F;                       /* 앱 배경 */
-  --bg-1: #0C0F16;                       /* 살짝 올라온 면(드로어 등) */
-  --panel: rgba(20, 24, 32, 0.72);       /* 카드(중성 다크 머티리얼) */
-  --panel-2: rgba(255, 255, 255, 0.035); /* 카드 내부 면(입력·바·타일) */
-  --panel-solid: #12161E;
-  --edge: rgba(255, 255, 255, 0.07);
-  --edge-strong: rgba(255, 255, 255, 0.13);
-  --text: #E6EAF0;                       /* 1차 텍스트 */
-  --dim: #9AA4B2;                        /* 2차 텍스트 */
-  --faint: #687386;                      /* 보조/메타 */
-  --disabled: #3F4858;
-  --accent: #4DB8FF;                     /* 장식 아님 — 상호작용/선택 전용 */
-  --accent-soft: rgba(77, 184, 255, 0.14);
-  --accent-2: var(--accent);             /* 별도 보조 강조색 두지 않음 */
-  --ok: #4ADE80;
-  --warn: #FBBF24;
-  --err: #F87171;
-  --idle: #8B95A7;
-  --violet: #9A8CC4;                     /* 차트 등 다계열에서만 (장식 X) */
-  /* 숫자/영문 계기 폰트 — IBM Plex Mono(계기·엔지니어링 인상). 시스템 모노는 다크에서
-     너무 얇아 'AI스러운' 인상이라 교체. 미로드 시 시스템 모노로 폴백. 오프라인 대비 로컬 vendoring 권장 */
-  --mono: "B612 Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "D2Coding", monospace;
-  /* Pretendard 우선, 없으면 OS 네이티브(San Francisco / Segoe UI / 맑은 고딕) */
-  --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
-  --radius: 16px;
-  --radius-sm: 10px;
-  --shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  --bg-0: #191c24;                       /* 앱 배경 — 딥 슬레이트(쿨/블루 살짝, 밝기 유지) */
+  --bg-1: #14161d;                       /* 더 어두운 면(드로어·오버레이 베이스) */
+  --panel: #212229;                      /* 카드 = 본문보다 살짝 밝게(명도단차), 어둡게 조정 */
+  --panel-2: #2a2b31;                    /* 카드 내부 면(입력·바·버튼) */
+  --panel-solid: #212229;
+  --edge: rgba(255, 255, 255, 0.06);     /* hairline — 가끔만 */
+  --edge-strong: rgba(255, 255, 255, 0.12);
+  --text: #EEF0F3;                       /* 1차: 제목·강조 수치 */
+  --dim: #AEB4BC;                        /* 2차: 라벨 */
+  --faint: #868C96;                      /* 보조/메타·태그 — 대비 확보(AA) */
+  --disabled: #4A4A50;
+  --accent: #4DB8FF;                     /* 상호작용/선택 전용 */
+  --accent-soft: rgba(77, 184, 255, 0.16);
+  --accent-2: var(--accent);
+  --ok: #5FD08A;
+  --warn: #E3B341;
+  --err: #E5706E;
+  --idle: #8B8D95;
+  --violet: #9A8CC4;
+  /* 계기 폰트: IBM Plex Mono(숫자). 미로드 시 시스템 모노 폴백. 오프라인 대비 로컬 vendoring 권장 */
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  /* IBM Plex Sans KR(한글 UI) 우선, 없으면 Pretendard → OS 네이티브 */
+  --sans: "IBM Plex Sans KR", "Pretendard Variable", Pretendard, -apple-system, "Malgun Gothic", system-ui, sans-serif;
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);          /* 인라인은 거의 평평 */
+  --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.55); /* 드로어·메뉴 등 오버레이만 */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -51,7 +51,7 @@ body {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap; row-gap: 10px;
   padding: 11px 22px;
   border-bottom: 1px solid var(--edge);
-  background: rgba(12, 15, 22, 0.82);
+  background: rgba(22, 22, 25, 0.86);
   backdrop-filter: blur(14px);
   position: sticky; top: 0; z-index: 20;
 }
@@ -237,7 +237,6 @@ body.solo .gt-newwin { display: none; }
   border-radius: var(--radius);
   padding: 15px 17px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
   position: relative;
 }
 .card-head {
@@ -371,12 +370,17 @@ select { color-scheme: dark; }
   border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 500;
   transition: background .15s, border-color .15s; white-space: nowrap;
 }
-.btn:hover { background: rgba(255,255,255,.08); border-color: var(--edge-strong); }
+.btn:hover { background: var(--panel-2); filter: brightness(1.12); }
 .btn:disabled { opacity: .4; cursor: default; }
-.btn-danger { background: rgba(248,113,113,.1); border-color: rgba(248,113,113,.32); color: #fca5a5; }
-.btn-danger:hover { background: rgba(248,113,113,.16); border-color: rgba(248,113,113,.5); }
-.btn-go { background: var(--accent-soft); border-color: rgba(77,184,255,.45); color: #cfe8ff; font-weight: 600; }
-.btn-go:hover { background: rgba(77,184,255,.22); border-color: var(--accent); }
+/* 버튼 위계: fill 강도(solid→면→텍스트). hover=밝기만, 글로우·테두리하이라이트 금지 */
+.btn-danger { background: rgba(229,112,110,.13); border-color: transparent; color: #e98b89; }
+.btn-danger:hover { filter: brightness(1.13); }
+.btn-go { background: #2585cc; border-color: transparent; color: #f0f8ff; font-weight: 600; }
+.btn-go:hover { filter: brightness(1.1); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--dim); }
+.btn-ghost:hover { background: var(--panel-2); color: var(--text); }
+.btn-emergency { background: #b23b3a; border-color: transparent; color: #fff; font-weight: 600; }
+.btn-emergency:hover { filter: brightness(1.1); }
 .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
 /* ---------------- sky dome ---------------- */
@@ -455,7 +459,7 @@ select { color-scheme: dark; }
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
   max-width: 190px; margin: 10px auto 0;
 }
-.jog-pad .btn.jog { padding: 7px 0; font-size: 13px; }
+.jog-pad .btn.jog { padding: 0; font-size: 13px; min-height: 35px; display: flex; align-items: center; justify-content: center; }
 .jog-pad select { padding: 5px 4px; font-size: 11px; text-align: center; }
 
 .resolve-line {
@@ -881,14 +885,16 @@ body:not(.devmode) .devmode-only { display: none; }
 .grid-stack .grid-stack-item-content.card {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   overflow: auto; margin: 0;
-  scrollbar-width: none;              /* 세로 bar 숨김 (높이는 내용에 맞춤) */
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent;  /* 얇은 스크롤바 — 내용 넘쳐도 가려지지 않게 */
   border-radius: 2px;                 /* 직각 */
   padding: 10px 12px;                 /* 15/17 → 축소 (고밀도) */
-  background: #10141b;                /* 솔리드(반투명·블러 제거) */
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--panel);           /* 차콜(중성) — 토큰 통일 */
+  border: 1px solid var(--edge);
   box-shadow: none; backdrop-filter: none;
 }
-.grid-stack .grid-stack-item-content.card::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.grid-stack .grid-stack-item-content.card::-webkit-scrollbar { width: 7px; height: 7px; }
+.grid-stack .grid-stack-item-content.card::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 7px; }
+.grid-stack .grid-stack-item-content.card::-webkit-scrollbar-track { background: transparent; }
 /* 컴팩트 헤더 */
 .grid-stack .card-head { margin-bottom: 9px; padding-bottom: 7px; }
 .grid-stack .card-title { font-size: 12px; font-weight: 500; letter-spacing: .2px; }

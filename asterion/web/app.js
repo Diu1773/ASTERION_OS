@@ -875,6 +875,17 @@ function drawTnMini(cv, item) {
   ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
 }
 function tnGlow(o) { return TN_GLOW[o.t] || TN_GLOW.gx; }
+// 실제 DSS2 컬러 컷아웃 (CDS hips2fits, ra는 도 단위). 로드 실패/오프라인이면
+// 뒤의 글로우 그라데이션이 자동 폴백(배경 레이어).
+function tnImg(o) {
+  return "https://alasky.u-strasbg.fr/hips-image-services/hips2fits?hips=CDS/P/DSS2/color&ra="
+    + (o.ra * 15).toFixed(4) + "&dec=" + o.dec.toFixed(4)
+    + "&fov=0.6&width=320&height=200&format=jpg&projection=TAN";
+}
+function tnBg(o) {
+  return "url(" + tnImg(o) + ") center/cover no-repeat,radial-gradient(circle at 50% 50%,"
+    + tnGlow(o) + ",transparent 66%),#090b0e";
+}
 function tnSorted() {
   const a = (tnData || []).slice();
   const s = tnState.sort;
@@ -891,17 +902,17 @@ function renderTonightHTML() {
     html = '<div class="tn-grid">' + top.map((it, k) => {
       const o = it.o;
       return '<div class="tn-card" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
-        + '<div class="tn-photo" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 66%),#090b0e">'
-        + '<div class="tn-fade"></div><div class="tn-nm"><b>' + (o.name || o.id) + '</b><span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div>'
-        + '<span class="tn-alt">' + Math.round(it.maxAlt) + '°</span></div>'
-        + '<canvas class="tn-mini" data-k="' + k + '"></canvas>'
-        + '<div class="tn-foot">★ ' + o.mag.toFixed(1) + '등 · 통과 ' + _tnHHMM(it.trT) + '</div></div>';
+        + '<div class="tn-photo" style="background:' + tnBg(o) + '">'
+        + '<div class="tn-fade2"></div>'
+        + '<div class="tn-ov"><div class="tn-nm2"><b>' + (o.name || o.id) + '</b> <span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div>'
+        + '<div class="tn-meta2">★ ' + o.mag.toFixed(1) + '등 · 최고 <b>' + Math.round(it.maxAlt) + '°</b> · 통과 ' + _tnHHMM(it.trT) + '</div></div></div>'
+        + '<canvas class="tn-mini" data-k="' + k + '"></canvas></div>';
     }).join("") + '</div>';
   } else if (tnState.view === "list") {
     html = '<div class="tn-list">' + top.map((it, k) => {
       const o = it.o;
       return '<div class="tn-row" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
-        + '<div class="tn-th" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 65%),#090b0e"></div>'
+        + '<div class="tn-th" style="background:' + tnBg(o) + '"></div>'
         + '<span class="tn-rnm"><b>' + (o.name || o.id) + '</b> <span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></span>'
         + '<span class="tn-rmag">★' + o.mag.toFixed(1) + '</span>'
         + '<canvas class="tn-mini sm" data-k="' + k + '"></canvas>'
@@ -914,13 +925,13 @@ function renderTonightHTML() {
     const left = '<div class="tn-slist">' + top.map((it) => {
       const o = it.o;
       return '<div class="tn-sli' + (o.id === tnSel ? ' on' : '') + '" data-id="' + o.id + '">'
-        + '<div class="tn-th sm" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 65%),#090b0e"></div>'
+        + '<div class="tn-th sm" style="background:' + tnBg(o) + '"></div>'
         + '<span class="tn-slnm"><b>' + (o.name || o.id) + '</b></span><span class="tn-ralt">' + Math.round(it.maxAlt) + '°</span></div>';
     }).join("") + '</div>';
     let right = '<div class="tn-sdet">대상을 선택하세요</div>';
     if (sit) {
       const o = sit.o;
-      right = '<div class="tn-sdet"><div class="tn-photo big" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 64%),#090b0e">'
+      right = '<div class="tn-sdet"><div class="tn-photo big" style="background:' + tnBg(o) + '">'
         + '<div class="tn-fade"></div><div class="tn-nm"><b>' + (o.name || o.id) + '</b><span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div></div>'
         + '<canvas class="tn-mini big" data-k="sel"></canvas>'
         + '<div class="tn-sstats"><span>최고 <b>' + Math.round(sit.maxAlt) + '°</b></span><span>통과 <b>' + _tnHHMM(sit.trT) + '</b></span><span>등급 <b>' + o.mag.toFixed(1) + '</b></span></div>'

@@ -711,6 +711,7 @@ function aduRange() {
 let timelineData = null;
 let trackData = null;
 let lastTimelineDraw = 0;
+let tlHoverT = null;   // 타임라인 호버 시각(마우스) — 크로스헤어+값 표시
 
 async function fetchTimeline() {
   try {
@@ -748,10 +749,24 @@ function drawTimelineOn(cv) {
   const t0 = td.start, t1 = td.end;
   const padL = 34, padR = 12, padT = 12, padB = 20;
   const X = (t) => padL + (t - t0) / (t1 - t0) * (w - padL - padR);
-  const Y = (a) => (h - padB) - ((a - (-30)) / 120) * (h - padT - padB);
+  // 0°가 baseline(바닥), 90°가 위. 지평선 아래(음수)는 바닥에 클램프.
+  const Y = (a) => (h - padB) - (Math.max(0, Math.min(90, a)) / 90) * (h - padT - padB);
   const plotH = h - padT - padB;
   const nowT = Date.now() / 1000;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
+
+  // 마우스 호버 → 크로스헤어 + 시각/고도 (캔버스당 1회 바인딩)
+  if (!cv.dataset.tlw) {
+    cv.dataset.tlw = "1"; cv.style.cursor = "crosshair";
+    cv.addEventListener("mousemove", (e) => {
+      const td2 = timelineData; if (!td2) return;
+      const r = cv.getBoundingClientRect();
+      const frac = (e.clientX - r.left - padL) / (r.width - padL - padR);
+      tlHoverT = td2.start + Math.max(0, Math.min(1, frac)) * (td2.end - td2.start);
+      drawTimeline();
+    });
+    cv.addEventListener("mouseleave", () => { tlHoverT = null; drawTimeline(); });
+  }
 
   // 박명 밴드 (일몰박명→천문야간)
   for (let i = 0; i < td.t.length - 1; i++) {
@@ -807,6 +822,30 @@ function drawTimelineOn(cv) {
     ctx.strokeStyle = "rgba(216,223,231,.6)"; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(X(nowT), padT); ctx.lineTo(X(nowT), h - padB); ctx.stroke();
     ctx.setLineDash([]);
+  }
+  // 호버 크로스헤어 + 시각/고도 읽기
+  if (tlHoverT != null && tlHoverT > t0 && tlHoverT < t1) {
+    const hx = X(tlHoverT);
+    ctx.strokeStyle = "rgba(231,237,242,.45)"; ctx.setLineDash([2, 2]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(hx, padT); ctx.lineTo(hx, h - padB); ctx.stroke(); ctx.setLineDash([]);
+    const d = new Date(tlHoverT * 1000);
+    let label = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    if (trackData && trackData.t && trackData.t.length) {
+      const tt = trackData.t, aa = trackData.alt;
+      if (tlHoverT >= tt[0] && tlHoverT <= tt[tt.length - 1]) {
+        let j = 0; while (j < tt.length - 1 && tt[j + 1] < tlHoverT) j++;
+        const f = (tlHoverT - tt[j]) / ((tt[j + 1] - tt[j]) || 1);
+        const na = aa[j] + (aa[j + 1] - aa[j]) * f;
+        ctx.fillStyle = "#fff"; ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(hx, Y(na), 3.4, 0, 7); ctx.fill(); ctx.stroke();
+        label += " · " + Math.max(0, Math.round(na)) + "°";
+      }
+    }
+    ctx.font = "600 10.5px Pretendard,system-ui,sans-serif";
+    const tw = ctx.measureText(label).width + 12;
+    let lx = hx + 7; if (lx + tw > w - padR) lx = hx - 7 - tw;
+    ctx.fillStyle = "rgba(8,11,18,.86)"; ctx.fillRect(lx, padT + 2, tw, 17);
+    ctx.fillStyle = "#e7edf2"; ctx.textAlign = "left"; ctx.fillText(label, lx + 6, padT + 14);
   }
   // 축 라벨 (앱 글꼴 · 30°만 앰버)
   ctx.textAlign = "right"; ctx.font = "500 10px Pretendard,system-ui,sans-serif";
@@ -983,8 +1022,8 @@ function wireTonight() {
 // ---------- FOV 시뮬레이션 (PLAN 탭) ----------
 // 선택한 대상의 DSS2 위에 (망원경 초점거리+센서)로 정해지는 카메라 화각 사각형을 얹는다.
 // 대상은 '오늘 밤 베스트' 카드 클릭(tnPick)으로 설정.
-let fovTarget = null;
-function setFovTarget(ra, dec, nm) { fovTarget = { ra: +ra, dec: +dec, nm: nm }; renderFov(); }
+let fovTarget = null, fovZoom = 1;
+function setFovTarget(ra, dec, nm) { fovTarget = { ra: +ra, dec: +dec, nm: nm }; fovZoom = 1; renderFov(); }
 function tnPick(ra, dec, nm) { fetchTrack(+ra, +dec, nm); setFovTarget(ra, dec, nm); }
 function fovCam() {
   const focal = +(($("fov-focal") || {}).value) || 530;
@@ -1000,8 +1039,9 @@ function renderFov() {
   }
   if (!fovTarget) return;
   const cam = fovCam();
-  // 이미지 화각은 ~2.5° 고정(카메라가 더 크면 확장) → 초점 길수록 화각 사각형이 작게 보임
-  const ifov = Math.min(5, Math.max(2.5, Math.max(cam.w, cam.h) * 1.15));
+  // 기본 이미지 화각 ~2.5°(카메라가 더 크면 확장). 휠 줌(fovZoom)으로 확대/축소.
+  const baseIfov = Math.max(2.5, Math.max(cam.w, cam.h) * 1.15);
+  const ifov = Math.min(8, Math.max(0.15, baseIfov / fovZoom));
   const url = "https://alasky.u-strasbg.fr/hips-image-services/hips2fits?hips=CDS/P/DSS2/color&ra="
     + (fovTarget.ra * 15).toFixed(4) + "&dec=" + fovTarget.dec.toFixed(4)
     + "&fov=" + ifov.toFixed(3) + "&width=560&height=560&format=jpg&projection=TAN";
@@ -1021,6 +1061,12 @@ function wireFov() {
   ["fov-focal", "fov-sensor", "fov-rot"].forEach((id) => {
     const el = $(id); if (el) { el.oninput = renderFov; el.onchange = renderFov; }
   });
+  const st = $("fov-stage");
+  if (st) st.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    fovZoom = Math.max(0.3, Math.min(12, fovZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    renderFov();
+  }, { passive: false });
   renderFov();
 }
 

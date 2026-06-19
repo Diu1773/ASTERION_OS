@@ -955,6 +955,8 @@ body:not(.devmode) .devmode-only { display: none; }
 .tn-nm2 span { font-size:11px; color:#9aa4b0; }
 .tn-meta2 { font-size:11px; color:#cdd6e0; margin-top:3px; }
 .tn-meta2 b { color:#ec7a73; font-weight:500; }
+/* 사진 위 텍스트 가독성 — DSS 위라 그림자 필수 */
+.tn-nm b, .tn-nm span, .tn-nm2 b, .tn-nm2 span, .tn-meta2, .tn-alt { text-shadow:0 1px 3px rgba(0,0,0,.9); }
 .tn-alt { position:absolute; top:8px; right:10px; font-size:12px; font-weight:500; color:#ec7a73; }
 .tn-card > .tn-mini { flex:1 1 200px; width:auto; height:auto; align-self:stretch; }
 .tn-mini { display:block; width:100%; height:52px; }

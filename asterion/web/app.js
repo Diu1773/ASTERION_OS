@@ -1022,51 +1022,75 @@ function wireTonight() {
 // ---------- FOV 시뮬레이션 (PLAN 탭) ----------
 // 선택한 대상의 DSS2 위에 (망원경 초점거리+센서)로 정해지는 카메라 화각 사각형을 얹는다.
 // 대상은 '오늘 밤 베스트' 카드 클릭(tnPick)으로 설정.
-let fovTarget = null, fovZoom = 1;
-function setFovTarget(ra, dec, nm) { fovTarget = { ra: +ra, dec: +dec, nm: nm }; fovZoom = 1; renderFov(); }
+let fovTarget = null, fovZoom = 1, fovPanX = 0, fovPanY = 0, fovBase = null;
+const FOV_BASE_DEG = 4;   // 베이스 이미지 화각(°) — 대상당 1회만 로드, 줌/팬은 CSS변환
+function setFovTarget(ra, dec, nm) {
+  fovTarget = { ra: +ra, dec: +dec, nm: nm }; fovZoom = 1; fovPanX = 0; fovPanY = 0; renderFov();
+}
 function tnPick(ra, dec, nm) { fetchTrack(+ra, +dec, nm); setFovTarget(ra, dec, nm); }
 function fovCam() {
   const focal = +(($("fov-focal") || {}).value) || 530;
   const p = (($("fov-sensor") || {}).value || "23.5,15.7").split(",").map(Number);
   return { w: p[0] / focal * 57.2958, h: p[1] / focal * 57.2958, focal, sw: p[0], sh: p[1] };
 }
+function loadFovImage() {   // 대상 이미지 1회 로드 (줌/팬으로는 재요청 안 함 → 깜빡임 X)
+  const img = $("fov-img"); if (!img || !fovTarget) return;
+  fovBase = { ra: fovTarget.ra, dec: fovTarget.dec, fov: FOV_BASE_DEG };
+  const url = "https://alasky.u-strasbg.fr/hips-image-services/hips2fits?hips=CDS/P/DSS2/color&ra="
+    + (fovTarget.ra * 15).toFixed(4) + "&dec=" + fovTarget.dec.toFixed(4)
+    + "&fov=" + FOV_BASE_DEG + "&width=900&height=900&format=jpg&projection=TAN";
+  if (img.getAttribute("src") !== url) img.setAttribute("src", url);
+}
+function applyFovView() {   // 줌/팬/카메라 → CSS 변환·사각형·중심좌표 (네트워크 0)
+  const img = $("fov-img"); if (!img || !fovBase) return;
+  img.style.transform = "translate(" + fovPanX.toFixed(1) + "px," + fovPanY.toFixed(1) + "px) scale(" + fovZoom.toFixed(3) + ")";
+  const cam = fovCam(), dispFov = fovBase.fov / fovZoom, rect = $("fov-rect");
+  if (rect) {
+    rect.style.width = Math.min(100, cam.w / dispFov * 100).toFixed(1) + "%";
+    rect.style.height = Math.min(100, cam.h / dispFov * 100).toFixed(1) + "%";
+    rect.style.transform = "translate(-50%,-50%) rotate(" + ((+($("fov-rot") || {}).value) || 0) + "deg)";
+  }
+  const W0 = ($("fov-stage") || {}).clientWidth || 500;
+  const offX = (-fovPanX / fovZoom) * fovBase.fov / W0;   // 중심 십자선이 가리키는 하늘 좌표
+  const offY = (-fovPanY / fovZoom) * fovBase.fov / W0;
+  const cdec = fovBase.dec - offY;
+  const cra = fovBase.ra - (offX / 15) / Math.cos(fovBase.dec * Math.PI / 180);
+  if ($("fov-coord")) $("fov-coord").textContent =
+    (fovTarget && fovTarget.nm ? fovTarget.nm + " · " : "") + "중심 RA " + fmtRa(cra) + " · DEC " + fmtDec(cdec);
+  if ($("fov-label")) $("fov-label").textContent =
+    "FOV " + cam.w.toFixed(2) + "° × " + cam.h.toFixed(2) + "° · " + cam.focal + "mm · 줌 " + fovZoom.toFixed(1) + "×";
+}
 function renderFov() {
-  const stage = $("fov-stage"); if (!stage) return;
   if (!fovTarget && window.SKY_CATALOG) {
     const m = (window.SKY_CATALOG.messier || []).find((o) => o.id === "M31")
       || (window.SKY_CATALOG.messier || [])[0];
     if (m) fovTarget = { ra: m.ra, dec: m.dec, nm: m.name || m.id };
   }
   if (!fovTarget) return;
-  const cam = fovCam();
-  // 기본 이미지 화각 ~2.5°(카메라가 더 크면 확장). 휠 줌(fovZoom)으로 확대/축소.
-  const baseIfov = Math.max(2.5, Math.max(cam.w, cam.h) * 1.15);
-  const ifov = Math.min(8, Math.max(0.15, baseIfov / fovZoom));
-  const url = "https://alasky.u-strasbg.fr/hips-image-services/hips2fits?hips=CDS/P/DSS2/color&ra="
-    + (fovTarget.ra * 15).toFixed(4) + "&dec=" + fovTarget.dec.toFixed(4)
-    + "&fov=" + ifov.toFixed(3) + "&width=560&height=560&format=jpg&projection=TAN";
-  stage.style.backgroundImage = "url(" + url + ")";
-  const rect = $("fov-rect");
-  if (rect) {
-    rect.style.width = (cam.w / ifov * 100).toFixed(1) + "%";
-    rect.style.height = (cam.h / ifov * 100).toFixed(1) + "%";
-    rect.style.transform = "translate(-50%,-50%) rotate(" + ((+($("fov-rot") || {}).value) || 0) + "deg)";
-  }
-  if ($("fov-label")) $("fov-label").textContent =
-    "FOV " + cam.w.toFixed(2) + "° × " + cam.h.toFixed(2) + "° · " + cam.focal + "mm · " + cam.sw + "×" + cam.sh + "mm";
-  if ($("fov-coord")) $("fov-coord").textContent =
-    (fovTarget.nm || "") + " · RA " + fmtRa(fovTarget.ra) + " · DEC " + fmtDec(fovTarget.dec);
+  loadFovImage(); applyFovView();
 }
 function wireFov() {
   ["fov-focal", "fov-sensor", "fov-rot"].forEach((id) => {
-    const el = $(id); if (el) { el.oninput = renderFov; el.onchange = renderFov; }
+    const el = $(id); if (el) { el.oninput = applyFovView; el.onchange = applyFovView; }
   });
   const st = $("fov-stage");
-  if (st) st.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    fovZoom = Math.max(0.3, Math.min(12, fovZoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-    renderFov();
-  }, { passive: false });
+  if (st && !st.dataset.fw) {
+    st.dataset.fw = "1";
+    st.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const old = fovZoom;
+      fovZoom = Math.max(1, Math.min(16, fovZoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      const r = fovZoom / old; fovPanX *= r; fovPanY *= r;   // 중심 기준 줌(중심 좌표 고정)
+      applyFovView();
+    }, { passive: false });
+    let drag = false, lx = 0, ly = 0;
+    st.addEventListener("mousedown", (e) => { drag = true; lx = e.clientX; ly = e.clientY; st.classList.add("drag"); e.preventDefault(); });
+    window.addEventListener("mousemove", (e) => {
+      if (!drag) return;
+      fovPanX += e.clientX - lx; fovPanY += e.clientY - ly; lx = e.clientX; ly = e.clientY; applyFovView();
+    });
+    window.addEventListener("mouseup", () => { if (drag) { drag = false; st.classList.remove("drag"); } });
+  }
   renderFov();
 }
 

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=123">
+<link rel="stylesheet" href="/static/style.css?v=124">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -500,7 +500,12 @@
           <label>회전 <input id="fov-rot" type="number" value="0" min="0" max="360" step="5"> °</label>
           <span class="fov-coord" id="fov-coord"></span>
         </div>
-        <div class="fov-stage" id="fov-stage"><div class="fov-rect" id="fov-rect"></div><div class="fov-lab" id="fov-label"></div></div>
+        <div class="fov-stage" id="fov-stage">
+          <img id="fov-img" alt="" draggable="false">
+          <div class="fov-rect" id="fov-rect"></div>
+          <div id="fov-center"></div>
+          <div class="fov-lab" id="fov-label"></div>
+        </div>
         <div class="hint">오늘 밤 베스트에서 대상을 클릭하면 그 천체의 실측(DSS2) 위에 카메라 화각이 표시됩니다</div>
       </section>
       </div>
@@ -699,7 +704,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=158"></script>
+<script src="/static/app.js?v=159"></script>
 <script src="/static/agent_chat.js?v=3" defer></script>
 </body>
 </html>

@@ -991,6 +991,12 @@ body:not(.devmode) .devmode-only { display: none; }
 .fov-toolbar input { width:64px; background:#0c1016; border:1px solid #2a323d; border-radius:6px; color:#dfe5ec; padding:4px 6px; font-size:12px; }
 .fov-toolbar select { background:#0c1016; border:1px solid #2a323d; border-radius:6px; color:#cdd6e0; padding:4px 6px; font-size:12px; cursor:pointer; }
 .fov-coord { margin-left:auto; font-size:11px; color:#69727e; }
-.fov-stage { position:relative; width:100%; max-width:520px; aspect-ratio:1/1; margin:0 auto; border-radius:10px; background:#05070d center/cover no-repeat; border:1px solid #20262f; overflow:hidden; }
-.fov-rect { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border:1.5px dashed #84c65b; box-shadow:0 0 0 9999px rgba(5,7,13,.4); }
-.fov-lab { position:absolute; left:10px; bottom:9px; font-size:11px; color:#bfe6a3; background:rgba(5,7,13,.65); padding:3px 8px; border-radius:6px; }
+.fov-stage { position:relative; width:100%; max-width:520px; aspect-ratio:1/1; margin:0 auto; border-radius:10px; background:#05070d; border:1px solid #20262f; overflow:hidden; cursor:grab; }
+.fov-stage.drag { cursor:grabbing; }
+#fov-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform-origin:center center; will-change:transform; user-select:none; -webkit-user-drag:none; pointer-events:none; }
+.fov-rect { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border:1.5px dashed #84c65b; box-shadow:0 0 0 9999px rgba(5,7,13,.4); pointer-events:none; }
+.fov-lab { position:absolute; left:10px; bottom:9px; font-size:11px; color:#bfe6a3; background:rgba(5,7,13,.65); padding:3px 8px; border-radius:6px; pointer-events:none; }
+#fov-center { position:absolute; left:50%; top:50%; width:18px; height:18px; transform:translate(-50%,-50%); pointer-events:none; }
+#fov-center::before, #fov-center::after { content:""; position:absolute; background:#84c65b; }
+#fov-center::before { left:50%; top:0; width:1.5px; height:100%; transform:translateX(-50%); }
+#fov-center::after { top:50%; left:0; height:1.5px; width:100%; transform:translateY(-50%); }

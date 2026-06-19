@@ -933,7 +933,13 @@ body:not(.devmode) .devmode-only { display: none; }
 .tn-seg button { font-size:12px; color:#8a94a2; background:transparent; border:none; border-radius:5px; padding:5px 12px; cursor:pointer; }
 .tn-seg button.on { background:#1d1113; color:#f0b6ad; }
 .tn-sort { font-size:12px; color:#cdd6e0; background:#0c1016; border:1px solid #2a323d; border-radius:7px; padding:5px 8px; cursor:pointer; }
+.tn-q { font-size:12px; color:#dfe5ec; background:#0c1016; border:1px solid #2a323d; border-radius:7px; padding:5px 9px; width:150px; outline:none; }
+.tn-q:focus { border-color:#5e332f; }
 .tn-cnt { font-size:11px; color:#69727e; margin-left:auto; }
+.tn-pimg { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+/* tonight 패널 내부 스크롤 (대상 많을 때) */
+[data-panel="tonight"] > .muuri-item-content { display:flex; flex-direction:column; min-height:0; }
+#tn-content { flex:1 1 auto; min-height:0; overflow-y:auto; }
 .tn-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(540px,1fr)); gap:10px; }
 .tn-card { display:flex; height:120px; background:#0f1318; border:1px solid #20262f; border-radius:11px; overflow:hidden; cursor:pointer; transition:border-color .12s; }
 .tn-card:hover { border-color:#46525f; }
@@ -959,7 +965,7 @@ body:not(.devmode) .devmode-only { display: none; }
 .tn-row { display:flex; align-items:center; gap:10px; padding:8px; border-radius:7px; cursor:pointer; }
 .tn-row:nth-child(odd) { background:#0e1218; }
 .tn-row:hover { background:#161c24; }
-.tn-th { width:34px; height:34px; border-radius:6px; flex:none; border:1px solid #1c232c; }
+.tn-th { position:relative; overflow:hidden; width:34px; height:34px; border-radius:6px; flex:none; border:1px solid #1c232c; }
 .tn-th.sm { width:24px; height:24px; }
 .tn-rnm { flex:1; min-width:0; }
 .tn-rnm b { font-size:12.5px; font-weight:500; color:#e6ebf1; } .tn-rnm span { font-size:11px; color:#69727e; }

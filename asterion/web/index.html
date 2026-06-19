@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=119">
+<link rel="stylesheet" href="/static/style.css?v=120">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -494,10 +494,17 @@
             <button data-v="list">리스트</button>
             <button data-v="split">스플릿</button>
           </span>
+          <input id="tn-q" class="tn-q" type="text" placeholder="대상 검색…">
           <select id="tn-sort" class="tn-sort">
             <option value="alt">정렬 · 고도순</option>
             <option value="mag">정렬 · 밝기순</option>
             <option value="tr">정렬 · 통과순</option>
+          </select>
+          <select id="tn-lim" class="tn-sort">
+            <option value="10">10개</option>
+            <option value="50" selected>50개</option>
+            <option value="100">100개</option>
+            <option value="0">무제한</option>
           </select>
           <span class="tn-cnt" id="tn-count"></span>
         </div>
@@ -671,7 +678,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=154"></script>
+<script src="/static/app.js?v=155"></script>
 <script src="/static/agent_chat.js?v=3" defer></script>
 </body>
 </html>

@@ -830,7 +830,7 @@ const TN_TYPE = { gx: "은하", gc: "구상성단", oc: "산개성단", pn: "행
 const TN_GLOW = { gx: "rgba(220,205,175,.5)", gc: "rgba(220,212,188,.55)",
   oc: "rgba(150,185,220,.5)", pn: "rgba(120,200,180,.5)", neb: "rgba(200,155,175,.5)",
   snr: "rgba(215,150,125,.5)", dbl: "rgba(195,205,230,.5)", star: "rgba(232,230,200,.6)" };
-const tnState = { view: "grid", sort: "alt" };
+const tnState = { view: "grid", sort: "alt", q: "", limit: 50 };
 let tnData = null, tnSel = null, tnWired = false;
 
 function _tnLST(t, lstNow, tNow) {
@@ -882,9 +882,11 @@ function tnImg(o) {
     + (o.ra * 15).toFixed(4) + "&dec=" + o.dec.toFixed(4)
     + "&fov=0.6&width=320&height=200&format=jpg&projection=TAN";
 }
-function tnBg(o) {
-  return "url(" + tnImg(o) + ") center/cover no-repeat,radial-gradient(circle at 50% 50%,"
-    + tnGlow(o) + ",transparent 66%),#090b0e";
+function tnBg(o) {   // 글로우 폴백(뒤 레이어). DSS는 아래 tnImgTag로 지연로딩.
+  return "radial-gradient(circle at 50% 50%," + tnGlow(o) + ",transparent 66%),#090b0e";
+}
+function tnImgTag(o) {   // 지연로딩 DSS 썸네일 — 화면 밖 카드는 로드 안 함, 실패 시 제거(글로우 노출)
+  return '<img class="tn-pimg" loading="lazy" alt="" src="' + tnImg(o) + '" onerror="this.remove()">';
 }
 function tnSorted() {
   const a = (tnData || []).slice();
@@ -894,15 +896,18 @@ function tnSorted() {
 }
 function renderTonightHTML() {
   const host = document.getElementById("tn-content"); if (!host) return;
-  const all = tnSorted();
+  let all = tnSorted();
+  const q = (tnState.q || "").trim().toLowerCase();
+  if (q) all = all.filter((it) => ((it.o.name || "") + " " + it.o.id).toLowerCase().includes(q));
   const cnt = document.getElementById("tn-count"); if (cnt) cnt.textContent = all.length + " 대상";
-  const top = all.slice(0, tnState.view === "list" ? 40 : 12);
+  const top = tnState.limit ? all.slice(0, tnState.limit) : all;
   let html = "";
   if (tnState.view === "grid") {
     html = '<div class="tn-grid">' + top.map((it, k) => {
       const o = it.o;
       return '<div class="tn-card" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
         + '<div class="tn-photo" style="background:' + tnBg(o) + '">'
+        + tnImgTag(o)
         + '<div class="tn-fade2"></div>'
         + '<div class="tn-ov"><div class="tn-nm2"><b>' + (o.name || o.id) + '</b> <span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div>'
         + '<div class="tn-meta2">★ ' + o.mag.toFixed(1) + '등 · 최고 <b>' + Math.round(it.maxAlt) + '°</b> · 통과 ' + _tnHHMM(it.trT) + '</div></div></div>'
@@ -912,7 +917,7 @@ function renderTonightHTML() {
     html = '<div class="tn-list">' + top.map((it, k) => {
       const o = it.o;
       return '<div class="tn-row" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
-        + '<div class="tn-th" style="background:' + tnBg(o) + '"></div>'
+        + '<div class="tn-th" style="background:' + tnBg(o) + '">' + tnImgTag(o) + '</div>'
         + '<span class="tn-rnm"><b>' + (o.name || o.id) + '</b> <span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></span>'
         + '<span class="tn-rmag">★' + o.mag.toFixed(1) + '</span>'
         + '<canvas class="tn-mini sm" data-k="' + k + '"></canvas>'
@@ -925,13 +930,14 @@ function renderTonightHTML() {
     const left = '<div class="tn-slist">' + top.map((it) => {
       const o = it.o;
       return '<div class="tn-sli' + (o.id === tnSel ? ' on' : '') + '" data-id="' + o.id + '">'
-        + '<div class="tn-th sm" style="background:' + tnBg(o) + '"></div>'
+        + '<div class="tn-th sm" style="background:' + tnBg(o) + '">' + tnImgTag(o) + '</div>'
         + '<span class="tn-slnm"><b>' + (o.name || o.id) + '</b></span><span class="tn-ralt">' + Math.round(it.maxAlt) + '°</span></div>';
     }).join("") + '</div>';
     let right = '<div class="tn-sdet">대상을 선택하세요</div>';
     if (sit) {
       const o = sit.o;
       right = '<div class="tn-sdet"><div class="tn-photo big" style="background:' + tnBg(o) + '">'
+        + tnImgTag(o)
         + '<div class="tn-fade"></div><div class="tn-nm"><b>' + (o.name || o.id) + '</b><span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div></div>'
         + '<canvas class="tn-mini big" data-k="sel"></canvas>'
         + '<div class="tn-sstats"><span>최고 <b>' + Math.round(sit.maxAlt) + '°</b></span><span>통과 <b>' + _tnHHMM(sit.trT) + '</b></span><span>등급 <b>' + o.mag.toFixed(1) + '</b></span></div>'
@@ -968,6 +974,10 @@ function wireTonight() {
   });
   const so = document.getElementById("tn-sort");
   if (so) so.onchange = () => { tnState.sort = so.value; renderTonightHTML(); };
+  const qi = document.getElementById("tn-q");
+  if (qi) qi.oninput = () => { tnState.q = qi.value; renderTonightHTML(); };
+  const li = document.getElementById("tn-lim");
+  if (li) li.onchange = () => { tnState.limit = +li.value; renderTonightHTML(); };
 }
 
 // ---------- 시계열 플롯 빌더 ----------

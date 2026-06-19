@@ -952,7 +952,7 @@ function renderTonightHTML() {
     if (it) drawTnMini(cv, it);
   });
   host.querySelectorAll(".tn-card,.tn-row,.tn-show").forEach((el) => {
-    el.onclick = () => fetchTrack(+el.dataset.ra, +el.dataset.dec, el.dataset.nm);
+    el.onclick = () => tnPick(+el.dataset.ra, +el.dataset.dec, el.dataset.nm);
   });
   host.querySelectorAll(".tn-sli").forEach((r) => {
     r.onclick = () => { tnSel = r.dataset.id; renderTonightHTML(); };
@@ -978,6 +978,50 @@ function wireTonight() {
   if (qi) qi.oninput = () => { tnState.q = qi.value; renderTonightHTML(); };
   const li = document.getElementById("tn-lim");
   if (li) li.onchange = () => { tnState.limit = +li.value; renderTonightHTML(); };
+}
+
+// ---------- FOV 시뮬레이션 (PLAN 탭) ----------
+// 선택한 대상의 DSS2 위에 (망원경 초점거리+센서)로 정해지는 카메라 화각 사각형을 얹는다.
+// 대상은 '오늘 밤 베스트' 카드 클릭(tnPick)으로 설정.
+let fovTarget = null;
+function setFovTarget(ra, dec, nm) { fovTarget = { ra: +ra, dec: +dec, nm: nm }; renderFov(); }
+function tnPick(ra, dec, nm) { fetchTrack(+ra, +dec, nm); setFovTarget(ra, dec, nm); }
+function fovCam() {
+  const focal = +(($("fov-focal") || {}).value) || 530;
+  const p = (($("fov-sensor") || {}).value || "23.5,15.7").split(",").map(Number);
+  return { w: p[0] / focal * 57.2958, h: p[1] / focal * 57.2958, focal, sw: p[0], sh: p[1] };
+}
+function renderFov() {
+  const stage = $("fov-stage"); if (!stage) return;
+  if (!fovTarget && window.SKY_CATALOG) {
+    const m = (window.SKY_CATALOG.messier || []).find((o) => o.id === "M31")
+      || (window.SKY_CATALOG.messier || [])[0];
+    if (m) fovTarget = { ra: m.ra, dec: m.dec, nm: m.name || m.id };
+  }
+  if (!fovTarget) return;
+  const cam = fovCam();
+  // 이미지 화각은 ~2.5° 고정(카메라가 더 크면 확장) → 초점 길수록 화각 사각형이 작게 보임
+  const ifov = Math.min(5, Math.max(2.5, Math.max(cam.w, cam.h) * 1.15));
+  const url = "https://alasky.u-strasbg.fr/hips-image-services/hips2fits?hips=CDS/P/DSS2/color&ra="
+    + (fovTarget.ra * 15).toFixed(4) + "&dec=" + fovTarget.dec.toFixed(4)
+    + "&fov=" + ifov.toFixed(3) + "&width=560&height=560&format=jpg&projection=TAN";
+  stage.style.backgroundImage = "url(" + url + ")";
+  const rect = $("fov-rect");
+  if (rect) {
+    rect.style.width = (cam.w / ifov * 100).toFixed(1) + "%";
+    rect.style.height = (cam.h / ifov * 100).toFixed(1) + "%";
+    rect.style.transform = "translate(-50%,-50%) rotate(" + ((+($("fov-rot") || {}).value) || 0) + "deg)";
+  }
+  if ($("fov-label")) $("fov-label").textContent =
+    "FOV " + cam.w.toFixed(2) + "° × " + cam.h.toFixed(2) + "° · " + cam.focal + "mm · " + cam.sw + "×" + cam.sh + "mm";
+  if ($("fov-coord")) $("fov-coord").textContent =
+    (fovTarget.nm || "") + " · RA " + fmtRa(fovTarget.ra) + " · DEC " + fmtDec(fovTarget.dec);
+}
+function wireFov() {
+  ["fov-focal", "fov-sensor", "fov-rot"].forEach((id) => {
+    const el = $(id); if (el) { el.oninput = renderFov; el.onchange = renderFov; }
+  });
+  renderFov();
 }
 
 // ---------- 시계열 플롯 빌더 ----------
@@ -1159,7 +1203,8 @@ const PROTO_GS_LAYOUT = {
   "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
   // 계획(plan)
   timeline: { x: 0, y: 0,  w: 12, h: 9 },
-  tonight:  { x: 0, y: 9,  w: 12, h: 17 },
+  fov:      { x: 0, y: 9,  w: 12, h: 13 },
+  tonight:  { x: 0, y: 22, w: 12, h: 17 },
   // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
   plots:   { x: 0, y: 0,  w: 12, h: 10 },
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
@@ -1185,6 +1230,7 @@ const PANEL_DEF = {
   "embed-sat":  { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
+  fov:          { klass: "viz",     fills: false,    ar: null,    minW: 8, minH: 10, defW: 12, defH: 13, maxW: 12 },
   tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
   plots:        { klass: "viz",     fills: true,     ar: [12, 5], minW: 7, minH: 6,  defW: 12, defH: 9,  maxW: 12 },
   frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
@@ -2733,6 +2779,7 @@ async function init() {
   setInterval(refreshSysinfo, 15000);   // 시스템 자원 15초 주기
   kickSky();                            // 돔 애니메이션 (필요할 때만)
   wireTonight();                        // 오늘밤 베스트 토글/정렬 바인딩
+  wireFov();                            // FOV 시뮬레이션 입력 바인딩
 }
 
 // ---------- 버튼 핸들러 ----------

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=120">
+<link rel="stylesheet" href="/static/style.css?v=121">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -484,6 +484,27 @@
       </section>
       </div>
 
+      <!-- FOV 시뮬레이션 -->
+      <div class="muuri-item w12" data-panel="fov">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">FOV 시뮬레이션</span><span class="card-tag">FRAMING · DSS2</span></div>
+        <div class="fov-toolbar">
+          <label>초점 <input id="fov-focal" type="number" value="530" min="50" max="4000" step="10"> mm</label>
+          <select id="fov-sensor">
+            <option value="23.5,15.7">APS-C 23.5×15.7</option>
+            <option value="36,24">풀프레임 36×24</option>
+            <option value="17.3,13">4/3˝ 17.3×13</option>
+            <option value="13.2,8.8">1˝ 13.2×8.8</option>
+            <option value="6.4,4.6">ASI678 6.4×4.6</option>
+          </select>
+          <label>회전 <input id="fov-rot" type="number" value="0" min="0" max="360" step="5"> °</label>
+          <span class="fov-coord" id="fov-coord"></span>
+        </div>
+        <div class="fov-stage" id="fov-stage"><div class="fov-rect" id="fov-rect"></div><div class="fov-lab" id="fov-label"></div></div>
+        <div class="hint">오늘 밤 베스트에서 대상을 클릭하면 그 천체의 실측(DSS2) 위에 카메라 화각이 표시됩니다</div>
+      </section>
+      </div>
+
       <!-- 오늘 밤 베스트 -->
       <div class="muuri-item w12" data-panel="tonight">
       <section class="muuri-item-content card">
@@ -678,7 +699,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=155"></script>
+<script src="/static/app.js?v=157"></script>
 <script src="/static/agent_chat.js?v=3" defer></script>
 </body>
 </html>

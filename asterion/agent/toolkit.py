@@ -342,10 +342,12 @@ class ToolKit:
         s = math.sin(d) * math.sin(p) + math.cos(d) * math.cos(p) * math.cos(hr)
         return math.degrees(math.asin(max(-1.0, min(1.0, s))))
 
-    def _night_plan(self, hours, types, count, strategy, campaign=False, exclude=None, idpred=None):
-        """Phase1 스케줄러(to_thread). 하드제약(고도≥30·다크) → 점수(고도+관측창+달이격,
-        imaging_broadband) → 비겹침 시간배분(transit순 greedy) → ObservationPlan(draft).
-        각 계획 strategy에 slot_start/slot_end(KST) 기록."""
+    def _night_plan(self, hours, types, count, strategy, campaign=False, exclude=None,
+                    idpred=None, profile=None):
+        """야간 스케줄러(to_thread). 하드제약(고도≥30·다크) → merit(고도+관측창+달) →
+        비겹침 시간배분(transit순 greedy) → ObservationPlan(draft). 각 계획 strategy에
+        slot_start/slot_end(KST) 기록. Phase3: 달은 위상(조도)·고도까지 반영하고,
+        merit의 달 가중은 프로파일별(광대역=민감 / 협대역=관대)."""
         from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body
         from astropy.time import Time
         import astropy.units as u
@@ -361,7 +363,10 @@ class ToolKit:
             samp.append((i * hours / N, lst, sun))
         dark = [s for s in samp if s[2] < -10]
         use = dark or samp
-        moon = get_body("moon", now + (hours / 2) * u.hour, loc)   # 중간시각 달(이격 근사)
+        # 달: 위상(조도분율)·고도·하늘밝힘계수 + 프로파일별 달 가중
+        moon, m_illum, m_alt, m_bright = self._moon_metrics(now + (hours / 2) * u.hour, loc)
+        nb = (profile == "imaging_narrowband") or self._is_narrowband(strategy.get("filters"))
+        w_moon = 0.02 if nb else 0.25   # 협대역(Ha/OIII/SII)은 달빛 대부분 차단 → 달이격 거의 무시
         cand = []
         for o in DSO:
             if types and o["t"] not in types:
@@ -379,8 +384,9 @@ class ToolKit:
             sep = float(SkyCoord(o["ra"] * 15 * u.deg, o["dec"] * u.deg).separation(moon).deg)
             cand.append({"o": o, "label": label, "peak": peak, "tr": peak_off,
                          "win": (min(obs), max(obs)), "moon": sep})
-        for c in cand:   # imaging_broadband 점수: 고도 + 관측창길이 + 달이격
-            c["score"] = c["peak"] + (c["win"][1] - c["win"][0]) * 6 + c["moon"] * 0.15
+        for c in cand:   # merit: 고도 + 관측창길이 + (달이격 × 프로파일가중 × 달밝힘)
+            c["score"] = (c["peak"] + (c["win"][1] - c["win"][0]) * 6
+                          + c["moon"] * w_moon * m_bright)
         if campaign:   # 긴급도 — 관측창 빨리 끝나는(곧 지는) 것 먼저
             cand.sort(key=lambda c: (c["win"][1], -c["peak"]))
         else:
@@ -403,14 +409,44 @@ class ToolKit:
             cursor = e
             o, label = c["o"], c["label"]
             st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e),
-                       slot_peak_alt=round(c["peak"], 1), slot_moon_sep=round(c["moon"]))
+                       slot_peak_alt=round(c["peak"], 1), slot_moon_sep=round(c["moon"]),
+                       slot_moon_illum=round(m_illum * 100), slot_moon_alt=round(m_alt))
             plan = self.meridian.create_plan(
                 target_name=label, ra_hours=o["ra"], dec_degs=o["dec"], strategy=st2)
             out.append({"plan_id": plan.get("id"), "target": label,
                         "type": TYPE_KO.get(o["t"], o["t"]),
                         "slot": hm(s) + "–" + hm(e), "max_alt": round(c["peak"], 1),
                         "moon_sep": round(c["moon"]), "mag": o["mag"]})
-        return out, len(dark) > 0
+        moon_sum = {"illum_pct": round(m_illum * 100), "alt": round(m_alt, 1),
+                    "up": m_alt > 0, "profile": "협대역" if nb else "광대역",
+                    "weighted": round(m_bright, 2)}
+        return out, len(dark) > 0, moon_sum
+
+    @staticmethod
+    def _is_narrowband(filters):
+        """필터 목록이 협대역(Ha/OIII/SII·n nm)인지 — merit의 달 가중 선택."""
+        nb = {"HA", "HALPHA", "OIII", "O3", "SII", "S2", "NB", "NARROWBAND"}
+        for f in (filters or []):
+            k = str(f).upper().replace(" ", "").replace("-", "")
+            if k in nb or "NM" in k:
+                return True
+        return False
+
+    def _moon_metrics(self, t, loc):
+        """달 위상(조도분율 0삭~1망)·고도(°)·하늘밝힘계수. astroplan 없이 태양-달
+        이각으로 위상 근사: illum=(1-cos(elong))/2. 밝힘=조도×고도램프(달이 떠
+        있고 높을수록↑, 지평 아래면 0) — 달빛은 달이 떠 있을 때만 하늘을 밝힌다."""
+        import math
+
+        from astropy.coordinates import AltAz, get_body
+        import astropy.units as u
+        moon = get_body("moon", t, loc)
+        sun = get_body("sun", t, loc)
+        elong = float(moon.separation(sun).deg)            # 태양-달 이각
+        illum = (1 - math.cos(math.radians(elong))) / 2    # 0(삭)~1(망)
+        alt = float(moon.transform_to(AltAz(obstime=t, location=loc)).alt.deg)
+        bright = illum * max(0.0, min(1.0, (alt + 2) / 18)) if alt > -2 else 0.0
+        return moon, illum, alt, bright
 
     @staticmethod
     def _dso_label(o):
@@ -432,23 +468,26 @@ class ToolKit:
         hours = float(a.get("hours") or 8)
         count = int(a.get("count") or 5)
         goal = self.meridian.active_goal()
-        campaign = bool(goal and goal.get("goal_type") == "campaign")
+        gtype = (goal.get("goal_type") if goal else "") or ""
+        campaign = gtype == "campaign"
+        # 프로파일: 목표가 imaging_* 면 그것, 아니면 필터로 추론(merit의 달 가중 선택)
+        profile = gtype if gtype.startswith("imaging_") else (a.get("profile") or None)
         gp = goal.get("params", {}) if goal else {}
         setname = (gp.get("set") or "") if campaign else ""
         types = match_type(a.get("type")) or (match_type(setname) if campaign else None)
         idpred = (lambda o: o["id"].startswith("M")) if setname.lower() in ("messier", "메시에") else None
         exclude = self.meridian.done_target_names() if campaign else None
-        src = gp if campaign else a
+        src = gp if gp else a   # 목표에 저장된 필터/노출(캠페인·imaging)을 우선, 없으면 도구 인자
         strategy = {
             "filters": src.get("filters") or a.get("filters") or ["L"],
             "exposure_s": float(src.get("exposure_s", a.get("exposure_s", 120.0))),
             "count_per_filter": int(src.get("count_per_filter", a.get("count_per_filter", 10))),
             "binning": 1, "dither_arcsec": 0.0, "priority": 0,
         }
-        created, had_dark = await asyncio.to_thread(
-            self._night_plan, hours, types, count, strategy, campaign, exclude, idpred)
+        created, had_dark, moon_sum = await asyncio.to_thread(
+            self._night_plan, hours, types, count, strategy, campaign, exclude, idpred, profile)
         out = {"created": created, "count": len(created), "window_hours": hours,
-               "dark_window": had_dark,
+               "dark_window": had_dark, "moon": moon_sum,
                "note": ("승인 대기(draft) — 실행하려면 사용자 승인 필요" if created
                         else "조건에 맞는 관측 가능 대상이 없어요(고도 30°↑·밤시간 기준)")}
         if campaign:

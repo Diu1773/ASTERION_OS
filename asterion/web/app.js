@@ -1157,6 +1157,16 @@ function renderSchedule() {
       : "목표 미설정";
     goalEl.classList.toggle("on", !!g);
   }
+  const moonEl = $("sch-moon");   // 달 위상·고도(Phase3) — 그 밤 계획 전체 공통값
+  if (moonEl) {
+    const mp = (schPlans || []).map((p) => p.params || {}).find((pr) => pr.slot_moon_illum != null);
+    if (mp) {
+      moonEl.hidden = false;
+      moonEl.textContent = "달 " + mp.slot_moon_illum + "%"
+        + (mp.slot_moon_alt != null ? " · 고도 " + mp.slot_moon_alt + "°" : "")
+        + (mp.slot_moon_alt != null && mp.slot_moon_alt <= 0 ? " (짐)" : "");
+    } else { moonEl.hidden = true; }
+  }
   schSegsCache = _schSegs().sort((x, y) =>   // 시간표는 슬롯 시작순(슬롯없는 건 뒤로)
     x.a == null ? (y.a == null ? 0 : 1) : (y.a == null ? -1 : x.a - y.a));
   const empty = $("sch-empty"), cv = $("sch-canvas");

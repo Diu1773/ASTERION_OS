@@ -82,9 +82,9 @@ class ToolKit:
                {"channel": {"type": "string", "description": "예: temperature, humidity(선택)"},
                 "hours": {"type": "number", "description": "되돌아볼 시간(기본 12)"}}),
             fn("plan_night",
-               "오늘 밤 자동 관측계획 — 앞으로 N시간 내 관측 가능한 DSO를 종류·개수로 골라 "
-               "ObservationPlan(draft) 여러 개 생성. '오늘 밤 은하로 채워줘' 류. 생성 후 사용자 "
-               "승인 필요(바로 실행 안 함).",
+               "오늘 밤 관측 계획을 짜준다 — 앞으로 N시간 내 관측 가능한 대상(DSO)을 종류·개수로 "
+               "골라 ObservationPlan(초안) 여러 개 생성. 예: '오늘 밤 관측 계획 짜줘', "
+               "'은하 위주로 일정 잡아줘', '뭐 찍을지 정해줘'. 생성만 하고 실행은 사용자 승인 필요.",
                {"hours": {"type": "number", "description": "앞으로 볼 시간(기본 8)"},
                 "type": {"type": "string", "description": "은하/성운/성단/galaxy/nebula 등(선택, 비우면 전체)"},
                 "count": {"type": "integer", "description": "생성할 계획 수(기본 5)"},

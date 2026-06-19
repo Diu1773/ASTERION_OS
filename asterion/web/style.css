@@ -995,7 +995,9 @@ body:not(.devmode) .devmode-only { display: none; }
 .fov-stage.drag { cursor:grabbing; }
 #fov-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform-origin:center center; will-change:transform; user-select:none; -webkit-user-drag:none; pointer-events:none; }
 .fov-rect { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border:1.5px dashed #84c65b; box-shadow:0 0 0 9999px rgba(5,7,13,.4); pointer-events:none; }
-.fov-lab { position:absolute; left:10px; bottom:9px; font-size:11px; color:#bfe6a3; background:rgba(5,7,13,.65); padding:3px 8px; border-radius:6px; pointer-events:none; }
+.fov-lab { position:absolute; left:10px; font-size:11px; background:rgba(5,7,13,.7); padding:3px 8px; border-radius:6px; pointer-events:none; }
+.fov-lab.top { top:9px; color:#bfe6a3; }
+.fov-lab.bot { bottom:9px; color:#dde6ef; }
 #fov-center { position:absolute; left:50%; top:50%; width:18px; height:18px; transform:translate(-50%,-50%); pointer-events:none; }
 #fov-center::before, #fov-center::after { content:""; position:absolute; background:#84c65b; }
 #fov-center::before { left:50%; top:0; width:1.5px; height:100%; transform:translateX(-50%); }

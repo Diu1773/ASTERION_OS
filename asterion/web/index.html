@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- 숫자/영문 계기 폰트(IBM Plex Mono). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=117">
+<link rel="stylesheet" href="/static/style.css?v=118">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -484,6 +484,28 @@
       </section>
       </div>
 
+      <!-- 오늘 밤 베스트 -->
+      <div class="muuri-item w12" data-panel="tonight">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">오늘 밤 베스트</span><span class="card-tag">TONIGHT'S BEST</span></div>
+        <div class="tn-toolbar">
+          <span class="tn-seg" id="tn-view">
+            <button class="on" data-v="grid">그리드</button>
+            <button data-v="list">리스트</button>
+            <button data-v="split">스플릿</button>
+          </span>
+          <select id="tn-sort" class="tn-sort">
+            <option value="alt">정렬 · 고도순</option>
+            <option value="mag">정렬 · 밝기순</option>
+            <option value="tr">정렬 · 통과순</option>
+          </select>
+          <span class="tn-cnt" id="tn-count"></span>
+        </div>
+        <div id="tn-content"></div>
+        <div class="hint">대상을 클릭하면 위 ‘야간 타임라인’에 그 고도 곡선이 그려집니다</div>
+      </section>
+      </div>
+
     </div>
   </section>
 
@@ -649,7 +671,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=152"></script>
+<script src="/static/app.js?v=153"></script>
 <script src="/static/agent_chat.js?v=3" defer></script>
 </body>
 </html>

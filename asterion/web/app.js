@@ -715,6 +715,7 @@ let lastTimelineDraw = 0;
 async function fetchTimeline() {
   try {
     timelineData = await (await fetch("/api/night/timeline")).json();
+    tnData = null;   // 새 타임라인 → 오늘밤 베스트 재계산
     drawTimeline();
   } catch (e) { /* 다음 주기에 재시도 */ }
 }
@@ -732,6 +733,7 @@ function drawTimeline() {
   if (!timelineData) return;
   lastTimelineDraw = Date.now();
   document.querySelectorAll(".js-c-tl").forEach((cv) => drawTimelineOn(cv));
+  refreshTonight();
 }
 // 박명 밴드 — 태양 고도(td.sun_alt) → 차분한 네이비 단계. 표본 간격이 좁아
 // 밴드가 잘게 칠해져 경계가 자연스럽게 부드러움(별도 블러 불필요).
@@ -817,6 +819,144 @@ function drawTimelineOn(cv) {
     const d = new Date(t * 1000);
     ctx.fillText(String(d.getHours()).padStart(2, "0") + "h", X(t), h - 5);
   }
+}
+
+// ---------- 오늘 밤 베스트 (PLAN 탭) ----------
+// 카탈로그(catalog.js) 대상의 밤 고도곡선을 클라이언트에서 계산(LST 보간) → 지금
+// 관측 가능한(최고고도≥30°) 대상을 그리드/리스트/스플릿으로. 미니 그래프는 타임라인과
+// 같은 박명밴드+코랄곡선. 대상 클릭 시 위 '야간 타임라인'에 그 곡선을 그린다(fetchTrack).
+const TN_TYPE = { gx: "은하", gc: "구상성단", oc: "산개성단", pn: "행성상성운",
+  neb: "성운", snr: "초신성잔해", dbl: "이중성", star: "항성" };
+const TN_GLOW = { gx: "rgba(220,205,175,.5)", gc: "rgba(220,212,188,.55)",
+  oc: "rgba(150,185,220,.5)", pn: "rgba(120,200,180,.5)", neb: "rgba(200,155,175,.5)",
+  snr: "rgba(215,150,125,.5)", dbl: "rgba(195,205,230,.5)", star: "rgba(232,230,200,.6)" };
+const tnState = { view: "grid", sort: "alt" };
+let tnData = null, tnSel = null, tnWired = false;
+
+function _tnLST(t, lstNow, tNow) {
+  return ((lstNow + (t - tNow) / 3600 * 1.0027379) % 24 + 24) % 24;
+}
+function _tnHHMM(t) {
+  const d = new Date(t * 1000);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+function computeTonight() {
+  if (!lastStatus || !timelineData || !window.SKY_CATALOG) return [];
+  const lat = (lastStatus.geo && lastStatus.geo.lat) != null ? lastStatus.geo.lat : 36.6;
+  const lstNow = (lastStatus.time && lastStatus.time.lst_hours) != null ? lastStatus.time.lst_hours : 0;
+  const tNow = Date.now() / 1000, td = timelineData, ts = td.t;
+  const cat = [].concat(window.SKY_CATALOG.messier || [], window.SKY_CATALOG.ngc || []);
+  const out = [];
+  cat.forEach((o) => {
+    let maxAlt = -90, trT = ts[0];
+    const curve = new Array(ts.length);
+    for (let i = 0; i < ts.length; i++) {
+      const aa = radecToAltaz(o.ra, o.dec, lat, _tnLST(ts[i], lstNow, tNow));
+      curve[i] = aa[0];
+      if (td.sun_alt[i] < 0 && aa[0] > maxAlt) { maxAlt = aa[0]; trT = ts[i]; }
+    }
+    if (maxAlt >= 30) out.push({ o, maxAlt, trT, curve });
+  });
+  return out;
+}
+function drawTnMini(cv, item) {
+  if (!cv || cv.offsetParent === null) return;
+  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
+  const td = timelineData, ts = td.t, t0 = td.start, t1 = td.end;
+  const X = (t) => (t - t0) / (t1 - t0) * w, Y = (a) => (h - 2) - ((a - (-30)) / 120) * (h - 4);
+  for (let i = 0; i < ts.length - 1; i++) {
+    ctx.fillStyle = _bandColor(td.sun_alt[i]);
+    ctx.fillRect(X(ts[i]), 0, X(ts[i + 1]) - X(ts[i]) + 1, h);
+  }
+  ctx.strokeStyle = "rgba(205,163,95,.45)"; ctx.setLineDash([3, 2]);
+  ctx.beginPath(); ctx.moveTo(0, Y(30)); ctx.lineTo(w, Y(30)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath();
+  item.curve.forEach((a, i) => { const px = X(ts[i]), py = Y(a); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+  ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
+}
+function tnGlow(o) { return TN_GLOW[o.t] || TN_GLOW.gx; }
+function tnSorted() {
+  const a = (tnData || []).slice();
+  const s = tnState.sort;
+  a.sort((x, y) => s === "mag" ? x.o.mag - y.o.mag : s === "tr" ? x.trT - y.trT : y.maxAlt - x.maxAlt);
+  return a;
+}
+function renderTonightHTML() {
+  const host = document.getElementById("tn-content"); if (!host) return;
+  const all = tnSorted();
+  const cnt = document.getElementById("tn-count"); if (cnt) cnt.textContent = all.length + " 대상";
+  const top = all.slice(0, tnState.view === "list" ? 40 : 12);
+  let html = "";
+  if (tnState.view === "grid") {
+    html = '<div class="tn-grid">' + top.map((it, k) => {
+      const o = it.o;
+      return '<div class="tn-card" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
+        + '<div class="tn-photo" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 66%),#090b0e">'
+        + '<div class="tn-fade"></div><div class="tn-nm"><b>' + (o.name || o.id) + '</b><span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div>'
+        + '<span class="tn-alt">' + Math.round(it.maxAlt) + '°</span></div>'
+        + '<canvas class="tn-mini" data-k="' + k + '"></canvas>'
+        + '<div class="tn-foot">★ ' + o.mag.toFixed(1) + '등 · 통과 ' + _tnHHMM(it.trT) + '</div></div>';
+    }).join("") + '</div>';
+  } else if (tnState.view === "list") {
+    html = '<div class="tn-list">' + top.map((it, k) => {
+      const o = it.o;
+      return '<div class="tn-row" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">'
+        + '<div class="tn-th" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 65%),#090b0e"></div>'
+        + '<span class="tn-rnm"><b>' + (o.name || o.id) + '</b> <span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></span>'
+        + '<span class="tn-rmag">★' + o.mag.toFixed(1) + '</span>'
+        + '<canvas class="tn-mini sm" data-k="' + k + '"></canvas>'
+        + '<span class="tn-ralt">' + Math.round(it.maxAlt) + '°</span>'
+        + '<span class="tn-rtr">' + _tnHHMM(it.trT) + '</span></div>';
+    }).join("") + '</div>';
+  } else {
+    if (!top.some((x) => x.o.id === tnSel)) tnSel = top[0] && top[0].o.id;
+    const sit = top.filter((x) => x.o.id === tnSel)[0] || top[0];
+    const left = '<div class="tn-slist">' + top.map((it) => {
+      const o = it.o;
+      return '<div class="tn-sli' + (o.id === tnSel ? ' on' : '') + '" data-id="' + o.id + '">'
+        + '<div class="tn-th sm" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 65%),#090b0e"></div>'
+        + '<span class="tn-slnm"><b>' + (o.name || o.id) + '</b></span><span class="tn-ralt">' + Math.round(it.maxAlt) + '°</span></div>';
+    }).join("") + '</div>';
+    let right = '<div class="tn-sdet">대상을 선택하세요</div>';
+    if (sit) {
+      const o = sit.o;
+      right = '<div class="tn-sdet"><div class="tn-photo big" style="background:radial-gradient(circle at 50% 50%,' + tnGlow(o) + ',transparent 64%),#090b0e">'
+        + '<div class="tn-fade"></div><div class="tn-nm"><b>' + (o.name || o.id) + '</b><span>' + o.id + ' · ' + (TN_TYPE[o.t] || "") + '</span></div></div>'
+        + '<canvas class="tn-mini big" data-k="sel"></canvas>'
+        + '<div class="tn-sstats"><span>최고 <b>' + Math.round(sit.maxAlt) + '°</b></span><span>통과 <b>' + _tnHHMM(sit.trT) + '</b></span><span>등급 <b>' + o.mag.toFixed(1) + '</b></span></div>'
+        + '<button class="tn-show" data-ra="' + o.ra + '" data-dec="' + o.dec + '" data-nm="' + (o.name || o.id) + '">야간 타임라인에 표시</button></div>';
+    }
+    html = '<div class="tn-split">' + left + right + '</div>';
+  }
+  host.innerHTML = html;
+  host.querySelectorAll("canvas.tn-mini").forEach((cv) => {
+    const k = cv.getAttribute("data-k");
+    const it = k === "sel" ? (tnSorted().filter((x) => x.o.id === tnSel)[0]) : top[+k];
+    if (it) drawTnMini(cv, it);
+  });
+  host.querySelectorAll(".tn-card,.tn-row,.tn-show").forEach((el) => {
+    el.onclick = () => fetchTrack(+el.dataset.ra, +el.dataset.dec, el.dataset.nm);
+  });
+  host.querySelectorAll(".tn-sli").forEach((r) => {
+    r.onclick = () => { tnSel = r.dataset.id; renderTonightHTML(); };
+  });
+}
+function refreshTonight() {
+  if (!document.getElementById("tn-content") || !timelineData) return;
+  if (!tnData) tnData = computeTonight();
+  renderTonightHTML();
+}
+function wireTonight() {
+  if (tnWired) return; tnWired = true;
+  const vt = document.getElementById("tn-view");
+  if (vt) vt.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      vt.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on"); tnState.view = b.dataset.v; renderTonightHTML();
+    };
+  });
+  const so = document.getElementById("tn-sort");
+  if (so) so.onchange = () => { tnState.sort = so.value; renderTonightHTML(); };
 }
 
 // ---------- 시계열 플롯 빌더 ----------
@@ -997,7 +1137,8 @@ const PROTO_GS_LAYOUT = {
   "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
   "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
   // 계획(plan)
-  timeline: { x: 0, y: 0, w: 12, h: 9 },
+  timeline: { x: 0, y: 0,  w: 12, h: 9 },
+  tonight:  { x: 0, y: 9,  w: 12, h: 17 },
   // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
   plots:   { x: 0, y: 0,  w: 12, h: 10 },
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
@@ -1023,6 +1164,7 @@ const PANEL_DEF = {
   "embed-sat":  { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
+  tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
   plots:        { klass: "viz",     fills: true,     ar: [12, 5], minW: 7, minH: 6,  defW: 12, defH: 9,  maxW: 12 },
   frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
@@ -2569,6 +2711,7 @@ async function init() {
   refreshSysinfo();
   setInterval(refreshSysinfo, 15000);   // 시스템 자원 15초 주기
   kickSky();                            // 돔 애니메이션 (필요할 때만)
+  wireTonight();                        // 오늘밤 베스트 토글/정렬 바인딩
 }
 
 // ---------- 버튼 핸들러 ----------

@@ -1,5 +1,9 @@
 # NIGHT RUNNER PLAN — 무인 야간 운영기 (자율 루프 계약서)
 
+> **상태: ✅ S1~S7 완료(2026-06-20, /loop 자율빌드).** `operation/night_runner.py` NightRunner —
+> 승인 시간표를 슬롯 순서대로(대기→안전게이트→실행→분류) 무인 시퀀싱. REST·status 노출, SIM 검증.
+> 스트레치(§3 마지막, 월출몰/측광 merit)는 **미착수** — 사용자 판단 후 진행(가드레일 #7: 범위 외).
+
 > 이 문서는 `/loop` 자율 세션이 **그대로 따라가는 체크리스트**다. 한 번에 한 단계씩,
 > 각 단계는 검증게이트를 통과해야 다음으로 간다. 막히면 **깨끗한 상태로 두고 결정로그에
 > 기록 후 멈춘다**. Ph7의 `PH7_ORCHESTRATOR_PLAN.md`와 같은 방식.
@@ -62,7 +66,10 @@
   `POST /api/nightrunner/start`(body NightRunStartReq: plan_ids·respect_slots, 생략가능)·
   `/stop`·`GET /status`. app.py 라우터 배선. ✅검증(TestClient+FakeNR): start(body/기본값)
   위임·stop·status + night_runner=None 503 가드. (ActionError→409는 app 전역 핸들러가 처리)
-- [ ] **S7 — 회귀**: 기존 Orchestrator/Meridian SIM e2e가 여전히 PASS. 전체 한 번 더 그린.
+- [x] **S7 — 회귀**: ✅전부 그린. A)AST 4파일 B)create_app 94라우트+nightrunner 3라우트 등록
+  C)NightRunner 로직 회귀(S3순서/S4안전/S5타이밍) D)기존 무결성(DSO 124·toolkit) E)실스택
+  uvicorn /api/status에 night_runner 키+기존 전부(orchestrator/autoflat/capture/forge/cooler/safety)
+  보존, GET /api/nightrunner/status 200 idle. **S1~S7 완료 — Night Runner 동작.**
 - [ ] (스트레치, S1~S7 전부 그린일 때만) 스케줄러 잔여: **월출몰 시각**(astropy로 달 set/rise) ·
   **측광 merit 프로파일**(단주기=이벤트 연속/장주기=빈틈 1점) 중 하나. 새 파일은 안 만들고
   toolkit `_night_plan`에 모듈식 추가. 각각 별도 커밋.
@@ -110,3 +117,8 @@
   app.py include_router(meridian,orch,night_runner). NightRunStartReq(plan_ids,respect_slots 기본).
   start 응답은 {started:True}만(큐는 status로 폴링 — 백그라운드 task라 즉시 빌드 보장 안 됨).
   검증: TestClient+FakeNR로 위임/503. 교차배제 409는 app 전역 ActionError 핸들러(기존) 재사용.`
+- `2026-06-20 S7 — 회귀 전부 그린. 코드(AST/create_app 94라우트/NightRunner 로직/기존 무결성) +
+  실스택(uvicorn /api/status에 night_runner 키+기존 보존, nightrunner 라우트 200). 주의: /api/status는
+  sampler 첫 틱 전엔 {"mode":"starting"} 폴백 → 'safety' 키 뜰 때까지 폴링해 확인. **S1~S7 종료.**
+  스트레치(월출몰/측광 merit)는 가드레일 #7(범위 외)+자율루프 원칙(새 스코프 무단 착수 금지)으로 미착수 —
+  사용자에게 넘김.`

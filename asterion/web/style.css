@@ -250,7 +250,7 @@ body.solo .gt-newwin { display: none; }
 .card-title { font-size: 14px; font-weight: 600; letter-spacing: .1px; }
 .card-head > .card-tag:not(.conn) { margin-left: auto; }
 .card-tag {
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: 1px;
+  font-family: inherit; font-size: 10px; font-weight: 500; letter-spacing: 0.8px;
   color: var(--faint); text-transform: uppercase;
 }
 .card-tag.sys { color: var(--dim); }

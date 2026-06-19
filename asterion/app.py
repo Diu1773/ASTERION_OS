@@ -899,7 +899,7 @@ def create_app() -> FastAPI:
             events.unregister(ws)
 
     # Operation 계층 라우트 (/api/meridian/* 계획, /api/orchestrator/* 실행 제어).
-    app.include_router(build_operation_router(meridian, orch))
+    app.include_router(build_operation_router(meridian, orch, night_runner))
     # Analysis 계층 라우트 (/api/sentinel/* 품질, /api/analysis/frames/* 픽셀,
     # /api/calibration/* 마스터, /api/forge/* 실시간 보정 토글).
     app.include_router(build_analysis_router(sentinel, framedata, calibration, forge))

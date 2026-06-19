@@ -58,8 +58,10 @@
   앵커링(S2 야간분 wrap 제거 — 한낮 실행도 저녁슬롯 올바름). `_await_slot`: slot_start까지 대기(과거
   grace내 즉시), slot_end 경과면 skip, stop이면 중단. `_build_queue`는 정렬 전용으로(skip 이관).
   ✅검증: 앵커링 5케이스(낮/새벽/익일), await run/skip/immediate, _loop respect_slots True(대기후실행)·False(즉시).
-- [ ] **S6 — REST + stop**: `POST /api/nightrunner/start`(body: 선택 plan_ids·respect_slots),
-  `POST /api/nightrunner/stop`. 검증(TestClient): start→status active, stop→중단·큐 비움.
+- [x] **S6 — REST + stop**: api.py `build_operation_router(..., night_runner)` +
+  `POST /api/nightrunner/start`(body NightRunStartReq: plan_ids·respect_slots, 생략가능)·
+  `/stop`·`GET /status`. app.py 라우터 배선. ✅검증(TestClient+FakeNR): start(body/기본값)
+  위임·stop·status + night_runner=None 503 가드. (ActionError→409는 app 전역 핸들러가 처리)
 - [ ] **S7 — 회귀**: 기존 Orchestrator/Meridian SIM e2e가 여전히 PASS. 전체 한 번 더 그린.
 - [ ] (스트레치, S1~S7 전부 그린일 때만) 스케줄러 잔여: **월출몰 시각**(astropy로 달 set/rise) ·
   **측광 merit 프로파일**(단주기=이벤트 연속/장주기=빈틈 1점) 중 하나. 새 파일은 안 만들고
@@ -104,3 +106,7 @@
   한낮 실행도 저녁슬롯을 오늘로 올바르게(S2 wrap 완전 해결). _await_slot이 slot_start까지 대기(poll=
   cfg nightrunner.poll_seconds 기본5)·slot_end 경과 skip. _build_queue는 정렬 전용으로(night-min skip
   제거). _now_kst 메서드로 분리해 테스트 클럭 주입 가능. _now_night_min 제거(미사용).`
+- `2026-06-20 S6 — build_operation_router에 night_runner 파라미터+3라우트(start/stop/status),
+  app.py include_router(meridian,orch,night_runner). NightRunStartReq(plan_ids,respect_slots 기본).
+  start 응답은 {started:True}만(큐는 status로 폴링 — 백그라운드 task라 즉시 빌드 보장 안 됨).
+  검증: TestClient+FakeNR로 위임/503. 교차배제 409는 app 전역 ActionError 핸들러(기존) 재사용.`

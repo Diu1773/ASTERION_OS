@@ -28,7 +28,13 @@ class PlanCreateReq(BaseModel):
     priority: int = 0
 
 
-def build_operation_router(meridian: Meridian, orchestrator: Any = None) -> APIRouter:
+class NightRunStartReq(BaseModel):
+    plan_ids: list[int] | None = None   # None이면 승인 전체(slot_start순)
+    respect_slots: bool = True           # False면 슬롯 대기 없이 즉시 연달아 실행
+
+
+def build_operation_router(meridian: Meridian, orchestrator: Any = None,
+                           night_runner: Any = None) -> APIRouter:
     router = APIRouter(tags=["operation"])
 
     # ---------- 계획 (Meridian) ----------
@@ -108,5 +114,31 @@ def build_operation_router(meridian: Meridian, orchestrator: Any = None) -> APIR
         if orchestrator is None:
             raise HTTPException(503, "Orchestrator 미가용")
         return orchestrator.status_dict()
+
+    # ---------- 무인 야간 운영 (NightRunner) ----------
+
+    @router.post("/api/nightrunner/start")
+    async def nightrunner_start(req: NightRunStartReq | None = None):
+        """승인된 시간표를 슬롯 순서대로 무인 실행 시작(백그라운드). 이미 실행 중이거나
+        Orchestrator 관측 중이면 ActionError→409. body 생략 시 승인 전체·respect_slots=True.
+        진행상황은 /api/status의 night_runner 또는 /api/nightrunner/status."""
+        if night_runner is None:
+            raise HTTPException(503, "NightRunner 미가용")
+        req = req or NightRunStartReq()
+        await night_runner.start(plan_ids=req.plan_ids, respect_slots=req.respect_slots)
+        return {"started": True}
+
+    @router.post("/api/nightrunner/stop")
+    async def nightrunner_stop():
+        if night_runner is None:
+            raise HTTPException(503, "NightRunner 미가용")
+        await night_runner.request_stop()
+        return {"stopping": True}
+
+    @router.get("/api/nightrunner/status")
+    async def nightrunner_status():
+        if night_runner is None:
+            raise HTTPException(503, "NightRunner 미가용")
+        return night_runner.status_dict()
 
     return router

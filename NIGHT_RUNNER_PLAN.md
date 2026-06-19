@@ -1,0 +1,80 @@
+# NIGHT RUNNER PLAN — 무인 야간 운영기 (자율 루프 계약서)
+
+> 이 문서는 `/loop` 자율 세션이 **그대로 따라가는 체크리스트**다. 한 번에 한 단계씩,
+> 각 단계는 검증게이트를 통과해야 다음으로 간다. 막히면 **깨끗한 상태로 두고 결정로그에
+> 기록 후 멈춘다**. Ph7의 `PH7_ORCHESTRATOR_PLAN.md`와 같은 방식.
+
+## 0. 목표 (한 줄)
+승인된 ObservationPlan **시간표를 슬롯 순서대로 무인 실행**하는 층(`NightRunner`)을
+`operation` 패키지에 추가한다 → "목표 한 줄 → 아침에 결과 한 묶음"이 SIM에서 성립.
+
+## 1. 현재 상태 (이미 있는 것 — 새로 만들지 말 것)
+- **스케줄러**: `agent/toolkit.py` `_night_plan`/`plan_night` — 비겹침 슬롯 시간표(draft) 생성.
+  각 계획 `params`에 `slot_start`/`slot_end`("HH:MM" KST)·`slot_peak_alt`·`slot_moon_*`.
+- **단일 실행기**: `operation/orchestrator.py` `ObservationOrchestrator` —
+  `start_plan(pid)`(approved/queued만 수락) · `running()` · `request_stop()` · `wait()` ·
+  `status_dict()`. 내부 `_run_plan`이 `RUNNING→DONE/ABORTED/FAILED`로 상태 마감 +
+  Frame/Decision 적재. **단일 계획 루프는 이미 닫혀 있다** (DONE→`done_target_names()`→캠페인 자동 제외).
+- **계획 CRUD**: `operation/meridian.py` `list_plans(status=)` · `set_status` · `approve_plan`.
+- **안전(fail-closed)**: `watchtower/safety.py` 스냅샷(WEATHER_HOLD/EMERGENCY) — status에 노출됨.
+  Orchestrator가 이미 `_safety_gate`로 소비. NightRunner도 **슬롯 진입 전 같은 게이트**를 본다.
+- **REST 패턴**: `operation/api.py` `build_operation_router(meridian, orch)` — 여기에 nightrunner 라우트 추가.
+- **app 배선**: `app.py`에서 meridian/orchestrator 생성·status 노출·교차배제. NightRunner도 여기 배선.
+
+## 2. 설계 (NightRunner = Orchestrator 위 시퀀서, 장비 직접조작 X)
+신규 `operation/night_runner.py` `class NightRunner`:
+- 생성자: `(meridian, orchestrator, safety_fn, events, cfg)` — `safety_fn()`은 fail-closed 스냅샷 반환.
+- 공개:
+  - `async start(plan_ids=None, respect_slots=True)` — `plan_ids=None`이면 **승인된 계획 전체**를
+    `slot_start` 순으로. 이미 도는 중이거나 Orchestrator가 `running()`이면 거부(교차배제).
+  - `async stop()` — 진행 중 계획에 `orchestrator.request_stop()` + 큐 비움.
+  - `status_dict()` — `{active, held, reason, current, queue:[...], done:[...], failed:[...]}`.
+- 내부 루프(asyncio task): 큐의 각 계획에 대해
+  1. `respect_slots`면 `slot_start`(오늘 KST)까지 대기. 이미 지났으면 즉시. 슬롯 끝(`slot_end`)이
+     이미 지난 계획은 **skip**(사유 기록).
+  2. **안전 게이트**: `safety_fn()`이 WEATHER_HOLD/EMERGENCY면 `held=True`로 **일시정지**,
+     주기 폴링하며 해제 대기. `cfg [nightrunner].hold_skip_seconds` 초과로 막히면 그 계획 skip.
+  3. `orchestrator.start_plan(pid)` → `await orchestrator.wait()`. 결과(plan 최종 status)를
+     `done`/`failed`에 분류. **실패해도 다음 계획으로 계속**(밤을 멈추지 않음). stop 요청 시 중단.
+  4. 다음 계획.
+- 상태는 `app.py`가 `/api/status`의 `night_runner` 키로 노출(Orchestrator처럼).
+
+## 3. 단계별 체크리스트 (각 단계 = 1커밋, 검증 후 다음)
+- [ ] **S1 — 스켈레톤**: `night_runner.py` `NightRunner`(start/stop/status_dict, 빈 루프) +
+  `app.py` 배선 + `/api/status`에 `night_runner` 키. 검증: 서버 기동, `GET /api/status`에 키 보임.
+- [ ] **S2 — 큐 구성**: 승인 계획을 `slot_start` 순 정렬해 큐. `slot_end` 지난 건 skip 표시.
+  검증: 승인 plan 3개 시드 → `status_dict().queue`가 슬롯순.
+- [ ] **S3 — 실행 시퀀스(슬롯무시 모드)**: `respect_slots=False`로 큐를 연달아
+  `start_plan→wait`. 검증(SIM e2e): 승인 3개 → `start(respect_slots=False)` → 셋 다 `DONE`,
+  `done` 리스트에 3개, Orchestrator 교차배제 동작.
+- [ ] **S4 — 안전 게이트/홀드**: 슬롯 진입 전 `safety_fn()` 소비, WEATHER_HOLD면 held→해제 대기,
+  타임아웃 시 skip. 검증: safety 스냅샷을 unsafe로 주입 → `held=True`, 안전복구 → 진행 재개.
+- [ ] **S5 — 슬롯 타이밍**: `respect_slots=True`에서 `slot_start`까지 대기(과거면 즉시, slot_end 경과 skip).
+  검증: 가까운 미래 슬롯 1개 → 그 시각에 시작, 과거 슬롯 → 즉시, 만료 슬롯 → skip.
+- [ ] **S6 — REST + stop**: `POST /api/nightrunner/start`(body: 선택 plan_ids·respect_slots),
+  `POST /api/nightrunner/stop`. 검증(TestClient): start→status active, stop→중단·큐 비움.
+- [ ] **S7 — 회귀**: 기존 Orchestrator/Meridian SIM e2e가 여전히 PASS. 전체 한 번 더 그린.
+- [ ] (스트레치, S1~S7 전부 그린일 때만) 스케줄러 잔여: **월출몰 시각**(astropy로 달 set/rise) ·
+  **측광 merit 프로파일**(단주기=이벤트 연속/장주기=빈틈 1점) 중 하나. 새 파일은 안 만들고
+  toolkit `_night_plan`에 모듈식 추가. 각각 별도 커밋.
+
+## 4. 검증 게이트 (매 단계 필수)
+- SIM 모드로 직접 스크립트/TestClient 검증(이 레포의 `data/asterion.db`는 **`asterion/data/`** 경로 —
+  `Path(asterion.__file__).parent/'data'/'asterion.db'`. 루트 `./data` 아님).
+- 검증은 **가짜 Meridian/주입**으로 DB 오염 없이 하거나, 시드한 테스트 plan은 끝나고 정리.
+- 프런트 변화 있으면 preview_*로 확인(스크린샷은 폰트CDN으로 타임아웃 가능 → preview_eval로 검증).
+- 콘솔/서버 에러 0 확인.
+
+## 5. 가드레일 (어기지 말 것)
+1. **SIM 전용** — 실하드웨어/실돔/실셔터 절대 조작·연결 시도 금지. 드라이버는 sim만.
+2. **매 작동 증분마다 커밋** — main/현재 브랜치를 깨진 상태로 두지 않는다. 커밋 메시지 한국어,
+   끝에 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+3. **기존 동작 보존** — 회귀(S7) 깨지면 그 단계 롤백. 새 기능은 additive.
+4. **`config.local.json` 절대 열람/수정/커밋 금지** (gitignored, API키 있음). 키를 echo/type 금지.
+5. **아키텍처 따르기** — ActionBus 경유 실행, ontology 적재, `operation/` 패키지, fail-closed 게이트 소비.
+6. **막히면 멈춤** — 불확실하면 추측으로 밀어붙이지 말고 결정로그에 적고 멈춰 사용자 판단 남긴다.
+7. 범위는 **Night Runner(S1~S7)**. 끝나기 전 스트레치로 새지 말 것.
+
+## 6. 결정 로그 (루프가 추가)
+- (예: `2026-06-20 S3 — start_plan→wait 시퀀스, SIM 3계획 DONE 확인. 교차배제는 orchestrator.running() 체크로.`)
+-

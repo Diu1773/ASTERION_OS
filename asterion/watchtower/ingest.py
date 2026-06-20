@@ -56,14 +56,16 @@ def ingest_records(db: Db, payload: Any) -> dict[str, Any]:
 
     keys = {(m["source_id"], m["utc"]): m for m in mapped}   # 배치 내 중복 합침(나중 것)
 
+    # DB 기존 중복은 단일 쿼리로(소스·시각 IN) — N+1 회피. 네트워크 복구 후 대량 백필
+    # 재전송(§7.4)에도 쿼리 1번. 교집합은 배치 키로만 판정하므로 IN 교차곱 초과는 무해.
+    src_ids = list({sid for sid, _ in keys})
+    utcs = list({utc for _, utc in keys})
+
     def _existing(s):
-        ex = set()
-        for sid, utc in keys:
-            if (s.query(WeatherRecord.id)
-                    .filter(WeatherRecord.source_id == sid, WeatherRecord.utc == utc)
-                    .first()):
-                ex.add((sid, utc))
-        return ex
+        rows = (s.query(WeatherRecord.source_id, WeatherRecord.utc)
+                .filter(WeatherRecord.source_id.in_(src_ids),
+                        WeatherRecord.utc.in_(utcs)).all())
+        return {(sid, utc) for sid, utc in rows}
     exist = db.query(_existing)
 
     accepted = 0

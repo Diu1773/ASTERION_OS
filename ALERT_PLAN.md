@@ -1,5 +1,8 @@
 # Alert System PLAN — 위험 상황 알림 (자율 빌드 계약서)
 
+> **상태: ✅ E1~E4 완료(2026-06-20, /goal 자율빌드).** AlertManager(룰/쿨다운) → EventHub.alert+샘플러
+> 배선 → 대시보드(토스트/경보음/배지) → e2e 풀리뷰(샘플러→DB→라우트→ack). 무인 운영 안전 루프 완성.
+
 > 워크플로 추천(점수 뒤집음): 무인 운영(Night Runner) 안전 루프의 빠진 고리. 지금은 비상폐쇄+수동셔터가
 > 콘솔 로그 1줄뿐 → 운영자가 화면 안 보면 망원경이 비에 젖음. **추가형**(기존 safety/dome 무수정), SIM 100%.
 
@@ -35,11 +38,17 @@
 - [x] **E3 — 대시보드 전달**: WS `type:"alert"`→onAlert(토스트+CRITICAL WebAudio 경보음+미확인 배지),
   종 클릭→전체 확인. `GET /api/alerts`·`/api/alerts/active`·`POST /api/alerts/acknowledge`. ✅검증:
   백엔드 active/ack(임시DB 정확)·103라우트, **라이브 UI**(시뮬 2알림→배지2·토스트2·crit 클래스·콘솔에러 0).
-- [ ] **E4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
+- [x] **E4 — 풀리뷰 + 회귀**: 정독 리뷰 — 치명 0. 1Hz 평가는 정상상태(룰 None)엔 DB쿼리 0이라 무해
+  (발화 조건일 때만 쿨다운 쿼리). ✅**e2e**: TestClient lifespan→샘플러 틱(SIM FAULT)→safety_fault 발화
+  →/api/alerts/active→ack→active 제거. 테스트 알림 정리(실DB 무오염), create_app 103라우트.
 
 ## 4~5. 게이트·가드레일
 SIM/합성/임시DB/Fake WS. DB 경로 asterion/data. **기존 safety/dome/sampler 경로 읽기만(무수정)·fail-closed 보존.**
 config.local.json 금지. 매 증분 커밋(+Co-Authored-By). 외부 I/O(SMS/SMTP) 제외. 막히면 멈춤.
 
 ## 6. 결정 로그
--
+- `E1 — Alert 테이블 + watchtower/alert.py RULES(5)/AlertManager.evaluate(쿨다운 utc≥cutoff, DB 적재).
+  safety.evaluate 출력만 소비(신규 판단 0).`
+- `E2 — events.alert(type:alert+버퍼) + StatusSampler.alert_fn(스냅샷 후 try보호) + app 배선. safety/dome 무수정.`
+- `E3 — /api/alerts·active·acknowledge + app.js onAlert(토스트·WebAudio 경보음·배지)·종 ack. 라이브 검증.`
+- `E4 — e2e(샘플러→DB→라우트→ack) 통과. 1Hz 평가 정상상태 DB쿼리 0. 외부채널(SMS/webhook)은 범위 밖.`

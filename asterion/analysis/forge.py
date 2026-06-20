@@ -312,6 +312,33 @@ class Forge:
                             f"→ 중앙값 {info['median_before']:.0f}→{info['median_after']:.0f}")
         return cal, info
 
+    def measure_calibrated(self, img: np.ndarray,
+                           meta: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+        """시계열 측정용 보정 — 캡처 직후 img를 (가능하면) PP한 배열 + 보정 상태를 돌려준다.
+        process()와 달리 enabled가 꺼져 있어도 호출 가능: 비활성/마스터부재/비-LIGHT면 원본을
+        그대로 돌려주되 calibrated=False와 사유를 명시한다(측정은 호출부가 진행, raw로 태깅).
+        노출 미스매치 다크는 masters_for(_resolve_dark)가 이미 거르므로 무음 오적용이 없다
+        (경고는 warnings에 담김). 보정본 FITS는 저장하지 않는다(metric만 영속)."""
+        out: dict[str, Any] = {"calibrated": False, "applied": [], "sources": {},
+                               "warnings": [], "reason": ""}
+        if (meta.get("type") or "").upper() != "LIGHT":
+            out["reason"] = "not_light"
+            return img, out
+        if not self.enabled:
+            out["reason"] = "forge_disabled"
+            return img, out
+        masters = self.masters_for(meta.get("filter"), meta.get("ccd_temp"),
+                                   meta.get("exposure_s"), meta.get("binning", 1))
+        cal, applied = self.calibrate_array(img, pedestal=self.pedestal, **masters)
+        out["applied"] = applied
+        out["sources"] = dict(self._sources)
+        out["warnings"] = list(self._warnings)
+        out["calibrated"] = bool(applied)
+        if not applied:                 # 매칭 마스터 없음 → 원본으로 측정(raw 태깅)
+            out["reason"] = "no_master"
+            return img, out
+        return cal, out
+
     def save_calibrated_fits(self, cal: np.ndarray,
                              meta: dict[str, Any]) -> str | None:
         """save_calibrated가 켜져 있으면 보정본을 frames/cal/에 FITS로 저장하고

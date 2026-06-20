@@ -1781,6 +1781,39 @@ async function loadForecast() {
   } catch (e) { /* noop */ }
 }
 
+// ---------- 분산 기상 소스 — 기상 패널 하단(어느 PC가 무엇을 언제 올렸나) ----------
+// /api/weather/sources(소스별 최신). 신선도(age) 뱃지: 10분↑이면 STALE. 소스 없으면 섹션 숨김.
+function _wAgo(iso) {
+  try {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return Math.round(s) + "초 전";
+    if (s < 3600) return Math.round(s / 60) + "분 전";
+    return Math.round(s / 3600) + "시간 전";
+  } catch (e) { return ""; }
+}
+function renderWeatherSources(list) {
+  list = list || [];
+  const box = $("w-src"); if (box) box.hidden = list.length === 0;
+  const n = $("w-src-n"); if (n) n.textContent = list.length ? `(${list.length})` : "";
+  const wrap = $("w-src-list"); if (!wrap) return;
+  wrap.innerHTML = list.map((s) => {
+    const stale = (Date.now() - new Date(s.utc).getTime()) > 600000;   // 10분↑ = STALE
+    const cls = stale ? "st-run" : "st-ok";
+    const temp = (s.temp_c == null) ? "—" : Math.round(s.temp_c) + "°C";
+    const cloud = (s.cloud_score == null) ? "" : " · 구름 " + Number(s.cloud_score).toFixed(2);
+    return `<div class="w-src-row"><span class="w-src-id">${_schEsc(s.source_id)}</span>`
+      + `<span class="sch-dim">${temp}${cloud}</span>`
+      + `<span class="sch-badge ${cls}">${_wAgo(s.utc)}${stale ? " · STALE" : ""}</span></div>`;
+  }).join("");
+}
+async function loadWeatherSources() {
+  try {
+    const r = await fetch("/api/weather/sources");
+    if (!r.ok) return;
+    renderWeatherSources(await r.json());
+  } catch (e) { /* noop */ }
+}
+
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
 // 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
 // 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
@@ -2574,7 +2607,7 @@ function showTab(tab) {
   if (PROTO_TABS.has(tab) && typeof GridStack !== "undefined") ensureGridStack(tab);
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
-  if (tab === "env") loadForecast();   // 기상예보 — 표시 시 최신 예보
+  if (tab === "env") { loadForecast(); loadWeatherSources(); }   // 기상예보 + 분산 소스 — 표시 시 최신
   if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
   if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록

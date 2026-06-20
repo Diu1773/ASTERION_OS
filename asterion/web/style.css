@@ -1056,6 +1056,11 @@ body:not(.devmode) .devmode-only { display: none; }
 .fc-legend { font-size:10px; color:var(--faint); margin-top:7px; display:flex; align-items:center; gap:3px; flex-wrap:wrap; }
 .fc-k { display:inline-block; width:9px; height:9px; border-radius:2px; }
 .fc-k.teal { background:#2bb89a; } .fc-k.amber { background:var(--warn); } .fc-k.red { background:var(--err); }
+/* 분산 기상 소스(기상 패널 하단) */
+.w-src { margin-top:10px; border-top:1px solid var(--edge); padding-top:8px; }
+.w-src-head { font-size:11px; color:var(--dim); margin-bottom:6px; }
+.w-src-row { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:11px; }
+.w-src-id { flex:1; color:var(--text); font-family:var(--mono); }
 .sch-x { font-size:11px; color:#cdd6e0; background:#0c1016; border:1px solid #2a323d; border-radius:6px; padding:3px 9px; cursor:pointer; margin-left:5px; }
 .sch-x:hover { border-color:#46525f; }
 .sch-x.act { color:#bfe6a3; border-color:#2f4a22; }

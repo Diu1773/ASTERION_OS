@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=147">
+<link rel="stylesheet" href="/static/style.css?v=148">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -383,6 +383,10 @@
         <div class="kv"><span>풍향</span><b id="w-winddir">—</b></div>
         <div class="kv"><span>운량 지수</span><b id="w-cloud">—</b></div>
         <div class="kv"><span>강우</span><b id="w-rain">—</b></div>
+        <div class="w-src" id="w-src" hidden>
+          <div class="w-src-head">분산 소스 <span class="sch-dim" id="w-src-n"></span></div>
+          <div id="w-src-list"></div>
+        </div>
       </section>
       </div>
 
@@ -848,7 +852,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=178"></script>
+<script src="/static/app.js?v=179"></script>
 <script src="/static/agent_chat.js?v=4" defer></script>
 </body>
 </html>

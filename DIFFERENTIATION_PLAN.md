@@ -1,5 +1,9 @@
 # A. 차별화 — 피드백 학습 + 대화 제어 PLAN (자율 빌드 계약서)
 
+> **상태: ✅ A1~A4 완료(2026-06-20, /goal 자율빌드).** 대화 제어(챗→Night Runner 도구) +
+> 피드백 학습(결과→추천→다음 계획 노출 자동 조정, 루프 닫힘) + 풀리뷰(조회 무적재 수정).
+> 라이브 UI 검증 성공. 남은 로드맵: B(스케줄러 잔여)/C(분산 Weather)/D(Forge 정밀).
+
 > 로드맵 옵션 A. 경쟁 빈틈([[asterion-competitive-landscape]]): 기본기는 표준이고 빈틈이
 > **대화 제어 + 피드백 학습**. `/goal` 자율 세션 체크리스트 — 한 단계씩 SIM 검증 후 커밋.
 
@@ -39,7 +43,9 @@
   dec×0.7). _night_plan이 각 계획 생성 시 라벨로 힌트 조회 → 노출 적응 + st2/응답에 feedback_hint.
   ✅검증: latest_hint 정확매칭(M5≠M51), adapt 180/84/120, _night_plan이 decrease 시드 대상 노출 120→84
   전부 적응. **루프 닫힘**(결과→추천→다음 계획).
-- [ ] **A4 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
+- [x] **A4 — 풀리뷰 + 회귀**: 정독 리뷰 — 핵심 결함 1건 확정·수정: GET /api/feedback가 조회마다
+  Decision 적재(무한 증가) → persist=False(조회 읽기전용), 학습 기록은 도구만. ✅검증: 조회3회 무적재,
+  도구 +1. 회귀 create_app 98라우트·17도구·디스패치 무결·NightRunner/스케줄러 무손상.
 
 ## 4. 검증 게이트
 - SIM 직접 스크립트/TestClient/Fake 주입. DB 경로 `asterion/data/asterion.db`. 임시DB/시드 정리.

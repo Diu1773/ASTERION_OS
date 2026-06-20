@@ -382,9 +382,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/feedback/{name}")
     async def api_feedback(name: str):
-        """피드백 학습 — 대상의 결과를 분석해 다음 관측 추천(노출/재촬영/필터). Decision 적재."""
+        """피드백 학습 — 대상의 결과를 분석해 다음 관측 추천(노출/재촬영/필터). 조회는 읽기전용
+        (persist=False) — 단순 페이지 조회가 Decision을 무한 적재하지 않게. 학습 기록은 에이전트
+        도구(target_feedback)가 의도적으로 호출할 때만."""
         from .analysis.feedback import target_feedback
-        return target_feedback(db, name)
+        return target_feedback(db, name, persist=False)
 
     @app.get("/api/sysinfo")
     async def api_sysinfo():

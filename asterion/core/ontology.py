@@ -214,6 +214,26 @@ class Alert(Base):
     site: Mapped[str] = mapped_column(String(40), default=_current_site)
 
 
+class Campaign(Base):
+    """다중-밤 관측 캠페인 — 대상군(메시에/은하/성운…)을 여러 밤에 걸쳐 완주한다(멀티나잇).
+    정의(set·종류필터·전략·마감)를 영속하고, 진행률·잔여·예상 소요밤은 관측 이력으로 계산한다.
+    매일 밤 plan_night이 '안 찍은 것'만 골라 비겹침 시간표로 배분 → 무인 운영과 결합."""
+    __tablename__ = "campaign"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    goal: Mapped[str] = mapped_column(Text, default="")
+    target_set: Mapped[str] = mapped_column(String(64), default="all")   # messier/galaxies/…
+    type_filter: Mapped[str] = mapped_column(String(64), default="")     # 선택 종류 좁히기
+    profile: Mapped[str] = mapped_column(String(32), default="")         # imaging_broadband 등
+    strategy_json: Mapped[str] = mapped_column(Text, default="")         # 필터/노출/장수
+    status: Mapped[str] = mapped_column(String(16), default="active")    # active/paused/done
+    per_night: Mapped[int] = mapped_column(Integer, default=6)           # 밤당 목표 대상 수(추정용)
+    deadline_utc: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    updated_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
+
+
 class CalibrationProduct(Base):
     """보정 마스터 프레임 (bias/dark/flat). 전처리(Forge)가 프레임에 적용할 보정을
     고를 때 kind+filter+temp+exposure+binning으로 매칭한다 (로드맵 §10.5)."""

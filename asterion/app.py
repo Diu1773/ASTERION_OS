@@ -298,12 +298,16 @@ def create_app() -> FastAPI:
     # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. ProviderHub가 named
     # provider(groq/openai/ollama/자체) 여러 개를 들고 active 하나를 LLM으로 노출 —
     # 공급자/모델을 런타임에 스왑. 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
+    toolkit = ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
+                      orchestrator=orch, bus=bus, drivers=drivers, db=db, sentinel=sentinel,
+                      night_runner=night_runner, forecast=forecast_svc)
     agent = Agent(
-        ProviderHub(cfg),
-        ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
-                orchestrator=orch, bus=bus, drivers=drivers, db=db, sentinel=sentinel,
-                night_runner=night_runner, forecast=forecast_svc),
+        ProviderHub(cfg), toolkit,
         system_prompt=str(cfg.get("agent.system_prompt", "")))
+
+    # 멀티나잇 캠페인 — 대상군을 여러 밤에 완주. 정의 영속 + 진행률/소요밤, plan-night은 기존 스케줄러.
+    from .core.campaign import CampaignManager
+    campaign_mgr = CampaignManager(db, meridian)
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
     def conn_preconditions() -> list[tuple[str, bool, str]]:
@@ -403,6 +407,53 @@ def create_app() -> FastAPI:
         fc = forecast_svc.upcoming(h)
         return {"provider": forecast_svc.provider.name,
                 "hours": [f.as_dict() for f in fc]}
+
+    @app.get("/api/campaigns")
+    async def api_campaigns():
+        """멀티나잇 캠페인 목록 — 각 진행률(완료/잔여/퍼센트/예상 소요밤) 포함."""
+        return {"campaigns": campaign_mgr.list()}
+
+    @app.post("/api/campaigns")
+    async def api_campaign_create(body: dict = Body(...)):
+        """캠페인 생성 — name(필수)·goal·target_set(messier/galaxies/…)·type_filter·profile·
+        strategy(filters/exposure_s/count_per_filter)·per_night·deadline_utc."""
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name 필수")
+        return campaign_mgr.create(
+            name=name, goal=body.get("goal", ""),
+            target_set=body.get("target_set", "all"), type_filter=body.get("type_filter", ""),
+            profile=body.get("profile", ""), strategy=body.get("strategy"),
+            per_night=body.get("per_night", 6), deadline_utc=body.get("deadline_utc"))
+
+    @app.get("/api/campaigns/{cid}")
+    async def api_campaign(cid: int):
+        p = campaign_mgr.progress(cid)
+        if p is None:
+            raise HTTPException(404, f"캠페인 #{cid} 없음")
+        return p
+
+    @app.patch("/api/campaigns/{cid}")
+    async def api_campaign_patch(cid: int, body: dict = Body(...)):
+        try:
+            p = campaign_mgr.set_status(cid, (body.get("status") or "").strip())
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if p is None:
+            raise HTTPException(404, f"캠페인 #{cid} 없음")
+        return p
+
+    @app.post("/api/campaigns/{cid}/plan-night")
+    async def api_campaign_plan_night(cid: int, hours: float = 8.0, count: int = 6):
+        """오늘 밤 잔여 대상을 비겹침 시간표로 배분(draft) — 캠페인 정의로 기존 스케줄러 호출."""
+        inp = campaign_mgr.plan_inputs(cid)
+        if inp is None:
+            raise HTTPException(404, f"캠페인 #{cid} 없음")
+        created, had_dark, moon_sum = await asyncio.to_thread(
+            toolkit._night_plan, float(hours), inp["types"], int(count),
+            inp["strategy"], True, inp["exclude"], inp["idpred"], inp["profile"])
+        return {"created": created, "count": len(created), "dark_window": had_dark,
+                "progress": campaign_mgr.progress(cid)}
 
     @app.get("/api/frames/{frame_id}/provenance")
     async def api_frame_provenance(frame_id: int):

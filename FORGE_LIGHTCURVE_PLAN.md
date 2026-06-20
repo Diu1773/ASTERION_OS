@@ -31,9 +31,10 @@
 - **라이트커브 UI(L3)**: Target Page dossier에 라이트커브 차트(시간↔등급, y반전) + 필터별. hidpi 캔버스.
 
 ## 3. 체크리스트 (각 단계 = 1커밋, 검증 후 다음)
-- [ ] **L1 — 측광 백엔드**: FrameData.photometry + skygraph.target_light_frames + FrameData.light_curve +
-  `/api/photometry/{name}`. 검증: 합성 FITS(가우시안 별, 밝기 변화) → 측광이 입력 플럭스 추종(밝을수록
-  mag↓), 배경/SNR 타당, 빈/누락 프레임 status 처리.
+- [x] **L1 — 측광 백엔드**: FrameData.photometry(centroid+조리개−배경annulus) + light_curve +
+  skygraph.target_light_frames(+세션링크 헬퍼 추출, dossier와 공유) + `/api/photometry/{name}`.
+  ✅검증: 합성 가우시안 별 → flux∝amp(1:2:4 정확), mag차 0.752=2.5log10·2, V자 변광 추종, centroid 정중앙,
+  dossier 회귀, create_app 97라우트.
 - [ ] **L2 — Forge UI 카드**: DEVICES 탭 Forge 카드(토글+sources/warnings/last). 검증: /api/forge/toggle
   왕복(on→off→on) + status 반영, preview_eval(가능 범위).
 - [ ] **L3 — 라이트커브 UI**: Target Page에 라이트커브 차트(시간↔등급). tnPick/검색 대상의 /api/photometry.
@@ -56,4 +57,8 @@
 7. 범위 = Forge UI + 라이트커브(L1~L4). A/B/C로 새지 말 것.
 
 ## 6. 결정 로그 (루프가 추가)
--
+- `2026-06-20 L1 — 조리개 측광(framedata, analysis층): 중앙1/3 피크→강도가중 centroid→조리개합−
+  배경annulus중앙값×면적=flux→mag=−2.5log10(flux)+25. 점광원 가정(goto/platesolve로 중앙). skygraph에
+  _target_session_ids 헬퍼 추출(dossier+target_light_frames 공유, T4 중복 제거). light_curve는 실패
+  프레임도 status로 보고(빠짐없이). 검증: 합성 가우시안에서 flux∝amp 정량 일치, mag 로그관계 정확.
+  ZP=25 임의(상대광도). WCS/절대측광 아님 — 변광성 곡선 형태용.`

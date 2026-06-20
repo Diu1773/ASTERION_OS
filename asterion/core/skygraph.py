@@ -52,6 +52,46 @@ def _transit_alt(lat: float, dec: float | None) -> float | None:
     return None if dec is None else round(90.0 - abs(lat - dec), 1)
 
 
+def _target_session_ids(s, name: str, plan_ids: list[int]) -> list[int]:
+    """대상의 관측 세션 id — plan_id 1급 엣지(T1) ∪ 레거시 summary(json 파싱 정확매칭).
+    coarse 프리필터로 좁힌 뒤 json으로 target==name 확인(포맷 비결합·부분일치 오탐 제거)."""
+    conds = []
+    if plan_ids:
+        conds.append(ObservationSession.plan_id.in_(plan_ids))
+    conds.append(ObservationSession.summary_json.contains(f'"{name}"'))
+    pid_set = set(plan_ids)
+    out = []
+    for se in s.query(ObservationSession).filter(or_(*conds)).all():
+        if se.plan_id in pid_set:
+            out.append(se.id)
+            continue
+        try:
+            if json.loads(se.summary_json or "{}").get("target") == name:
+                out.append(se.id)
+        except Exception:
+            pass
+    return out
+
+
+def target_light_frames(db: Db, name: str) -> list[dict]:
+    """대상의 LIGHT 프레임 전체(캡 없음, 시간순) — 라이트커브용. {id,date_obs_utc,filter}."""
+    name = (name or "").strip()
+
+    def _q(s):
+        tgt = s.query(Target).filter(Target.name == name).first()
+        plan_ids = ([p.id for p in s.query(ObservationPlan)
+                     .filter(ObservationPlan.target_id == tgt.id).all()] if tgt else [])
+        sess_ids = _target_session_ids(s, name, plan_ids)
+        if not sess_ids:
+            return []
+        rows = (s.query(Frame)
+                .filter(Frame.session_id.in_(sess_ids), Frame.image_type == "LIGHT")
+                .order_by(Frame.date_obs_utc.asc()).all())
+        return [{"id": f.id, "date_obs_utc": f.date_obs_utc, "filter": f.filter_name}
+                for f in rows]
+    return db.query(_q)
+
+
 def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
     name = (name or "").strip()
 
@@ -75,25 +115,7 @@ def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
                     "slot_start": params.get("slot_start"),
                     "slot_end": params.get("slot_end")})
         # 세션: plan_id 1급 엣지 ∪ 레거시 summary 문자열 매칭
-        conds = []
-        if plan_ids:
-            conds.append(ObservationSession.plan_id.in_(plan_ids))
-        # 레거시(plan_id 없던) 세션: 이름을 coarse 프리필터로 좁힌 뒤 summary_json을
-        # 실제 파싱해 target == name으로 정확히 확인 — json 포맷(separator)에 결합하지 않고
-        # M5/M51 같은 부분일치 오탐도 제거.
-        conds.append(ObservationSession.summary_json.contains(f'"{name}"'))
-        pid_set = set(plan_ids)
-        sess = []
-        for se in s.query(ObservationSession).filter(or_(*conds)).all():
-            if se.plan_id in pid_set:
-                sess.append(se)
-                continue
-            try:
-                if json.loads(se.summary_json or "{}").get("target") == name:
-                    sess.append(se)
-            except Exception:
-                pass
-        sess_ids = [se.id for se in sess]
+        sess_ids = _target_session_ids(s, name, plan_ids)
         frames = []
         if sess_ids:
             frows = (s.query(Frame).filter(Frame.session_id.in_(sess_ids))

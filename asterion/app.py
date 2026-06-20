@@ -372,6 +372,13 @@ def create_app() -> FastAPI:
     async def api_target_dossier(name: str):
         return skygraph.target_dossier(db, name, lat=_site_lat)
 
+    @app.get("/api/photometry/{name}")
+    async def api_photometry(name: str):
+        """대상의 LIGHT 프레임에 경량 조리개 측광 → 시간↔등급 라이트커브(점광원용)."""
+        frames = skygraph.target_light_frames(db, name)
+        return {"target": name, "n": len(frames), "zp": 25.0,
+                "points": framedata.light_curve(frames)}
+
     @app.get("/api/sysinfo")
     async def api_sysinfo():
         """런타임 자원 — 버전·업타임·디스크 여유(이미지 저장용). 1Hz status와 분리."""

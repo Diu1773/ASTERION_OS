@@ -66,6 +66,72 @@ class FrameData:
             "min": float(data.min()), "max": float(data.max()),
         }
 
+    def photometry(self, frame_id: int, r_ap: float = 6.0, r_in: float = 10.0,
+                   r_out: float = 16.0, zp: float = 25.0) -> dict[str, Any]:
+        """경량 조리개 측광(점광원용). 중앙영역 최대픽셀→강도가중 centroid→조리개합
+        − 배경(annulus 중앙값)×면적 = flux → instrumental mag = −2.5·log10(flux)+zp, SNR.
+        대상이 goto/plate-solve로 중앙에 온다고 가정. 확장천체면 조리개 내 총플럭스 의미."""
+        data, frame, status = self._load(frame_id)
+        if status != "ok":
+            return {"status": status, "frame_id": frame_id}
+        d = data.astype(np.float64)
+        h, w = d.shape
+        # 대상 위치: 중앙 1/3 영역의 최대 픽셀
+        cy0, cy1, cx0, cx1 = h // 3, 2 * h // 3, w // 3, 2 * w // 3
+        sub = d[cy0:cy1, cx0:cx1]
+        if sub.size == 0:
+            return {"status": "too_small", "frame_id": frame_id}
+        py, px = np.unravel_index(int(np.argmax(sub)), sub.shape)
+        py, px = py + cy0, px + cx0
+        # 강도가중 centroid (피크 주변 창)
+        win = int(max(3, round(r_ap)))
+        y0, y1, x0, x1 = max(0, py - win), min(h, py + win + 1), max(0, px - win), min(w, px + win + 1)
+        box = d[y0:y1, x0:x1]
+        ys, xs = np.mgrid[y0:y1, x0:x1]
+        bsub = box - box.min()
+        tot = float(bsub.sum())
+        cy, cx = ((float((ys * bsub).sum() / tot), float((xs * bsub).sum() / tot))
+                  if tot > 0 else (float(py), float(px)))
+        # 조리개·배경 마스크
+        yy, xx = np.ogrid[0:h, 0:w]
+        rr = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+        ap = rr <= r_ap
+        ann = (rr >= r_in) & (rr <= r_out)
+        if not ap.any():
+            return {"status": "no_aperture", "frame_id": frame_id}
+        bg = float(np.median(d[ann])) if ann.any() else 0.0
+        ap_pix = int(ap.sum())
+        ap_sum = float(d[ap].sum())
+        flux = ap_sum - bg * ap_pix
+        peak = float(d[ap].max())
+        noise = float(np.sqrt(max(1.0, abs(ap_sum))))   # 포아송 근사(read/gain 무시)
+        snr = flux / noise if noise > 0 else 0.0
+        mag = (-2.5 * np.log10(flux) + zp) if flux > 0 else None
+        return {
+            "status": "ok", "frame_id": frame_id, "x": round(cx, 2), "y": round(cy, 2),
+            "flux": round(flux, 2), "bg": round(bg, 2), "peak": round(peak, 1),
+            "ap_pixels": ap_pix, "snr": round(float(snr), 2),
+            "mag": (round(float(mag), 3) if mag is not None else None),
+            "saturated": peak >= 60000,
+            "filter": frame.get("filter_name"), "date_obs_utc": frame.get("date_obs_utc"),
+        }
+
+    def light_curve(self, frames: list[dict], r_ap: float = 6.0, r_in: float = 10.0,
+                    r_out: float = 16.0, zp: float = 25.0) -> list[dict[str, Any]]:
+        """프레임 목록(skygraph.target_light_frames)에 측광을 적용해 시간순 시계열.
+        실패 프레임은 status로 표시하고 건너뛰지 않는다(빠짐 없이 보고)."""
+        pts = []
+        for f in frames:
+            ph = self.photometry(f["id"], r_ap=r_ap, r_in=r_in, r_out=r_out, zp=zp)
+            pts.append({"frame_id": f["id"],
+                        "date_obs_utc": f.get("date_obs_utc") or ph.get("date_obs_utc"),
+                        "filter": f.get("filter") or ph.get("filter"),
+                        "status": ph.get("status"), "mag": ph.get("mag"),
+                        "flux": ph.get("flux"), "snr": ph.get("snr"),
+                        "saturated": ph.get("saturated")})
+        pts.sort(key=lambda p: p.get("date_obs_utc") or "")
+        return pts
+
     def profile(self, frame_id: int, axis: str = "row",
                 index: int | None = None, max_len: int = 2048) -> dict[str, Any]:
         data, frame, status = self._load(frame_id)

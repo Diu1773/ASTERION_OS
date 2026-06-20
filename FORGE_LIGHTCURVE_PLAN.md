@@ -39,8 +39,10 @@
   경고·최근보정 표시). applyStatus가 /api/status.forge로 렌더, 토글은 /api/forge/toggle{on,save}.
   PANEL_DEF/PROTO 등록, CSS .fg-*, v=137/168. ✅검증: TestClient 토글 왕복(ON→True/OFF→False) +
   node --check. 라이브 DOM은 프리뷰 불안정으로 미검증(데이터경로+패턴으로 갈음).
-- [ ] **L3 — 라이트커브 UI**: Target Page에 라이트커브 차트(시간↔등급). tnPick/검색 대상의 /api/photometry.
-  검증: 데이터 바인딩/렌더(preview 불안정 시 데이터경로+node check).
+- [x] **L3 — 라이트커브 UI**: Target Page dossier에 라이트커브 캔버스(시간↔등급, y반전=위가 밝음, 코랄
+  점+선). loadDossier가 n_lights>0이면 loadLightCurve→/api/photometry→drawLightCurve. CSS .tp-lc, v=138/169.
+  ✅검증: 실DB REGRESS /api/photometry → 실FITS 측광 성공(mag 18.575/flux 371.5/snr 1.56), node --check.
+  라이브 DOM은 프리뷰 불안정으로 미검증(데이터경로 실데이터로 갈음).
 - [ ] **L4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM 그린.
 
 ## 4. 검증 게이트

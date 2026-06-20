@@ -1059,6 +1059,7 @@ body:not(.devmode) .devmode-only { display: none; }
 .tp-sec { font-size:11px; color:#69727e; text-transform:uppercase; letter-spacing:.5px; margin:12px 0 5px; }
 .tp-scroll { max-height:220px; }
 .tp-fok { color:#bfe6a3; } .tp-fbad { color:#e0655f; }
+.tp-lc { display:block; width:100%; height:160px; margin:4px 0 6px; background:#0b0e13; border:1px solid #20262f; border-radius:10px; }
 
 /* ── Forge 전처리 카드 (ANALYSIS 탭) ── */
 .fg-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; }

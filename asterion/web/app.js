@@ -1330,7 +1330,46 @@ async function loadDossier(name) {
   try {
     const d = await (await fetch("/api/targets/" + encodeURIComponent(name))).json();
     renderDossier(d);
+    if (d.stats && d.stats.n_lights) loadLightCurve(d.name);   // 라이트커브
   } catch (e) { if (body) body.innerHTML = '<div class="hint">조회 실패</div>'; }
+}
+async function loadLightCurve(name) {
+  const cv = $("tp-lc"); if (!cv) return;
+  try {
+    const d = await (await fetch("/api/photometry/" + encodeURIComponent(name))).json();
+    drawLightCurve(cv, (d.points || []).filter((p) => p.mag != null && p.date_obs_utc));
+  } catch (e) { /* noop */ }
+}
+function drawLightCurve(cv, pts) {
+  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
+  if (!pts.length) {
+    ctx.fillStyle = "#69727e"; ctx.font = "12px Pretendard,system-ui,sans-serif";
+    ctx.fillText("측광 가능한 LIGHT 프레임이 없습니다 (FITS 파일 필요)", 10, 22); return;
+  }
+  const ts = pts.map((p) => (Date.parse(p.date_obs_utc) || 0) / 1000);
+  const mags = pts.map((p) => p.mag);
+  const padL = 38, padR = 12, padT = 12, padB = 22;
+  let t0 = Math.min(...ts), t1 = Math.max(...ts); if (t1 === t0) { t0 -= 1; t1 += 1; }
+  let m0 = Math.min(...mags), m1 = Math.max(...mags);
+  const mp = (m1 - m0) * 0.12 || 0.1; m0 -= mp; m1 += mp;
+  const X = (t) => padL + (t - t0) / (t1 - t0) * (w - padL - padR);
+  const Y = (m) => padT + (m - m0) / (m1 - m0) * (h - padT - padB);   // mag↓(밝음)=위
+  ctx.strokeStyle = "rgba(120,140,170,.18)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB); ctx.stroke();
+  ctx.beginPath();
+  pts.forEach((p, i) => { const x = X(ts[i]), y = Y(p.mag); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = "#ec7a73"; ctx.lineWidth = 1.8; ctx.stroke();
+  ctx.fillStyle = "#f0a098";
+  pts.forEach((p, i) => { ctx.beginPath(); ctx.arc(X(ts[i]), Y(p.mag), 2.6, 0, 7); ctx.fill(); });
+  ctx.fillStyle = "#8a94a1"; ctx.font = "10px 'IBM Plex Mono',ui-monospace,monospace"; ctx.textAlign = "right";
+  ctx.fillText(m0.toFixed(1), padL - 4, padT + 8);
+  ctx.fillText(m1.toFixed(1), padL - 4, h - padB);
+  ctx.save(); ctx.translate(11, h / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center"; ctx.fillStyle = "#69727e";
+  ctx.fillText("등급 — 위=밝음", 0, 0); ctx.restore();
+  ctx.textAlign = "center"; ctx.fillStyle = "#69727e";
+  ctx.fillText(_fmtUtcShort(pts[0].date_obs_utc), X(ts[0]) + 14, h - 6);
+  if (pts.length > 1) ctx.fillText(_fmtUtcShort(pts[pts.length - 1].date_obs_utc), X(ts[ts.length - 1]) - 14, h - 6);
 }
 function renderDossier(d) {
   const body = $("tp-body"); if (!body) return;
@@ -1368,6 +1407,7 @@ function renderDossier(d) {
     + '<div class="tp-stat"><span>총 적분</span><b>' + _fmtInteg(st.integration_s) + "</b></div>"
     + '<div class="tp-stat"><span>관측요청</span><b>' + (st.n_requests || 0) + "</b></div></div>"
     + '<div class="tp-filt">필터 ' + filt + "</div>"
+    + (st.n_lights ? '<div class="tp-sec">라이트커브 · 경량 조리개 측광</div><canvas id="tp-lc" class="tp-lc"></canvas>' : "")
     + (reqRows ? '<div class="tp-sec">관측 요청</div><div class="tbl-scroll tp-scroll"><table class="tbl sch-tbl"><thead><tr><th>#</th><th>상태</th><th>필터·노출</th><th>슬롯</th><th>생성</th></tr></thead><tbody>' + reqRows + "</tbody></table></div>" : "")
     + (frRows ? '<div class="tp-sec">프레임 (최근 20)</div><div class="tbl-scroll tp-scroll"><table class="tbl sch-tbl"><thead><tr><th>#</th><th>종류</th><th>필터</th><th>노출</th><th>ADU</th><th>품질</th><th>UTC</th></tr></thead><tbody>' + frRows + "</tbody></table></div>" : '<div class="hint">아직 이 대상의 프레임이 없습니다.</div>');
 }

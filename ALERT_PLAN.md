@@ -26,8 +26,9 @@
 - **E4 풀리뷰 + 회귀**.
 
 ## 3. 체크리스트
-- [ ] **E1 — 온톨로지 + AlertManager**: Alert 테이블 + alert.py 룰/쿨다운/적재. 검증: 스냅샷 3종(정상/풍속25/
-  stale) → 발화 개수·level, 쿨다운 내 재호출 빈 리스트.
+- [x] **E1 — 온톨로지 + AlertManager**: `Alert` 테이블(rule_id·level·title·detail·state·acknowledged) +
+  `watchtower/alert.py` RULES(5종) + AlertManager.evaluate(쿨다운=같은 rule_id utc≥cutoff 스킵, DB 적재).
+  ✅검증: 정상 0 / 비상·fault·돔위험 CRITICAL / stale·hold WARN(중복 없음) / 쿨다운 재평가 0.
 - [ ] **E2 — EventHub.alert + 배선**: events.alert + status.py 호출. 검증: 합성 스냅샷 1틱 → DB Alert 행 +
   가짜 WS 클라이언트 type:"alert" 수신.
 - [ ] **E3 — 대시보드 전달**: WS 핸들러·토스트·경보음·배지 + /api/alerts(active/acknowledge). 검증: ack→

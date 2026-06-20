@@ -197,6 +197,23 @@ class Feedback(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
 
 
+class Alert(Base):
+    """위험 상황 알림(무인 운영 안전 루프). 안전 스냅샷을 룰로 평가해 발화 — DB 적재 +
+    WebSocket. 외부 채널(SMS/SMTP)은 범위 밖. acknowledged로 미확인/확인 구분."""
+    __tablename__ = "alert"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    rule_id: Mapped[str] = mapped_column(String(64))         # emergency_close / weather_stale ...
+    level: Mapped[str] = mapped_column(String(16))           # warn / critical
+    title: Mapped[str] = mapped_column(String(128))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    state: Mapped[str] = mapped_column(String(32), default="")   # 발화 시 안전 상태
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    acked_by: Mapped[str] = mapped_column(String(64), default="")
+    acked_utc: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    site: Mapped[str] = mapped_column(String(40), default=_current_site)
+
+
 class CalibrationProduct(Base):
     """보정 마스터 프레임 (bias/dark/flat). 전처리(Forge)가 프레임에 적용할 보정을
     고를 때 kind+filter+temp+exposure+binning으로 매칭한다 (로드맵 §10.5)."""

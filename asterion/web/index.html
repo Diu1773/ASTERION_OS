@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=143">
+<link rel="stylesheet" href="/static/style.css?v=144">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -49,6 +49,7 @@
   <button class="tab" data-tab="devices">장비 <span>DEVICES</span></button>
   <button class="tab" data-tab="env">기상 <span>WEATHER</span></button>
   <button class="tab" data-tab="plan">계획 <span>PLAN</span></button>
+  <button class="tab" data-tab="ops">운영 <span>OPERATE</span></button>
   <button class="tab" data-tab="analysis">분석 <span>ANALYSIS</span></button>
   <button class="tab" data-tab="system">시스템 <span>SYSTEM</span></button>
 </nav>
@@ -737,6 +738,12 @@
     </div>
   </section>
 
+  <!-- ============ 운영 OPERATE — 무인 야간 운영 콕핏 (NightRunner 제어·감시) ============ -->
+  <section class="tab-pane" data-pane="ops">
+    <div class="muuri" id="grid-ops">
+    </div>
+  </section>
+
 </main>
 
 <!-- 전역 라이브 로그 독 — 모든 탭에서 하단 접이식으로 접근 (BOAO/Datadog 스타일) -->
@@ -783,7 +790,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=174"></script>
+<script src="/static/app.js?v=175"></script>
 <script src="/static/agent_chat.js?v=4" defer></script>
 </body>
 </html>

@@ -1815,7 +1815,7 @@ function drawAllCharts() { charts.forEach(drawChart); }
 // ---------- 워크스페이스 탭 + Muuri 패널 매니저 (갭 없는 팩킹) ----------
 
 const WIDTHS = ["w3", "w4", "w6", "w8", "w12"];
-const TABS = ["control", "devices", "env", "plan", "analysis", "system"];
+const TABS = ["control", "devices", "env", "plan", "ops", "analysis", "system"];
 const ACTIVE_TAB_KEY = "asterion.activetab";
 const grids = {};   // tab -> Muuri 인스턴스 (탭별 독립 그리드)
 

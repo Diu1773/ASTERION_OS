@@ -1626,6 +1626,61 @@ function wireAlerts() {
   loadActiveAlerts();
 }
 
+// ---------- 무인 운영 (NightRunner) — 운영 탭 콕핏 ----------
+// /api/nightrunner status·start·stop. 상태=active/held/idle, 큐/현재/완료·실패·스킵 집계.
+// 운영 탭 활성 동안 3s 폴링(showTab에서 start/stop). 백엔드 무수정 — 읽기·시작·중지만.
+function _nrSlot(it) {
+  const s = it && it.slot_start, e = it && it.slot_end;
+  return s ? (s + (e ? "–" + e : "")) : "";
+}
+function _nrRow(it, label, cls) {
+  return `<tr><td>#${it.plan_id}</td><td class="sch-dim">${_schEsc(_nrSlot(it) || "—")}</td>`
+    + `<td>${_schEsc(it.target || "")}</td><td><span class="sch-badge ${cls}">${label}</span></td></tr>`;
+}
+function renderNightRunner(s) {
+  s = s || {};
+  const badge = s.held ? ["보류", "st-run"] : (s.active ? ["운영중", "st-ok"] : ["대기", "st-draft"]);
+  const stEl = $("nr-state"); if (stEl) { stEl.textContent = badge[0]; stEl.className = "sch-badge " + badge[1]; }
+  const ph = $("nr-phase"); if (ph) ph.textContent = s.held ? (s.reason || "안전 보류") : (s.active ? (s.phase || "—") : "—");
+  const done = s.done || [], failed = s.failed || [], skipped = s.skipped || [], queue = s.queue || [];
+  const cnt = $("nr-counts");
+  if (cnt) cnt.innerHTML = `완료 <b>${done.length}</b> · 실패 <b>${failed.length}</b> · 스킵 <b>${skipped.length}</b> · 남은 <b>${queue.length}</b>`;
+  const cur = $("nr-current");
+  if (cur) {
+    if (s.current) { cur.hidden = false; cur.innerHTML = `▶ #${s.current.plan_id} <b>${_schEsc(s.current.target || "")}</b> <span class="sch-dim">${_schEsc(_nrSlot(s.current))}</span>`; }
+    else { cur.hidden = true; cur.innerHTML = ""; }
+  }
+  const rows = [];
+  if (s.current) rows.push(_nrRow(s.current, "실행중", "st-run"));
+  queue.forEach((it) => rows.push(_nrRow(it, "대기", "st-draft")));
+  done.slice(-6).forEach((it) => rows.push(_nrRow(it, "완료", "st-done")));
+  failed.forEach((it) => rows.push(_nrRow(it, "실패", "st-run")));
+  skipped.forEach((it) => rows.push(_nrRow(it, "스킵", "st-draft")));
+  const tb = $("nr-tbody"); if (tb) tb.innerHTML = rows.join("");
+  const empty = $("nr-empty"); if (empty) empty.hidden = rows.length > 0;
+}
+async function loadNightRunner() {
+  try {
+    const r = await fetch("/api/nightrunner/status");
+    if (!r.ok) return;
+    renderNightRunner(await r.json());
+  } catch (e) { /* noop */ }
+}
+let nrTimer = null;
+function nrStartPoll() { if (!nrTimer) nrTimer = setInterval(loadNightRunner, 3000); }
+function nrStopPoll() { if (nrTimer) { clearInterval(nrTimer); nrTimer = null; } }
+function wireNightRunner() {
+  const st = $("nr-start"), sp = $("nr-stop");
+  if (st && !st.dataset.w) {
+    st.dataset.w = "1";
+    st.onclick = async () => { try { await post("/api/nightrunner/start", {}); loadNightRunner(); } catch (e) { /* noop */ } };
+  }
+  if (sp && !sp.dataset.w) {
+    sp.dataset.w = "1";
+    sp.onclick = async () => { try { await post("/api/nightrunner/stop", {}); loadNightRunner(); } catch (e) { /* noop */ } };
+  }
+}
+
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
 // 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
 // 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
@@ -1844,6 +1899,7 @@ const PROTO_GS_H = {
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
   forge: 8, pixview: 12, connections: 7, "log-sys": 7, sysinfo: 5,
+  nightrunner: 14,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -1867,6 +1923,8 @@ const PROTO_GS_LAYOUT = {
   fov:      { x: 0, y: 23, w: 12, h: 13 },
   tonight:  { x: 0, y: 36, w: 12, h: 17 },
   target:   { x: 0, y: 53, w: 12, h: 16 },
+  // 운영(ops)
+  nightrunner: { x: 0, y: 0, w: 12, h: 14 },
   // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
   plots:   { x: 0, y: 0,  w: 12, h: 10 },
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
@@ -1895,6 +1953,7 @@ const PANEL_DEF = {
   "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   schedule:     { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 11, defW: 12, defH: 14, maxW: 12 },
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
+  nightrunner:  { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 14, maxW: 12 },
   fov:          { klass: "viz",     fills: false,    ar: null,    minW: 8, minH: 10, defW: 12, defH: 13, maxW: 12 },
   tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
   target:       { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 16, maxW: 12 },
@@ -2412,6 +2471,7 @@ function showTab(tab) {
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
   if (tab === "plan") loadSchedule();   // AI 야간 계획 — 표시될 때 최신 plan 불러오기(캔버스 폭 확보 후)
+  if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
   if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
@@ -3458,6 +3518,7 @@ async function init() {
   wireSchedule();                       // AI 야간 계획 — 상태필터/새로고침 바인딩
   wireTarget();                         // 대상 페이지(Skygraph dossier) 검색 바인딩
   wireAlerts();                         // 위험 알림 종/배지 + 초기 미확인 로드
+  wireNightRunner();                    // 무인 운영 시작/중지 버튼(운영 탭)
   initSound();                          // 사운드 기반(촬영음·알림음) + 음소거 토글
 }
 

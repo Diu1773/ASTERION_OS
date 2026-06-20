@@ -1471,114 +1471,82 @@ function wireForge() {
 // ---------- 프레임 뷰어 (픽셀 분석, ANALYSIS 탭) ----------
 // 저장된 FITS의 히스토그램·라인프로파일·통계 + Sentinel 품질(FWHM·별 수)을 본다.
 // framedata 백엔드(/api/analysis/frames/*) 활용. 점광원 측광/별검출은 W1.
-let pvWired = false, pvAxis = "row";
-async function pvLoadFrames() {
-  const sel = $("pv-frame"); if (!sel) return;
-  let arr = [];
-  try {
-    const d = await (await fetch("/api/frames")).json();
-    arr = Array.isArray(d) ? d : (d.items || d.frames || []);
-  } catch (e) { arr = []; }
-  sel.innerHTML = arr.slice(0, 50).map((f) =>
-    '<option value="' + f.id + '">#' + f.id + " · " + _schEsc(f.image_type || "")
-    + " " + _schEsc(f.filter_name || f.filter || "") + " · "
-    + _schEsc(String(f.date_obs_utc || "").slice(11, 19)) + "</option>").join("");
-  if (sel.value) pvShow(+sel.value);
-}
-async function pvShow(id) {
-  if (!id) return;
-  const base = "/api/analysis/frames/" + id;
-  try {
-    const [st, hist, prof, sent, prov] = await Promise.all([
-      fetch(base + "/stats").then((r) => r.json()),
-      fetch(base + "/histogram?bins=128").then((r) => r.json()),
-      fetch(base + "/profile?axis=" + pvAxis).then((r) => r.json()),
-      fetch("/api/sentinel/frames/" + id).then((r) => r.json()).catch(() => null),
-      fetch("/api/frames/" + id + "/provenance").then((r) => r.json()).catch(() => null),
-    ]);
-    pvRenderStats(st, sent);
-    pvRenderProv(prov);
-    drawHistogram($("pv-hist"), hist);
-    drawProfile($("pv-prof"), prof);
-  } catch (e) { if ($("pv-stats")) $("pv-stats").textContent = "조회 실패 (FITS 파일 없음?)"; }
-}
-function pvRenderStats(st, sent) {
-  const el = $("pv-stats"); if (!el) return;
-  if (st && st.status && st.status !== "ok") {
-    el.textContent = "픽셀 데이터 없음 (" + st.status + ")";
-    if ($("pv-verdict")) $("pv-verdict").textContent = ""; return;
-  }
-  const f = (v) => (v == null ? "—" : Math.round(v));
-  el.innerHTML = ["크기 " + st.width + "×" + st.height, "중앙값 " + f(st.median),
-    "평균 " + f(st.mean), "σ " + f(st.std), "min " + f(st.min), "max " + f(st.max)]
-    .map((s) => '<span class="pv-st">' + s + "</span>").join("");
-  const v = $("pv-verdict");
-  if (v && sent && sent.metrics) {
-    const m = sent.metrics;
-    v.textContent = (sent.verdict || "") + (m.fwhm != null ? " · FWHM " + m.fwhm + "px" : "")
-      + (m.star_count != null ? " · 별 " + m.star_count : "");
-    v.className = "pv-verdict " + (sent.verdict === "rejected" ? "bad"
-      : sent.verdict === "warning" ? "warn" : "ok");
-  } else if (v) { v.textContent = ""; }
-}
-function pvRenderProv(p) {   // 프레임 계보(Provenance) 한 줄
-  const el = $("pv-prov"); if (!el) return;
-  if (!p || !p.lineage) { el.innerHTML = ""; return; }
-  const t = p.target, w = p.weather, bits = [];
-  if (t && (t.type_ko || t.magnitude != null)) {
-    bits.push(_schEsc(t.type_ko || "") + (t.magnitude != null ? " " + t.magnitude + "등급" : ""));
-  }
-  if (w) bits.push("기상 " + (w.temp_c != null ? Math.round(w.temp_c) + "°C" : "")
-    + (w.cloud_score != null ? " 구름 " + w.cloud_score : ""));
-  if ((p.calibration_candidates || []).length) {
-    bits.push("보정 " + p.calibration_candidates.map((c) => c.kind).join("/"));
-  }
-  if ((p.decisions || []).length) bits.push("결정 " + p.decisions.length);
-  el.innerHTML = '<span class="pv-prov-lab">계보</span> <span class="pv-prov-chain">'
-    + _schEsc(p.lineage) + "</span>"
-    + (bits.length ? ' <span class="pv-prov-sep">·</span> ' + bits.join(' <span class="pv-prov-sep">·</span> ') : "");
-}
-function drawHistogram(cv, hist) {
+// ---------- 품질 추이 (Quality Timeseries) — 분석 탭, PP된 프레임 ----------
+// 픽셀/히스토그램 표시는 외부도구(MaxIm/NINA/SharpCap) 몫 → 제거. 여기선 /api/timeseries로
+// 밤새 하늘밝기·시잉·별 수 추세. 채운 점=PP(보정), 빈 점=raw(미보정). 기본 PP만, 토글로 raw 포함.
+let qvShowRaw = false;
+function drawTimeSeries(cv, points, key, color) {
   if (!cv) return;
   const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
-  const counts = (hist && hist.counts) || [];
-  if (!counts.length) return;
-  const pad = 4, n = counts.length, mx = Math.max.apply(null, counts) || 1;
-  const bw = (w - pad * 2) / n;
-  ctx.fillStyle = "#4cc9f0";
-  counts.forEach((c, i) => {   // 로그 스케일(천문 히스토그램은 피크가 강함)
-    const bh = Math.log10(1 + c) / Math.log10(1 + mx) * (h - pad * 2);
-    ctx.fillRect(pad + i * bw, h - pad - bh, Math.max(1, bw - 0.5), bh);
-  });
-}
-function drawProfile(cv, prof) {
-  if (!cv) return;
-  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
-  const vals = (prof && prof.values) || [];
-  if (!vals.length) return;
-  const pad = 6, n = vals.length;
-  let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-  if (hi === lo) hi = lo + 1;
+  const pts = points.map((p) => ({ v: p[key], cal: !!p.calibrated })).filter((p) => p.v != null);
+  if (!pts.length) return;
+  const pad = 7, n = pts.length;
+  let lo = Math.min.apply(null, pts.map((p) => p.v));
+  let hi = Math.max.apply(null, pts.map((p) => p.v));
+  if (hi === lo) { hi = lo + 1; lo -= 1; }
+  const X = (i) => pad + (n > 1 ? i / (n - 1) : 0.5) * (w - pad * 2);
+  const Y = (v) => h - pad - (v - lo) / (hi - lo) * (h - pad * 2);
   ctx.beginPath();
-  vals.forEach((v, i) => {
-    const x = pad + (n > 1 ? i / (n - 1) : 0) * (w - pad * 2);
-    const y = h - pad - (v - lo) / (hi - lo) * (h - pad * 2);
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  pts.forEach((p, i) => { const x = X(i), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = color || "#4cc9f0"; ctx.lineWidth = 1.4; ctx.stroke();
+  pts.forEach((p, i) => {   // 점: PP=채움, raw=속빈 회색
+    ctx.beginPath(); ctx.arc(X(i), Y(p.v), 2.3, 0, 2 * Math.PI);
+    if (p.cal) { ctx.fillStyle = color || "#4cc9f0"; ctx.fill(); }
+    else { ctx.strokeStyle = "#888"; ctx.lineWidth = 1; ctx.stroke(); }
   });
-  ctx.strokeStyle = "#34d399"; ctx.lineWidth = 1.3; ctx.stroke();
+  ctx.fillStyle = "#869"; ctx.font = "10px monospace";
+  ctx.fillText(String(Math.round(hi)), 2, 10);
+  ctx.fillText(String(Math.round(lo)), 2, h - 3);
 }
-function wirePixview() {
-  if (pvWired) return; pvWired = true;
-  const sel = $("pv-frame"); if (sel) sel.onchange = () => pvShow(+sel.value);
-  const ax = $("pv-axis");
-  if (ax) ax.querySelectorAll("button").forEach((b) => {
-    b.onclick = () => {
-      ax.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
-      b.classList.add("on"); pvAxis = b.dataset.a;
-      const s = $("pv-frame"); if (s && s.value) pvShow(+s.value);
-    };
-  });
-  const rl = $("pv-reload"); if (rl) rl.onclick = pvLoadFrames;
+async function qvLoad() {
+  const tgt = $("qv-target"), flt = $("qv-filter");
+  const params = new URLSearchParams();
+  if (tgt && tgt.value) params.set("target", tgt.value);
+  if (flt && flt.value) params.set("filter", flt.value);
+  if (qvShowRaw) params.set("show_raw", "true");
+  let pts = [];
+  try {
+    const d = await (await fetch("/api/timeseries?" + params.toString())).json();
+    pts = d.points || [];
+  } catch (e) { pts = []; }
+  const empty = $("qv-empty"); if (empty) empty.hidden = pts.length > 0;
+  const note = $("qv-note");
+  if (note) {
+    const cal = pts.filter((p) => p.calibrated).length;
+    note.textContent = pts.length ? `${pts.length}프레임 · PP ${cal} / raw ${pts.length - cal}` : "데이터 없음";
+  }
+  drawTimeSeries($("qv-bg"), pts, "background_adu", "#4cc9f0");
+  drawTimeSeries($("qv-fwhm"), pts, "fwhm", "#f0b6ad");
+  drawTimeSeries($("qv-stars"), pts, "star_count", "#34d399");
+}
+async function qvLoadTargets() {
+  const sel = $("qv-target"); if (!sel || sel.dataset.f) return;
+  try {
+    const d = await (await fetch("/api/targets")).json();
+    const arr = Array.isArray(d) ? d : (d.targets || d.items || []);
+    if (arr.length) {
+      sel.innerHTML = '<option value="">전체 대상</option>' + arr.map((t) => {
+        const nm = _schEsc(t.name || t.target || String(t));
+        return `<option value="${nm}">${nm}</option>`;
+      }).join("");
+    }
+    sel.dataset.f = "1";
+  } catch (e) { /* noop — 전체 대상만 */ }
+}
+function qvWire() {
+  const rl = $("qv-reload"); if (rl && !rl.dataset.w) { rl.dataset.w = "1"; rl.onclick = qvLoad; }
+  const tgt = $("qv-target"); if (tgt && !tgt.dataset.w) { tgt.dataset.w = "1"; tgt.onchange = qvLoad; }
+  const flt = $("qv-filter"); if (flt && !flt.dataset.w) { flt.dataset.w = "1"; flt.onchange = qvLoad; }
+  const mode = $("qv-mode");
+  if (mode && !mode.dataset.w) {
+    mode.dataset.w = "1";
+    mode.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => {
+        mode.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on"); qvShowRaw = b.dataset.r === "1"; qvLoad();
+      };
+    });
+  }
 }
 
 // ---------- 위험 알림 (무인 운영 안전 루프) ----------
@@ -2617,7 +2585,7 @@ function showTab(tab) {
   if (tab === "env") { loadForecast(); loadWeatherSources(); }   // 기상예보 + 분산 소스 — 표시 시 최신
   if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
-  if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록
+  if (tab === "analysis") { qvWire(); qvLoadTargets(); qvLoad(); }   // 품질 추이 — PP 시계열
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }

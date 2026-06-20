@@ -77,8 +77,14 @@ class Sentinel:
             "median_adu": median, "std_adu": std,
             "min_adu": qm.get("min_adu"), "max_adu": qm.get("max_adu"),
             "saturation_frac": qm.get("saturation_frac"),
-            "fwhm": None, "star_count": None,  # 미구현 — 추후 분석 플러그인 자리
+            "fwhm": None, "star_count": None,
         }
+        # LIGHT는 별 검출로 FWHM·star_count 채움(점광원). FITS 없으면 None 유지(graceful).
+        if (frame.get("image_type") or "").upper() == "LIGHT":
+            from .framedata import FrameData
+            det = FrameData(self.db).detect_stars(frame_id)
+            metrics["fwhm"] = det.get("fwhm")
+            metrics["star_count"] = det.get("star_count")
         verdict, reason, action = self._judge(median, qm.get("saturation_frac"))
         return {
             "frame_id": frame_id, "verdict": verdict, "reason": reason,

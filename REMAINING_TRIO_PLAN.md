@@ -28,8 +28,9 @@
   히스토그램 막대 + 라인프로파일 곡선 + 통계. hidpi 캔버스.
 
 ## 3. 체크리스트
-- [ ] **W1 — Sentinel FWHM·별 개수**: detect_stars + FWHM, Sentinel.evaluate 반영. 검증: 합성(별 N개,
-  알려진 FWHM)→개수·FWHM 근사, 빈 프레임→0.
+- [x] **W1 — Sentinel FWHM·별 개수**: framedata.detect_stars(강건 배경→임계→3×3 로컬맥스 별 + 반치폭
+  면적 FWHM, 순수 numpy) + Sentinel.evaluate가 LIGHT에 반영. ✅검증: 합성 별8 정확·FWHM 5.17(이론 5.18)·
+  빈프레임 0·Sentinel placeholder 채움.
 - [ ] **W2 — 기상 안전연동**: current_weather + 샘플러 ingestion 소스 + config. 검증: ingest→current 반영,
   stale→fail-closed, 기존 로컬 경로 무손상.
 - [ ] **W3 — 픽셀 뷰어 UI**: ANALYSIS 패널 + 히스토그램/프로파일/통계 렌더. 검증: 데이터경로+node-check(+가능시 라이브).

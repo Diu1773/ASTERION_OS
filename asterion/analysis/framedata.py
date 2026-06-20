@@ -139,6 +139,50 @@ class FrameData:
         pts.sort(key=lambda p: p.get("date_obs_utc") or "")
         return pts
 
+    def detect_stars(self, frame_id: int, thresh_sigma: float = 5.0,
+                     fwhm_stars: int = 15) -> dict[str, Any]:
+        """별 검출 + FWHM(순수 numpy). 강건 배경(중앙값)·노이즈((p84−p16)/2) → 임계 위
+        로컬맥스(3×3)를 별 중심으로 카운트, 밝은 별 몇 개의 반치폭 면적→등가 FWHM(px).
+        점광원 가정(LIGHT용). scipy 비의존."""
+        data, frame, status = self._load(frame_id)
+        if status != "ok":
+            return {"status": status, "star_count": None, "fwhm": None}
+        d = data.astype(np.float64)
+        if d.shape[0] < 3 or d.shape[1] < 3:
+            return {"status": "too_small", "star_count": None, "fwhm": None}
+        bg = float(np.median(d))
+        p16, p84 = np.percentile(d, [16, 84])
+        sigma = float((p84 - p16) / 2) or 1.0
+        thr = bg + thresh_sigma * sigma
+        h, w = d.shape
+        c = d[1:h - 1, 1:w - 1]
+        ge = np.ones_like(c, dtype=bool)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                ge &= c >= d[1 + dy:h - 1 + dy, 1 + dx:w - 1 + dx]
+        peaks = ge & (c > thr)
+        ys, xs = np.where(peaks)
+        star_count = int(len(ys))
+        fwhm = None
+        if star_count:
+            vals = c[ys, xs]
+            order = np.argsort(vals)[::-1][:fwhm_stars]
+            fwhms = []
+            for k in order:
+                cy, cx = int(ys[k]) + 1, int(xs[k]) + 1     # 원본 좌표
+                half = bg + (d[cy, cx] - bg) / 2
+                r = 8
+                box = d[max(0, cy - r):cy + r + 1, max(0, cx - r):cx + r + 1]
+                area = int((box >= half).sum())
+                if area > 0:
+                    fwhms.append(2.0 * np.sqrt(area / np.pi))   # 등가 지름
+            if fwhms:
+                fwhm = round(float(np.median(fwhms)), 2)
+        return {"status": "ok", "star_count": star_count, "fwhm": fwhm,
+                "bg": round(bg, 1), "sigma": round(sigma, 1)}
+
     def profile(self, frame_id: int, axis: str = "row",
                 index: int | None = None, max_len: int = 2048) -> dict[str, Any]:
         data, frame, status = self._load(frame_id)

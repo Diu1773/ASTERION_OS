@@ -64,6 +64,8 @@ class StatusSampler:
         self._last_weather_ok: float | None = None
         # 원격 ingestion 폴백(분산 §7) — 로컬 기상 장치 없을 때 호출. 신선 dict(+age_s) 또는 None.
         self.weather_ingest_fn = None
+        # 위험 알림 룰 평가 콜백(snapshot→발화). app이 AlertManager.evaluate를 주입.
+        self.alert_fn = None
         self._wx_warn_s = float(cfg.get("safety.weather_warn_seconds",
                                         safety.WEATHER_WARN_AGE_S))
         self._wx_unsafe_s = float(cfg.get("safety.weather_unsafe_seconds",
@@ -371,4 +373,9 @@ class StatusSampler:
             },
         }
         snapshot.update(device_snaps)  # mount/camera/filter/focuser/weather
+        if self.alert_fn is not None:   # 위험 알림 룰 평가(읽기만 — 발화 시 적재/브로드캐스트)
+            try:
+                self.alert_fn(snapshot)
+            except Exception:
+                pass   # 알림 평가 실패가 스냅샷/안전을 막지 않게
         return snapshot

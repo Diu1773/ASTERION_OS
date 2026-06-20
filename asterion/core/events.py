@@ -62,3 +62,12 @@ class EventHub:
 
     def status(self, snapshot: dict) -> None:
         self.emit({"type": "status", "status": snapshot})
+
+    def alert(self, alert_dict: dict) -> None:
+        """위험 알림 — WebSocket 브로드캐스트 + 로그 버퍼(콘솔에도 남게). CRITICAL=error 레벨."""
+        self.log_buffer.append({
+            "type": "log", "ts": time.strftime("%H:%M:%S"), "source": "alert",
+            "level": "error" if alert_dict.get("level") == "critical" else "warn",
+            "msg": "⚠ " + str(alert_dict.get("title", "")),
+        })
+        self.emit({"type": "alert", "alert": alert_dict})

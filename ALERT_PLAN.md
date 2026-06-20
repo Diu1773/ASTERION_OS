@@ -29,8 +29,9 @@
 - [x] **E1 — 온톨로지 + AlertManager**: `Alert` 테이블(rule_id·level·title·detail·state·acknowledged) +
   `watchtower/alert.py` RULES(5종) + AlertManager.evaluate(쿨다운=같은 rule_id utc≥cutoff 스킵, DB 적재).
   ✅검증: 정상 0 / 비상·fault·돔위험 CRITICAL / stale·hold WARN(중복 없음) / 쿨다운 재평가 0.
-- [ ] **E2 — EventHub.alert + 배선**: events.alert + status.py 호출. 검증: 합성 스냅샷 1틱 → DB Alert 행 +
-  가짜 WS 클라이언트 type:"alert" 수신.
+- [x] **E2 — EventHub.alert + 배선**: events.alert(type:"alert" 브로드캐스트 + 로그버퍼, CRITICAL=error) +
+  StatusSampler.alert_fn(스냅샷 완성 후 호출, try로 보호 — 알림 실패가 스냅샷/안전 안 막음) + app.py
+  AlertManager 생성·배선. ✅검증: 버퍼 적재·_broadcast type:"alert"·DB 적재·이벤트 호출, create_app 100.
 - [ ] **E3 — 대시보드 전달**: WS 핸들러·토스트·경보음·배지 + /api/alerts(active/acknowledge). 검증: ack→
   acknowledged/acked_by DB, /active는 미ack만 (소리/토스트 육안 1회).
 - [ ] **E4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.

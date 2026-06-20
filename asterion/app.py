@@ -194,6 +194,10 @@ def create_app() -> FastAPI:
         from .watchtower.ingest import current_weather
         _wx_max_age = float(cfg.get("safety.weather_unsafe_seconds", 120.0))
         sampler.weather_ingest_fn = lambda: current_weather(db, _wx_max_age)
+    # 위험 알림(무인 운영 안전 루프) — 안전 스냅샷을 룰로 평가해 Alert 발화(추가형, 읽기만).
+    from .watchtower.alert import AlertManager
+    alert_mgr = AlertManager(db, events)
+    sampler.alert_fn = alert_mgr.evaluate
     # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
     watchdog = ConnectionWatchdog(cfg, conn, sampler, events)
     bus = ActionBus(db, events, lambda: sampler.snapshot)

@@ -24,7 +24,7 @@ orchestrator가 img를 RAM에 든 그 자리에서 Forge 보정배열로 측정 
 - [ ] **S6** 프론트 pixview→qualview: 필터바(대상·세션/밤·필터·calibrated/raw 토글·↻)+provenance줄+3캔버스
   (background·fwhm·라이트커브). drawTimeSeries 헬퍼(drawChart 일반화). 픽셀/히스토그램/프로파일 제거.
   PANEL_DEF/그리드 pixview 좌표 유지. ✅분석탭 3차트 렌더·픽셀흔적 없음·콘솔0·데이터없으면 안내.
-- [ ] **S7** light_curve는 우선 raw 유지(mag 영속 컬럼 없음)+calibrated 태그 노출. sentinel.evaluate가 영속
+- [x] **S1~S6** 완료(아래). **S7** light_curve는 우선 raw 유지(mag 영속 컬럼 없음)+calibrated 태그 노출. sentinel.evaluate가 영속
   fwhm/star_count 있으면 재계산 회피. 전체 SIM 회귀. ✅/api/photometry·/api/sentinel 형식 불변·캡처/안전 무손상.
 
 ## 가드레일

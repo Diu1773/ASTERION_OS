@@ -77,14 +77,19 @@ class Sentinel:
             "median_adu": median, "std_adu": std,
             "min_adu": qm.get("min_adu"), "max_adu": qm.get("max_adu"),
             "saturation_frac": qm.get("saturation_frac"),
-            "fwhm": None, "star_count": None,
+            # 캡처 시 보정본에서 잰 값을 우선 사용(S4 영속). 보정 여부·하늘밝기도 노출.
+            "fwhm": qm.get("fwhm"), "star_count": qm.get("star_count"),
+            "background_adu": qm.get("background_adu"), "calibrated": qm.get("calibrated"),
         }
-        # LIGHT는 별 검출로 FWHM·star_count 채움(점광원). FITS 없으면 None 유지(graceful).
-        if (frame.get("image_type") or "").upper() == "LIGHT":
+        # LIGHT인데 영속값이 없으면(레거시/백필) 별 검출로 채움 — 있으면 재계산 회피(점광원).
+        if ((frame.get("image_type") or "").upper() == "LIGHT"
+                and metrics["star_count"] is None):
             from .framedata import FrameData
             det = FrameData(self.db).detect_stars(frame_id)
             metrics["fwhm"] = det.get("fwhm")
             metrics["star_count"] = det.get("star_count")
+            if metrics["background_adu"] is None:
+                metrics["background_adu"] = det.get("bg")
         verdict, reason, action = self._judge(median, qm.get("saturation_frac"))
         return {
             "frame_id": frame_id, "verdict": verdict, "reason": reason,

@@ -1,5 +1,9 @@
 # SKYGRAPH / TARGET PAGE PLAN — Ph9 (자율 빌드 계약서)
 
+> **상태: ✅ T1~T4 완료(2026-06-20, /goal 자율빌드).** Skygraph 엣지(session.plan_id) →
+> dossier 백엔드(/api/targets) → Target Page UI → 풀리뷰(통합검토 통과 + Sprint1·2 반영).
+> 남은 미세사항: #3 list_targets N+1, #4 status 얕은복사 — 스케일/엄밀성 필요 시.
+
 > `/goal` 자율 세션이 따라가는 체크리스트. 한 번에 한 단계, 각 단계 SIM 검증 통과 후 커밋.
 > 막히면 깨끗한 상태로 두고 결정로그 기록 후 멈춘다. NIGHT_RUNNER_PLAN.md와 같은 방식.
 
@@ -41,7 +45,10 @@
   tnPick(카드클릭)+검색으로 진입. ✅검증: 백엔드 /api/targets 실앱 9대상 + 실DB dossier 집계
   (REGRESS/WIRE-TEST 프레임 연결, 카탈로그 폴백) + node --check JS. ⚠️라이브 DOM은 프리뷰 매니저
   포트 바인딩 불안정(이 환경 반복현상, 코드무관)으로 미검증 — 렌더는 검증된 schedule 패널과 동일 패턴.
-- [ ] **T4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM e2e 그린.
+- [x] **T4 — 풀리뷰 + 회귀**: ✅review-full 4차원(수학·의존성·성능·버그) — 치명/높음 0건, 통합검토 통과.
+  발견 4건(저~중 견고성)에서 Sprint 1·2 즉시 반영: (#2) frames 반환 200 캡+frames_truncated(stats 전체),
+  (#1) 레거시 summary 매칭을 coarse 프리필터+json 파싱 비교로(포맷 비결합·M5/M51 오탐 제거). 검증:
+  오탐방지/레거시/캡/실DB 회귀 그린. 남은 #3(N+1)·#4(얕은복사)는 스케일/엄밀성 필요 시.
 
 ## 4. 검증 게이트 (매 단계)
 - SIM 직접 스크립트(Fake/시드) 또는 uvicorn 직접(프리뷰 매니저 포트 바인딩 불안정 — 8533+ 직접).

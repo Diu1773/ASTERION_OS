@@ -78,8 +78,21 @@ def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
         conds = []
         if plan_ids:
             conds.append(ObservationSession.plan_id.in_(plan_ids))
-        conds.append(ObservationSession.summary_json.contains(f'"target": "{name}"'))
-        sess = s.query(ObservationSession).filter(or_(*conds)).all()
+        # 레거시(plan_id 없던) 세션: 이름을 coarse 프리필터로 좁힌 뒤 summary_json을
+        # 실제 파싱해 target == name으로 정확히 확인 — json 포맷(separator)에 결합하지 않고
+        # M5/M51 같은 부분일치 오탐도 제거.
+        conds.append(ObservationSession.summary_json.contains(f'"{name}"'))
+        pid_set = set(plan_ids)
+        sess = []
+        for se in s.query(ObservationSession).filter(or_(*conds)).all():
+            if se.plan_id in pid_set:
+                sess.append(se)
+                continue
+            try:
+                if json.loads(se.summary_json or "{}").get("target") == name:
+                    sess.append(se)
+            except Exception:
+                pass
         sess_ids = [se.id for se in sess]
         frames = []
         if sess_ids:
@@ -146,7 +159,9 @@ def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
                    "notes": (tgt["notes"] if tgt else "")},
         "visibility": {"transit_alt": transit, "observable": observable, "site_lat": lat},
         "requests": plans,
-        "frames": frames,
+        # 상세 프레임은 최근 200개로 캡(페이로드 제한) — stats는 전체로 계산됨.
+        "frames": frames[:200],
+        "frames_truncated": len(frames) > 200,
         "stats": {"n_frames": len(frames), "n_lights": len(lights),
                   "integration_s": round(integ_s), "by_filter": by_filter,
                   "bad_lights": bad, "n_requests": len(plans)},

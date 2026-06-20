@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=135">
+<link rel="stylesheet" href="/static/style.css?v=136">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -561,7 +561,23 @@
           <span class="tn-cnt" id="tn-count"></span>
         </div>
         <div id="tn-content"></div>
-        <div class="hint">대상을 클릭하면 위 ‘야간 타임라인’에 그 고도 곡선이 그려집니다</div>
+        <div class="hint">대상을 클릭하면 위 ‘야간 타임라인’과 ‘대상 페이지’에 반영됩니다</div>
+      </section>
+      </div>
+
+      <!-- 대상 페이지 (Skygraph dossier) -->
+      <div class="muuri-item w12" data-panel="target">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">대상 페이지</span><span class="card-tag accent">TARGET · SKYGRAPH</span></div>
+        <div class="tp-bar">
+          <input id="tp-q" class="tn-q" type="text" placeholder="대상 이름/번호 (예: M13, 안드로메다)… Enter">
+          <button class="btn btn-sm" id="tp-go">조회</button>
+          <span class="spacer"></span>
+          <span class="tp-rec" id="tp-rec"></span>
+        </div>
+        <div id="tp-body">
+          <div class="hint">오늘 밤 베스트에서 대상을 클릭하거나 위에서 검색하면, 그 대상의 관측 이력·프레임·품질·가시성이 한 곳에 모입니다.</div>
+        </div>
       </section>
       </div>
 
@@ -730,7 +746,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=166"></script>
+<script src="/static/app.js?v=167"></script>
 <script src="/static/agent_chat.js?v=4" defer></script>
 </body>
 </html>

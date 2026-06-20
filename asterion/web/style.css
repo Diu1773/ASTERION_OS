@@ -1036,3 +1036,26 @@ body:not(.devmode) .devmode-only { display: none; }
 .sch-x.act.go { color:#f0b6ad; border-color:#5e332f; background:#190f0d; }
 .sch-x.del { color:#8a94a2; padding:3px 8px; }
 .sch-x.del:hover { color:#e0655f; border-color:#5e332f; }
+
+/* ── 대상 페이지 (Skygraph dossier, PLAN 탭) ── */
+[data-panel="target"] > .muuri-item-content { display:flex; flex-direction:column; min-height:0; }
+.tp-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; }
+.tp-bar .tn-q { width:260px; }
+.tp-rec { font-size:11.5px; color:#f0b6ad; }
+#tp-body { flex:1 1 auto; min-height:0; overflow-y:auto; }
+.tp-head { margin-bottom:10px; }
+.tp-name { font-size:16px; font-weight:600; color:#eef2f6; }
+.tp-tag { font-size:10px; color:#9aa4b0; background:#161c24; padding:2px 7px; border-radius:999px; }
+.tp-sub { font-size:12px; color:#8a94a2; margin-top:2px; }
+.tp-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
+.tp-stat { background:#0f1318; border:1px solid #20262f; border-radius:10px; padding:9px 12px; display:flex; flex-direction:column; gap:1px; }
+.tp-stat span { font-size:10.5px; color:#69727e; text-transform:uppercase; letter-spacing:.4px; }
+.tp-stat b { font-size:18px; font-weight:600; color:#e7edf2; font-variant-numeric:tabular-nums; }
+.tp-stat i { font-size:11px; color:#8a94a2; font-style:normal; }
+.tp-ok { font-size:10.5px; color:#bfe6a3; }
+.tp-no { font-size:10.5px; color:#e0a05f; }
+.tp-filt { font-size:12px; color:#8a94a2; margin-bottom:6px; }
+.tp-chip { display:inline-block; font-size:11px; color:#cdd6e0; background:#0c1016; border:1px solid #2a323d; border-radius:6px; padding:2px 8px; margin:0 4px 4px 0; }
+.tp-sec { font-size:11px; color:#69727e; text-transform:uppercase; letter-spacing:.5px; margin:12px 0 5px; }
+.tp-scroll { max-height:220px; }
+.tp-fok { color:#bfe6a3; } .tp-fbad { color:#e0655f; }

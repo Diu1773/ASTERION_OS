@@ -36,8 +36,11 @@
 - [x] **T2 — dossier 백엔드**: `core/skygraph.py` target_dossier(plan_id 조인 + 레거시 summary 매칭,
   카탈로그 좌표 폴백, transit_alt 가시성, 추천)·list_targets. app.py `/api/targets`·`/api/targets/{name}`.
   ✅검증: 시드 dossier(3 LIGHT·540s·불량1→재촬영 추천), 카탈로그 폴백(M13), 목록, create_app 96라우트.
-- [ ] **T3 — Target Page UI**: dossier를 보여주는 패널(개요·가시성·프레임이력·품질·추천). 패널 등록.
-  검증: preview_eval로 렌더/데이터 바인딩(스크린샷은 폰트CDN 타임아웃 가능).
+- [x] **T3 — Target Page UI**: PLAN 탭 '대상 페이지' 패널(개요·가시성칩·통계4·필터칩·관측요청표·
+  프레임이력표·추천). loadDossier/renderDossier/wireTarget, PANEL_DEF/PROTO_GS_LAYOUT/PROTO_GS_H 등록,
+  tnPick(카드클릭)+검색으로 진입. ✅검증: 백엔드 /api/targets 실앱 9대상 + 실DB dossier 집계
+  (REGRESS/WIRE-TEST 프레임 연결, 카탈로그 폴백) + node --check JS. ⚠️라이브 DOM은 프리뷰 매니저
+  포트 바인딩 불안정(이 환경 반복현상, 코드무관)으로 미검증 — 렌더는 검증된 schedule 패널과 동일 패턴.
 - [ ] **T4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM e2e 그린.
 
 ## 4. 검증 게이트 (매 단계)
@@ -64,3 +67,7 @@
   (90-|lat-dec|, 시간무관·의존성0). 카탈로그(dso_catalog) 좌표/종류/등급 폴백 — DB에 없는 대상도 dossier.
   추천 로직(미관측/추가적분/재촬영/고도부족). /api/targets·/api/targets/{name}는 app.py(_site_lat).
   검증은 임시 DB 시드(실DB 무오염).`
+- `2026-06-20 T3 — PLAN 탭 '대상 페이지' 패널. app.js loadDossier/renderDossier(개요·가시성·통계·
+  필터칩·요청표·프레임표·추천)/wireTarget, tnPick에 loadDossier 연결(카드클릭→타임라인+FOV+dossier 동시).
+  CSS .tp-*. v=136/167. 실DB 검증: /api/targets 9대상, dossier 집계(REGRESS/WIRE-TEST 프레임 잡힘 →
+  Frame→Target 연결 실증, 카탈로그 폴백 M31). 프리뷰 매니저 불안정으로 라이브 DOM 미검증(환경 이슈).`

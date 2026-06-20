@@ -12,6 +12,7 @@ import os
 import re
 import urllib.parse
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -30,7 +31,8 @@ from .core.events import EventHub
 from .core.focus_offset import apply_filter_focus_offset
 from .archive import ArchiveRecovery
 from .core.ontology import (
-    ActionLog, Db, Frame, ObservationSession, WeatherRecord, set_current_site,
+    ActionLog, Alert, Db, Frame, ObservationSession, WeatherRecord,
+    row_to_dict, set_current_site,
 )
 from .core.preview import stretch_to_png
 from .drivers import REGISTRY, ConnectionManager
@@ -445,6 +447,41 @@ def create_app() -> FastAPI:
         """분산 소스별 최신 기상 1건씩 — 어느 PC가 무엇을 올렸는지."""
         from .watchtower.ingest import latest_per_source
         return latest_per_source(db)
+
+    # 위험 알림(무인 운영 안전 루프) — 발화는 샘플러가, 여기는 조회/확인.
+    @app.get("/api/alerts")
+    async def api_alerts(limit: int = 50):
+        return db.recent(Alert, limit)
+
+    @app.get("/api/alerts/active")
+    async def api_alerts_active():
+        """미확인(acknowledged=False) 알림 — 배지/토스트용."""
+        def _q(s):
+            rows = (s.query(Alert).filter(Alert.acknowledged.is_(False))
+                    .order_by(Alert.id.desc()).all())
+            return [row_to_dict(r) for r in rows]
+        return db.query(_q)
+
+    @app.post("/api/alerts/acknowledge")
+    async def api_alerts_ack(payload=Body(default={})):
+        """알림 확인 — id 주면 1건, 없으면 미확인 전체. {acknowledged: n}."""
+        aid = (payload or {}).get("id")
+        by = str((payload or {}).get("by") or "operator")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cnt: list[int] = []
+
+        def _upd(s):
+            q = s.query(Alert).filter(Alert.acknowledged.is_(False))
+            if aid is not None:
+                q = q.filter(Alert.id == aid)
+            rows = q.all()
+            for r in rows:
+                r.acknowledged = True
+                r.acked_by = by
+                r.acked_utc = now
+            cnt.append(len(rows))
+        db.update(_upd)
+        return {"acknowledged": cnt[0] if cnt else 0}
 
     # ---------- 액션 ----------
 

@@ -32,8 +32,9 @@
 - [x] **E2 — EventHub.alert + 배선**: events.alert(type:"alert" 브로드캐스트 + 로그버퍼, CRITICAL=error) +
   StatusSampler.alert_fn(스냅샷 완성 후 호출, try로 보호 — 알림 실패가 스냅샷/안전 안 막음) + app.py
   AlertManager 생성·배선. ✅검증: 버퍼 적재·_broadcast type:"alert"·DB 적재·이벤트 호출, create_app 100.
-- [ ] **E3 — 대시보드 전달**: WS 핸들러·토스트·경보음·배지 + /api/alerts(active/acknowledge). 검증: ack→
-  acknowledged/acked_by DB, /active는 미ack만 (소리/토스트 육안 1회).
+- [x] **E3 — 대시보드 전달**: WS `type:"alert"`→onAlert(토스트+CRITICAL WebAudio 경보음+미확인 배지),
+  종 클릭→전체 확인. `GET /api/alerts`·`/api/alerts/active`·`POST /api/alerts/acknowledge`. ✅검증:
+  백엔드 active/ack(임시DB 정확)·103라우트, **라이브 UI**(시뮬 2알림→배지2·토스트2·crit 클래스·콘솔에러 0).
 - [ ] **E4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
 
 ## 4~5. 게이트·가드레일

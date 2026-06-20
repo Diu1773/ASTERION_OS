@@ -1089,3 +1089,15 @@ body:not(.devmode) .devmode-only { display: none; }
 @media (max-width:700px){ .pv-grid { grid-template-columns:1fr; } }
 .pv-lab { font-size:10.5px; color:#69727e; text-transform:uppercase; letter-spacing:.4px; margin-bottom:3px; }
 .pv-cv { display:block; width:100%; height:130px; background:#0b0e13; border:1px solid #20262f; border-radius:8px; }
+
+/* ── 위험 알림 (종/배지 + 토스트) ── */
+.alert-bell { position:relative; background:none; border:none; cursor:pointer; font-size:16px; padding:2px 4px; line-height:1; }
+.alert-badge { position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 3px; border-radius:999px; background:#e0655f; color:#fff; font-size:9.5px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+#toast-host { position:fixed; right:16px; bottom:16px; z-index:9999; display:flex; flex-direction:column; gap:8px; max-width:360px; }
+.toast { background:#0f1318; border:1px solid #2a323d; border-left:3px solid #e0a05f; border-radius:10px; padding:10px 13px; font-size:12.5px; color:#dfe5ec; box-shadow:0 6px 24px rgba(0,0,0,.45); animation:toast-in .25s ease; }
+.toast.crit { border-left-color:#e0655f; }
+.toast b { color:#f0b6ad; margin-right:5px; }
+.toast.warn b { color:#e0a05f; }
+.toast-d { display:block; font-size:11px; color:#8a94a2; margin-top:3px; }
+.toast.out { opacity:0; transform:translateX(20px); transition:all .4s ease; }
+@keyframes toast-in { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:none; } }

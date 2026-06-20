@@ -1562,6 +1562,67 @@ function wirePixview() {
   const rl = $("pv-reload"); if (rl) rl.onclick = pvLoadFrames;
 }
 
+// ---------- 위험 알림 (무인 운영 안전 루프) ----------
+// WS type:"alert"를 받아 토스트 + CRITICAL 경보음(WebAudio) + 미확인 배지. 종(bell) 클릭 시 전체 확인.
+let alertUnacked = 0;
+function onAlert(a) {
+  if (!a) return;
+  alertUnacked += 1;
+  updateAlertBadge();
+  showToast(a);
+  if (a.level === "critical") alarmBeep();
+}
+function updateAlertBadge() {
+  const bell = $("alert-bell"), b = $("alert-badge");
+  if (bell) bell.hidden = alertUnacked === 0;
+  if (b) b.textContent = alertUnacked > 99 ? "99+" : String(alertUnacked);
+}
+function showToast(a) {
+  let host = $("toast-host");
+  if (!host) { host = document.createElement("div"); host.id = "toast-host"; document.body.appendChild(host); }
+  const t = document.createElement("div");
+  const crit = a.level === "critical";
+  t.className = "toast " + (crit ? "crit" : "warn");
+  t.innerHTML = "<b>" + (crit ? "⚠ 위험" : "주의") + "</b> " + _schEsc(a.title || "")
+    + (a.detail ? '<span class="toast-d">' + _schEsc(a.detail) + "</span>" : "");
+  host.appendChild(t);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 400); }, crit ? 12000 : 7000);
+}
+function alarmBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx(), o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "square"; o.connect(g); g.connect(ctx.destination);
+    const t0 = ctx.currentTime;
+    o.frequency.setValueAtTime(880, t0);
+    o.frequency.setValueAtTime(660, t0 + 0.18);
+    o.frequency.setValueAtTime(880, t0 + 0.36);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.55);
+    o.start(t0); o.stop(t0 + 0.56);
+  } catch (e) { /* 자동재생 차단 — 무시(토스트·배지는 남음) */ }
+}
+async function loadActiveAlerts() {
+  try {
+    const a = await (await fetch("/api/alerts/active")).json();
+    alertUnacked = Array.isArray(a) ? a.length : 0;
+    updateAlertBadge();
+  } catch (e) { /* noop */ }
+}
+function wireAlerts() {
+  const bell = $("alert-bell");
+  if (bell && !bell.dataset.w) {
+    bell.dataset.w = "1";
+    bell.onclick = async () => {
+      try { await post("/api/alerts/acknowledge", {}); } catch (e) { /* noop */ }
+      alertUnacked = 0; updateAlertBadge();
+    };
+  }
+  loadActiveAlerts();
+}
+
 // ---------- 시계열 플롯 빌더 ----------
 
 const PALETTE = ["#4cc9f0", "#34d399", "#fbbf24", "#fb7185",
@@ -3234,6 +3295,7 @@ function handleWSData(data) {
   else if (data.type === "frame") prependRow("tbl-frames", frameRow(data.frame));
   else if (data.type === "action") prependRow("tbl-actions", actionRow(data.action));
   else if (data.type === "preview") updatePreview(data.token, data.meta);
+  else if (data.type === "alert") onAlert(data.alert);
 }
 
 function connectWS() {
@@ -3331,6 +3393,7 @@ async function init() {
   wireFov();                            // FOV 시뮬레이션 입력 바인딩
   wireSchedule();                       // AI 야간 계획 — 상태필터/새로고침 바인딩
   wireTarget();                         // 대상 페이지(Skygraph dossier) 검색 바인딩
+  wireAlerts();                         // 위험 알림 종/배지 + 초기 미확인 로드
 }
 
 // ---------- 버튼 핸들러 ----------

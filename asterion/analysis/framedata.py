@@ -67,11 +67,15 @@ class FrameData:
         }
 
     def photometry(self, frame_id: int, r_ap: float = 6.0, r_in: float = 10.0,
-                   r_out: float = 16.0, zp: float = 25.0) -> dict[str, Any]:
+                   r_out: float = 16.0, zp: float = 25.0, arr=None) -> dict[str, Any]:
         """경량 조리개 측광(점광원용). 중앙영역 최대픽셀→강도가중 centroid→조리개합
         − 배경(annulus 중앙값)×면적 = flux → instrumental mag = −2.5·log10(flux)+zp, SNR.
-        대상이 goto/plate-solve로 중앙에 온다고 가정. 확장천체면 조리개 내 총플럭스 의미."""
-        data, frame, status = self._load(frame_id)
+        대상이 goto/plate-solve로 중앙에 온다고 가정. 확장천체면 조리개 내 총플럭스 의미.
+        arr 주어지면 _load 대신 그 배열(PP 보정본)에서 측정 — 측광은 플랫 보정 후가 유효."""
+        if arr is not None:
+            data, frame, status = np.asarray(arr), None, "ok"
+        else:
+            data, frame, status = self._load(frame_id)
         if status != "ok":
             return {"status": status, "frame_id": frame_id}
         # 전체 이미지를 float64로 변환하지 않는다(대형 센서면 수십 ms 낭비) — 측광에 쓰는
@@ -120,7 +124,8 @@ class FrameData:
             "ap_pixels": ap_pix, "snr": round(float(snr), 2),
             "mag": (round(float(mag), 3) if mag is not None else None),
             "saturated": peak >= 60000,
-            "filter": frame.get("filter_name"), "date_obs_utc": frame.get("date_obs_utc"),
+            "filter": frame.get("filter_name") if frame else None,
+            "date_obs_utc": frame.get("date_obs_utc") if frame else None,
         }
 
     def light_curve(self, frames: list[dict], r_ap: float = 6.0, r_in: float = 10.0,
@@ -140,12 +145,17 @@ class FrameData:
         return pts
 
     def detect_stars(self, frame_id: int, thresh_sigma: float = 5.0,
-                     fwhm_stars: int = 30, min_area: int = 3) -> dict[str, Any]:
+                     fwhm_stars: int = 30, min_area: int = 3,
+                     arr=None) -> dict[str, Any]:
         """별 검출 + FWHM(순수 numpy). 강건 배경(중앙값)·노이즈((p84−p16)/2) → 임계 위
         픽셀에서만 3×3 로컬맥스 검사(희소 — 대형 센서도 빠름), 각 봉우리의 반치폭 면적이
         min_area 이상이면 진짜 별로 카운트(단일픽셀 노이즈 제거). FWHM=별들 등가지름 중앙값.
-        점광원 가정(LIGHT용). scipy 비의존."""
-        data, frame, status = self._load(frame_id)
+        점광원 가정(LIGHT용). scipy 비의존. arr 주어지면(캡처 시 PP된 배열) _load 대신 그
+        배열에서 측정 — 시계열 품질은 보정본에서 재야 유효(framedata 재읽기 없이 캡처 시점 1회)."""
+        if arr is not None:
+            data, frame, status = np.asarray(arr), None, "ok"
+        else:
+            data, frame, status = self._load(frame_id)
         if status != "ok":
             return {"status": status, "star_count": None, "fwhm": None}
         d = data   # float32 그대로 — 전체 float64 변환 안 함(대형 센서 비용↓)

@@ -148,6 +148,12 @@ class QualityMetric(Base):
     saturation_frac: Mapped[float | None] = mapped_column(Float, nullable=True)
     verdict: Mapped[str] = mapped_column(String(32), default="")  # ok / out_of_range / ...
     reason: Mapped[str] = mapped_column(Text, default="")
+    # 시계열 품질(보정-측정-영속) — 캡처 시 PP된 배열에서 1회 측정해 누적(재측정 X). _sync_columns 자동 ADD.
+    fwhm: Mapped[float | None] = mapped_column(Float, nullable=True)             # 시잉(별 FWHM, px)
+    star_count: Mapped[int | None] = mapped_column(Integer, nullable=True)       # 검출 점광원 수
+    background_adu: Mapped[float | None] = mapped_column(Float, nullable=True)   # 하늘밝기(robust median)
+    calibrated: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)  # PP 적용 여부(NULL=raw)
+    cal_sources_json: Mapped[str] = mapped_column(Text, default="{}")            # 적용 마스터 출처·경고·사유
 
 
 class FocusRun(Base):

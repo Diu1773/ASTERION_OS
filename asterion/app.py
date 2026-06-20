@@ -291,6 +291,10 @@ def create_app() -> FastAPI:
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)))
 
+    # 기상예보 — 스케줄러 게이팅·대시보드. config에 KMA 키 있으면 실예보, 없으면 Sim 폴백.
+    from .watchtower.forecast import ForecastService
+    forecast_svc = ForecastService(cfg)
+
     # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. ProviderHub가 named
     # provider(groq/openai/ollama/자체) 여러 개를 들고 active 하나를 LLM으로 노출 —
     # 공급자/모델을 런타임에 스왑. 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
@@ -298,7 +302,7 @@ def create_app() -> FastAPI:
         ProviderHub(cfg),
         ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
                 orchestrator=orch, bus=bus, drivers=drivers, db=db, sentinel=sentinel,
-                night_runner=night_runner),
+                night_runner=night_runner, forecast=forecast_svc),
         system_prompt=str(cfg.get("agent.system_prompt", "")))
 
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
@@ -391,6 +395,14 @@ def create_app() -> FastAPI:
         frames = skygraph.target_light_frames(db, name)
         return {"target": name, "n": len(frames), "zp": 25.0,
                 "points": framedata.light_curve(frames)}
+
+    @app.get("/api/forecast")
+    async def api_forecast(hours: int = 24):
+        """단기 기상예보(정시별 구름·강수확률·바람·기온). 제공자=sim/kma. 스케줄러 게이팅과 동일 소스."""
+        h = max(1, min(48, int(hours)))
+        fc = forecast_svc.upcoming(h)
+        return {"provider": forecast_svc.provider.name,
+                "hours": [f.as_dict() for f in fc]}
 
     @app.get("/api/frames/{frame_id}/provenance")
     async def api_frame_provenance(frame_id: int):

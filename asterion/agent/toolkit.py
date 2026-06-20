@@ -29,7 +29,7 @@ _KO = {"수성": "mercury", "금성": "venus", "화성": "mars", "목성": "jupi
 class ToolKit:
     def __init__(self, *, cfg, snapshot_fn: Callable[[], dict], meridian,
                  orchestrator, bus, drivers, db=None, sentinel=None,
-                 night_runner=None):
+                 night_runner=None, forecast=None):
         self.cfg = cfg
         self.snapshot = snapshot_fn
         self.meridian = meridian
@@ -39,6 +39,7 @@ class ToolKit:
         self.db = db
         self.sentinel = sentinel
         self.night_runner = night_runner
+        self.forecast = forecast   # ForecastService — 기상예보 게이팅(없으면 무영향)
         self.lat = float(cfg.get("site.latitude", 36.64))
         self.lon = float(cfg.get("site.longitude", 127.49))
 
@@ -431,6 +432,15 @@ class ToolKit:
         site = self._site_profile()
         hmask = site.get("horizon_mask") or []
         bortle = site.get("bortle")
+        # 기상예보 게이팅: 관측 시간대 강수확률 → merit 페널티(+ 고위험 하드스킵). 예보 없으면 무영향.
+        fc_risk = None
+        if self.forecast is not None:
+            try:
+                now_dt = now.to_datetime().replace(tzinfo=timezone.utc)
+                self.forecast.upcoming(int(hours) + 2)   # 캐시 워밍(스레드 내 1회)
+                fc_risk = lambda off: self.forecast.risk_at(now_dt + timedelta(hours=off))
+            except Exception:
+                fc_risk = None
         cand = []
         for o in DSO:
             if types and o["t"] not in types:
@@ -446,14 +456,18 @@ class ToolKit:
             obs = [off for off, (a, az) in aa if a >= 30 and a >= self._horizon_at(az, hmask)]
             if peak < 30 or not obs:
                 continue
+            wx = max((fc_risk(off) for off in obs), default=0.0) if fc_risk else 0.0
+            if wx >= 0.8:
+                continue   # 하드: 강수확률 80%↑ 시간대만 관측 가능한 대상은 제외
             sep = float(SkyCoord(o["ra"] * 15 * u.deg, o["dec"] * u.deg).separation(moon).deg)
             cand.append({"o": o, "label": label, "peak": peak, "tr": peak_off,
-                         "win": (min(obs), max(obs)), "moon": sep})
+                         "win": (min(obs), max(obs)), "moon": sep, "wx": wx})
         for c in cand:   # merit: 고도 + 관측창길이 + (달이격 × 프로파일가중 × 달밝힘) − 광공해
             c["score"] = (c["peak"] + (c["win"][1] - c["win"][0]) * w_win
                           + c["moon"] * w_moon * m_bright)
             if not nb and bortle and bortle > 4:   # 광공해: 광대역에서 '어두운 대상'이 불리
                 c["score"] -= (float(bortle) - 4) * 0.5 * max(0.0, c["o"]["mag"] - 6.0)
+            c["score"] -= c.get("wx", 0.0) * 8.0   # 기상예보: 강수확률 높은 시간대 대상 점수↓
         if campaign:   # 긴급도 — 관측창 빨리 끝나는(곧 지는) 것 먼저
             cand.sort(key=lambda c: (c["win"][1], -c["peak"]))
         else:

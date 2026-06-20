@@ -23,7 +23,7 @@ from . import __version__
 from .camera.capture import CaptureService
 from .camera.cooler import CoolerController
 from .config import Config
-from .core import ephemeris
+from .core import ephemeris, skygraph
 from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
 from .core.focus_offset import apply_filter_focus_offset
@@ -360,6 +360,17 @@ def create_app() -> FastAPI:
     @app.get("/api/status")
     async def api_status():
         return sampler.snapshot or {"mode": "starting"}
+
+    # Skygraph(Ph9) — 대상 중심 dossier. 한 대상의 관측요청·프레임·품질·가시성·추천 집계.
+    _site_lat = float(cfg.get("site.latitude", 36.64))
+
+    @app.get("/api/targets")
+    async def api_targets():
+        return skygraph.list_targets(db, lat=_site_lat)
+
+    @app.get("/api/targets/{name}")
+    async def api_target_dossier(name: str):
+        return skygraph.target_dossier(db, name, lat=_site_lat)
 
     @app.get("/api/sysinfo")
     async def api_sysinfo():

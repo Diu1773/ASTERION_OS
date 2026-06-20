@@ -33,8 +33,9 @@
 - [x] **T1 — Skygraph 엣지**: ontology `ObservationSession.plan_id`(FK nullable) + orchestrator가
   `ObservationSession(kind="science", plan_id=pid)`로 기록. ✅검증: 기존 DB에 _sync_columns가 plan_id
   컬럼 자동 ALTER ADD, 저장/조회(4242) OK, create_app 94라우트 회귀 그린.
-- [ ] **T2 — dossier 백엔드**: `core/skygraph.py` target_dossier + `/api/targets`·`/api/targets/{name}`.
-  검증: 시드(target+plan+session+frame+QM)→API가 관측요청/프레임/품질/가시성/추천 집계 반환.
+- [x] **T2 — dossier 백엔드**: `core/skygraph.py` target_dossier(plan_id 조인 + 레거시 summary 매칭,
+  카탈로그 좌표 폴백, transit_alt 가시성, 추천)·list_targets. app.py `/api/targets`·`/api/targets/{name}`.
+  ✅검증: 시드 dossier(3 LIGHT·540s·불량1→재촬영 추천), 카탈로그 폴백(M13), 목록, create_app 96라우트.
 - [ ] **T3 — Target Page UI**: dossier를 보여주는 패널(개요·가시성·프레임이력·품질·추천). 패널 등록.
   검증: preview_eval로 렌더/데이터 바인딩(스크린샷은 폰트CDN 타임아웃 가능).
 - [ ] **T4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM e2e 그린.
@@ -58,3 +59,8 @@
   세션 생성에 plan_id=pid 기록 → Target→Plan→Session→Frame 1급 조인(문자열 summary 매칭 탈피).
   _sync_columns가 기존 DB에 자동 ALTER ADD COLUMN(검증됨). 기존 세션은 plan_id=NULL(하위호환).
   autoflat 등 다른 세션은 plan_id 없이 생성 — science 세션만 채움. create_app 회귀 그린.`
+- `2026-06-20 T2 — core/skygraph.py(ontology만 의존, 레이어 청정). target_dossier: Target⋈Plan
+  (target_id) + Session(plan_id ∪ summary 문자열 레거시) ⋈ Frame ⋈ QualityMetric. 가시성=transit_alt
+  (90-|lat-dec|, 시간무관·의존성0). 카탈로그(dso_catalog) 좌표/종류/등급 폴백 — DB에 없는 대상도 dossier.
+  추천 로직(미관측/추가적분/재촬영/고도부족). /api/targets·/api/targets/{name}는 app.py(_site_lat).
+  검증은 임시 DB 시드(실DB 무오염).`

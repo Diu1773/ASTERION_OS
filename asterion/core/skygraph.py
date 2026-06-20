@@ -1,0 +1,170 @@
+"""Skygraph — 대상 중심 집계(Ph9, 로드맵 §11). 온톨로지의 Target/Plan/Session/Frame/
+QualityMetric을 한 대상의 dossier로 묶는다 — "데이터는 파일이 아니라 Target/Observation
+중심"(원칙 #6)의 구현. Frame→Target은 T1의 `ObservationSession.plan_id` 1급 엣지로 조인하고,
+plan_id가 없던 레거시 세션은 `summary_json`의 target 문자열로 보조 매칭한다.
+
+core 계층 — operation/agent에 의존하지 않고 ontology만 읽는다.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from sqlalchemy import or_
+
+from .dso_catalog import DSO, TYPE_KO
+from .ontology import (
+    Db, Frame, ObservationPlan, ObservationSession, QualityMetric, Target,
+)
+
+_CAT_BY: dict[str, dict] | None = None
+
+
+def _catalog_index() -> dict[str, dict]:
+    global _CAT_BY
+    if _CAT_BY is None:
+        idx: dict[str, dict] = {}
+        for o in DSO:
+            idx[o["id"].lower()] = o
+            if o.get("name"):
+                idx[o["name"].lower()] = o
+        _CAT_BY = idx
+    return _CAT_BY
+
+
+def _catalog_find(q: str | None) -> dict | None:
+    if not q:
+        return None
+    idx = _catalog_index()
+    s = q.strip().lower()
+    if s in idx:
+        return idx[s]
+    if "(" in s and ")" in s:   # 라벨 "이름 (ID)"에서 ID 추출
+        inner = s[s.rfind("(") + 1:s.rfind(")")].strip()
+        if inner in idx:
+            return idx[inner]
+    return None
+
+
+def _transit_alt(lat: float, dec: float | None) -> float | None:
+    """대상이 청람에서 도달하는 최고고도(자오선 통과). 시간 무관·의존성 없는 가시성 지표."""
+    return None if dec is None else round(90.0 - abs(lat - dec), 1)
+
+
+def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
+    name = (name or "").strip()
+
+    def _q(s):
+        tgt = s.query(Target).filter(Target.name == name).first()
+        plans, plan_ids = [], []
+        if tgt:
+            for p in (s.query(ObservationPlan)
+                      .filter(ObservationPlan.target_id == tgt.id)
+                      .order_by(ObservationPlan.id.desc()).all()):
+                plan_ids.append(p.id)
+                try:
+                    params = json.loads(p.params_json or "{}")
+                except Exception:
+                    params = {}
+                plans.append({
+                    "id": p.id, "status": p.approval_status, "kind": p.kind,
+                    "created_utc": p.created_utc, "filters": params.get("filters"),
+                    "exposure_s": params.get("exposure_s"),
+                    "count_per_filter": params.get("count_per_filter"),
+                    "slot_start": params.get("slot_start"),
+                    "slot_end": params.get("slot_end")})
+        # 세션: plan_id 1급 엣지 ∪ 레거시 summary 문자열 매칭
+        conds = []
+        if plan_ids:
+            conds.append(ObservationSession.plan_id.in_(plan_ids))
+        conds.append(ObservationSession.summary_json.contains(f'"target": "{name}"'))
+        sess = s.query(ObservationSession).filter(or_(*conds)).all()
+        sess_ids = [se.id for se in sess]
+        frames = []
+        if sess_ids:
+            frows = (s.query(Frame).filter(Frame.session_id.in_(sess_ids))
+                     .order_by(Frame.id.desc()).all())
+            fids = [f.id for f in frows]
+            qms = {}
+            if fids:
+                for qm in (s.query(QualityMetric)
+                           .filter(QualityMetric.frame_id.in_(fids)).all()):
+                    qms[qm.frame_id] = qm
+            for f in frows:
+                qm = qms.get(f.id)
+                frames.append({
+                    "id": f.id, "image_type": f.image_type, "filter": f.filter_name,
+                    "exposure_s": f.exposure_s, "date_obs_utc": f.date_obs_utc,
+                    "median_adu": f.median_adu, "flag": f.flag,
+                    "verdict": (qm.verdict if qm else None),
+                    "saturation_frac": (qm.saturation_frac if qm else None)})
+        tdict = (None if not tgt else {
+            "id": tgt.id, "name": tgt.name, "ra_hours": tgt.ra_hours,
+            "dec_degs": tgt.dec_degs, "type": tgt.type,
+            "magnitude": tgt.magnitude, "notes": tgt.notes})
+        return tdict, plans, frames
+
+    tgt, plans, frames = db.query(_q)
+
+    # 카탈로그 폴백(좌표/종류/등급) — DB에 없거나 좌표가 비었을 때
+    cat = _catalog_find(name)
+    ra = dec = typ = mag = None
+    disp = name
+    if tgt:
+        ra, dec, typ, mag = tgt["ra_hours"], tgt["dec_degs"], tgt["type"], tgt["magnitude"]
+        disp = tgt["name"]
+    if cat:
+        ra = ra if ra is not None else cat["ra"]
+        dec = dec if dec is not None else cat["dec"]
+        typ = typ or cat.get("t")
+        mag = mag if mag is not None else cat.get("mag")
+
+    lights = [f for f in frames if (f["image_type"] or "").upper() == "LIGHT"]
+    integ_s = sum((f["exposure_s"] or 0) for f in lights)
+    by_filter: dict[str, int] = {}
+    for f in lights:
+        by_filter[f["filter"] or "?"] = by_filter.get(f["filter"] or "?", 0) + 1
+    bad = sum(1 for f in lights if (f["flag"] and f["flag"] != "ok")
+              or (f["verdict"] and f["verdict"] not in ("", "ok")))
+
+    transit = _transit_alt(lat, dec)
+    observable = transit is not None and transit >= 30
+    if not observable:
+        rec = (f"청람에서 고도 부족(최고 {transit}°)" if transit is not None
+               else "좌표 불명 — 관측 판단 불가")
+    elif not lights:
+        rec = "관측 추천 — 아직 LIGHT 프레임 없음"
+    else:
+        rec = "재촬영 검토 — 불량 LIGHT 있음" if bad else "추가 적분 가능"
+
+    return {
+        "name": disp,
+        "in_db": tgt is not None,
+        "target": {"ra_hours": ra, "dec_degs": dec, "type": typ,
+                   "type_ko": TYPE_KO.get(typ, typ), "magnitude": mag,
+                   "notes": (tgt["notes"] if tgt else "")},
+        "visibility": {"transit_alt": transit, "observable": observable, "site_lat": lat},
+        "requests": plans,
+        "frames": frames,
+        "stats": {"n_frames": len(frames), "n_lights": len(lights),
+                  "integration_s": round(integ_s), "by_filter": by_filter,
+                  "bad_lights": bad, "n_requests": len(plans)},
+        "recommendation": rec,
+    }
+
+
+def list_targets(db: Db, lat: float = 36.64) -> list[dict[str, Any]]:
+    """관측했거나 계획된 대상 요약 목록. 상세는 target_dossier(name)."""
+    def _q(s):
+        out = []
+        for t in s.query(Target).order_by(Target.id.desc()).all():
+            n_plans = (s.query(ObservationPlan)
+                       .filter(ObservationPlan.target_id == t.id).count())
+            out.append({
+                "id": t.id, "name": t.name, "ra_hours": t.ra_hours,
+                "dec_degs": t.dec_degs, "type": t.type,
+                "type_ko": TYPE_KO.get(t.type, t.type), "magnitude": t.magnitude,
+                "n_requests": n_plans, "transit_alt": _transit_alt(lat, t.dec_degs)})
+        return out
+    return db.query(_q)

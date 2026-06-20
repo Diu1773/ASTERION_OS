@@ -93,6 +93,43 @@ def target_light_frames(db: Db, name: str) -> list[dict]:
     return db.query(_q)
 
 
+def quality_timeseries(db: Db, *, target: str = "", session_id: int | None = None,
+                       night: str = "", filt: str = "", show_raw: bool = False) -> list[dict]:
+    """QualityMetric⨝Frame 시계열(시간순) — PP된 품질값으로 background/fwhm/별수 추이.
+    기본은 calibrated=true만(PP 시리즈, 과학 유효). show_raw=true면 raw 포함(태깅). target은
+    plan_id∪레거시 세션 매핑(_target_session_ids), session_id/night(YYYY-MM-DD)/filt 필터."""
+    target = (target or "").strip()
+
+    def _q(s):
+        q = (s.query(Frame.id, Frame.date_obs_utc, Frame.filter_name, Frame.session_id,
+                     QualityMetric.fwhm, QualityMetric.background_adu, QualityMetric.star_count,
+                     QualityMetric.median_adu, QualityMetric.calibrated)
+             .join(QualityMetric, QualityMetric.frame_id == Frame.id)
+             .filter(Frame.image_type == "LIGHT"))
+        if filt:
+            q = q.filter(Frame.filter_name == filt)
+        if session_id is not None:
+            q = q.filter(Frame.session_id == int(session_id))
+        if target:
+            tgt = s.query(Target).filter(Target.name == target).first()
+            plan_ids = ([p.id for p in s.query(ObservationPlan)
+                         .filter(ObservationPlan.target_id == tgt.id).all()] if tgt else [])
+            sess_ids = _target_session_ids(s, target, plan_ids)
+            q = q.filter(Frame.session_id.in_(sess_ids or [-1]))
+        out = []
+        for fid, d, fn, sid, fwhm, bg, sc, med, cal in q.order_by(Frame.id.asc()).all():
+            calb = bool(cal)
+            if not show_raw and not calb:           # 기본 = PP 시리즈만(raw 제외)
+                continue
+            if night and (d or "")[:10] != night:
+                continue
+            out.append({"frame_id": fid, "date_obs_utc": d, "filter": fn, "session_id": sid,
+                        "fwhm": fwhm, "background_adu": bg, "star_count": sc,
+                        "median_adu": med, "calibrated": calb})
+        return out
+    return db.query(_q)
+
+
 def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
     name = (name or "").strip()
 

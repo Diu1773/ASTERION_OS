@@ -97,6 +97,18 @@ def build_analysis_router(sentinel: Any, framedata: Any = None,
             raise HTTPException(503, "FrameData 미가용")
         return _check(framedata.profile(frame_id, axis=axis, index=index))
 
+    @router.get("/api/timeseries")
+    async def timeseries(target: str = "", session_id: int | None = None,
+                         night: str = "", filter: str = "", show_raw: bool = False):
+        """PP된 품질 시계열(background/fwhm/별수) — 시계열 뷰어용. 기본 calibrated=true만,
+        show_raw=true면 raw 포함. target/session_id/night/filter 필터."""
+        if framedata is None:
+            raise HTTPException(503, "FrameData 미가용")
+        from ..core import skygraph
+        return {"points": skygraph.quality_timeseries(
+            framedata.db, target=target, session_id=session_id, night=night,
+            filt=filter, show_raw=show_raw)}
+
     # ---------- Calibration Library (§10.5) ----------
 
     @router.get("/api/calibration/products")

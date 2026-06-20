@@ -124,6 +124,8 @@ class WeatherRecord(Base):
     __tablename__ = "weather_record"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
+    # 분산 수집(§7): 어느 원격 PC/센서에서 온 값인지 — 소스별 최신·중복제거 키.
+    source_id: Mapped[str] = mapped_column(String(64), default="")
     temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     humidity: Mapped[float | None] = mapped_column(Float, nullable=True)
     dew_point_c: Mapped[float | None] = mapped_column(Float, nullable=True)

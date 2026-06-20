@@ -23,9 +23,11 @@ WeatherRecord(Weather Store)에 적재. 소스별 최신 조회. **안전 게이
 - **C3 풀리뷰 + 회귀**.
 
 ## 3. 체크리스트
-- [ ] **C1 — Ingestion + 재정렬**: WeatherRecord.source_id + ingest_records(매핑·검증·중복제거) + POST route.
-  검증: 단일/배열 적재, 중복 timestamp 스킵, 잘못된 payload 거부, 자동 마이그레이션, history 회귀.
-- [ ] **C2 — 소스별 최신**: latest_per_source + GET /api/weather/sources. 검증: 다중 소스 → 소스별 최신.
+- [x] **C1 — Ingestion + 재정렬**: WeatherRecord.source_id(자동 마이그레이션) + `watchtower/ingest.py`
+  ingest_records(§7 매핑·검증·(source,utc) 중복제거 배치내+DB) + `POST /api/weather/ingest`(단일/배열).
+  ✅검증: 단일 accepted1 / 배열 accepted1·중복2·거부1 / 매핑(humidity_percent→humidity 등).
+- [x] **C2 — 소스별 최신**: latest_per_source(source별 max id) + `GET /api/weather/sources`.
+  ✅검증: 2소스(pc01/pc02) 소스별 최신. create_app 100라우트.
 - [ ] **C3 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
 
 ## 4. 검증 게이트

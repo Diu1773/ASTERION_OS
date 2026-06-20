@@ -14,7 +14,8 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -422,6 +423,19 @@ def create_app() -> FastAPI:
     @app.get("/api/weather/history")
     async def api_weather_history(limit: int = 240):
         return db.recent(WeatherRecord, limit)
+
+    @app.post("/api/weather/ingest")
+    async def api_weather_ingest(payload=Body(...)):
+        """분산 수집(§7) — 원격 PC Weather Agent가 표준 기상 JSON(단일/배열)을 올린다.
+        검증·매핑·재정렬(중복제거) 후 WeatherRecord에 적재. 로컬 weather/safety 흐름과 별개."""
+        from .watchtower.ingest import ingest_records
+        return ingest_records(db, payload)
+
+    @app.get("/api/weather/sources")
+    async def api_weather_sources():
+        """분산 소스별 최신 기상 1건씩 — 어느 PC가 무엇을 올렸는지."""
+        from .watchtower.ingest import latest_per_source
+        return latest_per_source(db)
 
     # ---------- 액션 ----------
 

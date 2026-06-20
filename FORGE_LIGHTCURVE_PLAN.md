@@ -35,8 +35,10 @@
   skygraph.target_light_frames(+세션링크 헬퍼 추출, dossier와 공유) + `/api/photometry/{name}`.
   ✅검증: 합성 가우시안 별 → flux∝amp(1:2:4 정확), mag차 0.752=2.5log10·2, V자 변광 추종, centroid 정중앙,
   dossier 회귀, create_app 97라우트.
-- [ ] **L2 — Forge UI 카드**: DEVICES 탭 Forge 카드(토글+sources/warnings/last). 검증: /api/forge/toggle
-  왕복(on→off→on) + status 반영, preview_eval(가능 범위).
+- [x] **L2 — Forge UI 카드**: ANALYSIS 탭 'Forge 전처리' 카드(전처리/보정저장 토글 + 마스터 sources·
+  경고·최근보정 표시). applyStatus가 /api/status.forge로 렌더, 토글은 /api/forge/toggle{on,save}.
+  PANEL_DEF/PROTO 등록, CSS .fg-*, v=137/168. ✅검증: TestClient 토글 왕복(ON→True/OFF→False) +
+  node --check. 라이브 DOM은 프리뷰 불안정으로 미검증(데이터경로+패턴으로 갈음).
 - [ ] **L3 — 라이트커브 UI**: Target Page에 라이트커브 차트(시간↔등급). tnPick/검색 대상의 /api/photometry.
   검증: 데이터 바인딩/렌더(preview 불안정 시 데이터경로+node check).
 - [ ] **L4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM 그린.

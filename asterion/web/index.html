@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=136">
+<link rel="stylesheet" href="/static/style.css?v=137">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -633,6 +633,20 @@
       </section>
       </div>
 
+      <!-- Forge 실시간 전처리 -->
+      <div class="muuri-item w12" data-panel="forge">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">Forge 전처리</span><span class="card-tag accent">REAL-TIME CALIBRATION</span></div>
+        <div class="fg-bar">
+          <button class="fg-toggle" id="fg-on">전처리 <b>—</b></button>
+          <button class="fg-toggle" id="fg-save">보정본 저장 <b>—</b></button>
+          <span class="spacer"></span>
+          <span class="fg-stat" id="fg-stat"></span>
+        </div>
+        <div id="fg-body"><div class="hint">캡처된 LIGHT에 마스터 bias/dark/flat을 실시간 적용합니다. 마스터는 자동 선택(캡처본 → 핀 → 라이브러리).</div></div>
+      </section>
+      </div>
+
     </div>
   </section>
 
@@ -746,7 +760,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=167"></script>
+<script src="/static/app.js?v=168"></script>
 <script src="/static/agent_chat.js?v=4" defer></script>
 </body>
 </html>

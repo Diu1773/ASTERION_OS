@@ -1378,6 +1378,42 @@ function wireTarget() {
   if (q) q.addEventListener("keydown", (e) => { if (e.key === "Enter") loadDossier(q.value.trim()); });
 }
 
+// ---------- Forge 전처리 카드 (ANALYSIS 탭) ----------
+// 백엔드 Forge(실시간 bias/dark/flat 보정)의 얼굴 — /api/status.forge를 그리고 토글로 제어.
+function renderForge(fg) {
+  const onB = $("fg-on"); if (!fg || !onB) return;
+  const saveB = $("fg-save");
+  onB.querySelector("b").textContent = fg.enabled ? "ON" : "OFF";
+  onB.classList.toggle("on", !!fg.enabled);
+  if (saveB) {
+    saveB.querySelector("b").textContent = fg.save_calibrated ? "ON" : "OFF";
+    saveB.classList.toggle("on", !!fg.save_calibrated);
+  }
+  if ($("fg-stat")) $("fg-stat").textContent = "마스터 캐시 " + (fg.masters_cached || 0);
+  const body = $("fg-body"); if (!body) return;
+  const src = fg.sources || {};
+  const srcRow = ["bias", "dark", "flat"].map((k) =>
+    '<div class="fg-src"><span>' + k + "</span><b>" + _schEsc(src[k] || "—") + "</b></div>").join("");
+  const warns = (fg.warnings || []).map((w) => '<div class="fg-warn">⚠ ' + _schEsc(w) + "</div>").join("");
+  const last = fg.last && typeof fg.last === "object" ? fg.last : null;
+  body.innerHTML = '<div class="fg-grid">' + srcRow + "</div>" + warns
+    + (last ? '<div class="fg-last">최근 보정 · ' + _schEsc(last.filter || "?")
+        + " · 적용 " + _schEsc((last.applied || []).join(", ") || "없음")
+        + (last.median_before != null ? " · 중앙값 " + Math.round(last.median_before)
+            + "→" + Math.round(last.median_after) : "") + "</div>" : "");
+}
+async function forgeToggle(which) {
+  const fg = (lastStatus && lastStatus.forge) || {};
+  const body = which === "on" ? { on: !fg.enabled, save: !!fg.save_calibrated }
+                              : { on: !!fg.enabled, save: !fg.save_calibrated };
+  try { renderForge(await post("/api/forge/toggle", body)); } catch (e) { /* post가 로그 */ }
+}
+function wireForge() {
+  const on = $("fg-on"), save = $("fg-save");
+  if (on && !on.dataset.w) { on.dataset.w = "1"; on.onclick = () => forgeToggle("on"); }
+  if (save && !save.dataset.w) { save.dataset.w = "1"; save.onclick = () => forgeToggle("save"); }
+}
+
 // ---------- 시계열 플롯 빌더 ----------
 
 const PALETTE = ["#4cc9f0", "#34d399", "#fbbf24", "#fb7185",
@@ -1537,7 +1573,7 @@ const PROTO_GS_H = {
   sky: 9, skyflat: 9, mount: 6, camera: 6, focuser: 5, image: 7,
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
-  connections: 7, "log-sys": 7, sysinfo: 5,
+  forge: 8, connections: 7, "log-sys": 7, sysinfo: 5,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -1565,6 +1601,7 @@ const PROTO_GS_LAYOUT = {
   plots:   { x: 0, y: 0,  w: 12, h: 10 },
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
   actions: { x: 6, y: 10, w: 6,  h: 8  },
+  forge:   { x: 0, y: 18, w: 12, h: 8  },
   // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
   connections: { x: 0, y: 0,  w: 8,  h: 20 },
   "log-sys":   { x: 8, y: 0,  w: 4,  h: 20 },
@@ -1593,6 +1630,7 @@ const PANEL_DEF = {
   plots:        { klass: "viz",     fills: true,     ar: [12, 5], minW: 7, minH: 6,  defW: 12, defH: 9,  maxW: 12 },
   frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
+  forge:        { klass: "control", fills: false,    ar: null,    minW: 6, minH: 5,  defW: 12, defH: 8,  maxW: 12 },
   connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 20, maxW: 12 },
   "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 20, maxW: 12 },
   sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 11, maxW: 12, maxH: 13 },
@@ -2765,6 +2803,7 @@ function applyStatus(s) {
   safBadge.textContent = saf.state || "--";
   safBadge.className = `badge safety s-${saf.state}`;
   safBadge.title = (saf.reasons || []).join(", ");
+  if (s.forge) { wireForge(); renderForge(s.forge); }   // Forge 전처리 카드(ANALYSIS)
 
   // 장비 연결 칩 (자동 이름 + 초록/빨강)
   setConn("conn-mount", s.mount, "MOUNT");

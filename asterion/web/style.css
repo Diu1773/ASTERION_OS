@@ -1059,3 +1059,17 @@ body:not(.devmode) .devmode-only { display: none; }
 .tp-sec { font-size:11px; color:#69727e; text-transform:uppercase; letter-spacing:.5px; margin:12px 0 5px; }
 .tp-scroll { max-height:220px; }
 .tp-fok { color:#bfe6a3; } .tp-fbad { color:#e0655f; }
+
+/* ── Forge 전처리 카드 (ANALYSIS 탭) ── */
+.fg-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; }
+.fg-toggle { font-size:12px; color:#9aa4b0; background:#0c1016; border:1px solid #2a323d; border-radius:7px; padding:6px 12px; cursor:pointer; }
+.fg-toggle b { color:#69727e; font-weight:600; margin-left:4px; }
+.fg-toggle.on { border-color:#2f4a22; background:#14210f; color:#cdd6e0; }
+.fg-toggle.on b { color:#bfe6a3; }
+.fg-stat { font-size:11px; color:#69727e; }
+.fg-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; }
+.fg-src { background:#0f1318; border:1px solid #20262f; border-radius:10px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; }
+.fg-src span { font-size:10.5px; color:#69727e; text-transform:uppercase; letter-spacing:.4px; }
+.fg-src b { font-size:12.5px; color:#dce3eb; font-weight:500; }
+.fg-warn { font-size:11.5px; color:#e0a05f; margin-top:7px; }
+.fg-last { font-size:11.5px; color:#8a94a2; margin-top:8px; }

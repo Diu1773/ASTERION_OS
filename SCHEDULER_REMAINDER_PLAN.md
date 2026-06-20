@@ -1,5 +1,8 @@
 # B. 스케줄러 잔여 — 측광 merit + 월출몰 PLAN (자율 빌드 계약서)
 
+> **상태: ✅ B1~B3 완료(2026-06-20, /goal 자율빌드).** 측광 merit(단주기 연속/장주기 빈틈) +
+> 월출몰 시각(벡터화 11×) + 풀리뷰. 남은 로드맵: C(분산 Weather)/D(Forge 정밀).
+
 > 로드맵 옵션 B. 방금 만든 라이트커브(변광성 측광)와 직결. `/goal` 자율 세션 체크리스트.
 
 ## 0. 목표
@@ -28,7 +31,16 @@
 - [x] **B2 — 월출몰 시각**: `_moon_riseset(loc,now,hours,n=24)` — 밤 샘플링→고도 0° 교차 선형보간→
   월출/월몰(KST). moon_sum에 rise/set 추가(plan_night 응답에 노출). ✅검증: 월출 11:52·월몰 23:44,
   독립 5분 샘플링과 ±4분 일치.
-- [ ] **B3 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
+- [x] **B3 — 풀리뷰 + 회귀**: 정독 리뷰 — 성능결함 1건 확정·수정: _moon_riseset가 astropy 24회 루프
+  호출(1224ms) → Time 배열 벡터화(1회 ephemeris)로 **107ms(11×)**, 결과 동일. 회귀 create_app 98라우트·
+  imaging dwell 현행·캠페인 경로·moon키 완전. 남은 저위험: hm 중복(_moon_riseset/dispatch).
+
+## 결정 로그(추가)
+- `2026-06-20 B1 — _night_plan 측광 프로파일 dict{w_win,dwell}. short=관측창 연속(min(win,4h)),
+  long=quick(노출/3600). merit win가중·dur_for(c) 프로파일화. _t_plan_night profile에 photometry_* 추가.`
+- `2026-06-20 B2 — _moon_riseset(고도 0° 교차 선형보간). moon_sum rise/set. 독립검증 ±4분.`
+- `2026-06-20 B3 — 리뷰: _moon_riseset를 get_body(Time배열) 벡터화 1224→107ms(11×), 결과불변.
+  슬롯 1.5h는 4필터 base_dur(정상). 기본 imaging 현행 유지 확인.`
 
 ## 4. 검증 게이트
 SIM 스크립트/Fake. DB 경로 asterion/data. 프리뷰 불안정→데이터경로. 콘솔/서버 에러 0, 기존 보존.

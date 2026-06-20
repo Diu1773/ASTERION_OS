@@ -25,7 +25,9 @@
 - [x] **B1 — 측광 merit**: 프로파일 config{photometry_short:(w_win25,dwell window), photometry_long:
   (w_win2,quick), imaging:(6,exposure)}. merit win가중 + dur_for(c) 프로파일별. _t_plan_night이 goal_type
   photometry_*→profile. ✅검증: short 1대상 3.15h 연속 / long 6대상 각 0.2h / imaging 현행 0.5h.
-- [ ] **B2 — 월출몰 시각**: _moon_riseset + moon_sum 노출. 검증: 합성/실제로 rise<set 또는 부호변화 시각 타당.
+- [x] **B2 — 월출몰 시각**: `_moon_riseset(loc,now,hours,n=24)` — 밤 샘플링→고도 0° 교차 선형보간→
+  월출/월몰(KST). moon_sum에 rise/set 추가(plan_night 응답에 노출). ✅검증: 월출 11:52·월몰 23:44,
+  독립 5분 샘플링과 ±4분 일치.
 - [ ] **B3 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
 
 ## 4. 검증 게이트

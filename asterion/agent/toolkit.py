@@ -451,9 +451,10 @@ class ToolKit:
                         "moon_sep": round(c["moon"]), "mag": o["mag"],
                         "exposure_s": st2["exposure_s"],
                         "feedback_hint": st2.get("feedback_hint")})
+        m_rise, m_set = self._moon_riseset(loc, now, hours)
         moon_sum = {"illum_pct": round(m_illum * 100), "alt": round(m_alt, 1),
                     "up": m_alt > 0, "profile": "협대역" if nb else "광대역",
-                    "weighted": round(m_bright, 2)}
+                    "weighted": round(m_bright, 2), "rise": m_rise, "set": m_set}
         return out, len(dark) > 0, moon_sum
 
     @staticmethod
@@ -481,6 +482,31 @@ class ToolKit:
         alt = float(moon.transform_to(AltAz(obstime=t, location=loc)).alt.deg)
         bright = illum * max(0.0, min(1.0, (alt + 2) / 18)) if alt > -2 else 0.0
         return moon, illum, alt, bright
+
+    def _moon_riseset(self, loc, now, hours, n=24):
+        """관측 구간을 샘플링해 달 고도 0° 교차로 월출/월몰 시각(KST HH:MM). 구간 내 교차
+        없으면 None(이미 떠있거나 계속 져있음). 선형보간으로 교차 오프셋 추정."""
+        from astropy.coordinates import AltAz, get_body
+        import astropy.units as u
+        alts = []
+        for i in range(n + 1):
+            t = now + (i * hours / n) * u.hour
+            a = float(get_body("moon", t, loc)
+                      .transform_to(AltAz(obstime=t, location=loc)).alt.deg)
+            alts.append((i * hours / n, a))
+        rise = sett = None
+        for j in range(1, len(alts)):
+            (o0, a0), (o1, a1) = alts[j - 1], alts[j]
+            if a0 < 0 <= a1 and rise is None:        # 상승 교차 = 월출
+                rise = o0 + (o1 - o0) * (0 - a0) / (a1 - a0)
+            if a0 >= 0 > a1 and sett is None:        # 하강 교차 = 월몰
+                sett = o0 + (o1 - o0) * (0 - a0) / (a1 - a0)
+
+        def hm(off):
+            d = datetime.fromtimestamp(now.unix + off * 3600 + 9 * 3600, tz=timezone.utc)
+            return d.strftime("%H:%M")
+        return (hm(rise) if rise is not None else None,
+                hm(sett) if sett is not None else None)
 
     @staticmethod
     def _dso_label(o):

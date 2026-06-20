@@ -1570,7 +1570,7 @@ function onAlert(a) {
   alertUnacked += 1;
   updateAlertBadge();
   showToast(a);
-  if (a.level === "critical") alarmBeep();
+  playSound(a.level === "critical" ? "alert_critical" : "alert_warn");
 }
 function updateAlertBadge() {
   const bell = $("alert-bell"), b = $("alert-badge");
@@ -1587,22 +1587,6 @@ function showToast(a) {
     + (a.detail ? '<span class="toast-d">' + _schEsc(a.detail) + "</span>" : "");
   host.appendChild(t);
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 400); }, crit ? 12000 : 7000);
-}
-function alarmBeep() {
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx(), o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = "square"; o.connect(g); g.connect(ctx.destination);
-    const t0 = ctx.currentTime;
-    o.frequency.setValueAtTime(880, t0);
-    o.frequency.setValueAtTime(660, t0 + 0.18);
-    o.frequency.setValueAtTime(880, t0 + 0.36);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.55);
-    o.start(t0); o.stop(t0 + 0.56);
-  } catch (e) { /* 자동재생 차단 — 무시(토스트·배지는 남음) */ }
 }
 async function loadActiveAlerts() {
   try {
@@ -1621,6 +1605,64 @@ function wireAlerts() {
     };
   }
   loadActiveAlerts();
+}
+
+// ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
+// 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
+// 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
+const SOUNDS = {
+  capture:        { type: "square",   vol: 0.07, tones: [[2200, 0.0, 0.022], [1700, 0.03, 0.018]] },
+  alert_warn:     { type: "square",   vol: 0.12, tones: [[880, 0.0, 0.18]] },
+  alert_critical: { type: "square",   vol: 0.15, tones: [[880, 0.0, 0.14], [660, 0.18, 0.14], [880, 0.36, 0.18]] },
+  success:        { type: "sine",     vol: 0.10, tones: [[660, 0.0, 0.09], [880, 0.09, 0.15]] },
+  error:          { type: "sawtooth", vol: 0.10, tones: [[320, 0.0, 0.16], [200, 0.17, 0.22]] },
+  connect:        { type: "sine",     vol: 0.08, tones: [[440, 0.0, 0.05], [880, 0.06, 0.08]] },
+  disconnect:     { type: "sine",     vol: 0.08, tones: [[880, 0.0, 0.05], [440, 0.06, 0.10]] },
+};
+let _audioCtx = null, _soundMuted = false, _soundVol = 0.8;
+function _ctx() {
+  if (!_audioCtx) {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (C) _audioCtx = new C();
+  }
+  if (_audioCtx && _audioCtx.state === "suspended") { try { _audioCtx.resume(); } catch (e) { /**/ } }
+  return _audioCtx;
+}
+function playSound(name) {
+  if (_soundMuted) return;
+  const spec = SOUNDS[name]; if (!spec) return;
+  const ctx = _ctx(); if (!ctx) return;
+  try {
+    spec.tones.forEach((tn) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = spec.type || "square"; o.frequency.value = tn[0];
+      o.connect(g); g.connect(ctx.destination);
+      const t0 = ctx.currentTime + tn[1], d = tn[2], vol = (spec.vol || 0.1) * _soundVol;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.start(t0); o.stop(t0 + d + 0.02);
+    });
+  } catch (e) { /* 자동재생 차단 등 — 무시(시각 피드백은 남음) */ }
+}
+function updateSoundBtn() {
+  const b = $("snd-btn");
+  if (b) { b.textContent = _soundMuted ? "🔇" : "🔊"; b.classList.toggle("muted", _soundMuted); }
+}
+function toggleSound() {
+  _soundMuted = !_soundMuted;
+  try { localStorage.setItem("asterion.sound.muted", _soundMuted ? "1" : "0"); } catch (e) { /**/ }
+  updateSoundBtn();
+  if (!_soundMuted) playSound("success");   // 켤 때 확인음
+}
+function initSound() {
+  try { _soundMuted = localStorage.getItem("asterion.sound.muted") === "1"; } catch (e) { /**/ }
+  updateSoundBtn();
+  const b = $("snd-btn");
+  if (b && !b.dataset.w) { b.dataset.w = "1"; b.onclick = toggleSound; }
+  // 자동재생 정책: 첫 사용자 제스처에 오디오 컨텍스트 활성화
+  const unlock = () => { _ctx(); document.removeEventListener("pointerdown", unlock); };
+  document.addEventListener("pointerdown", unlock, { once: true });
 }
 
 // ---------- 시계열 플롯 빌더 ----------
@@ -3292,8 +3334,11 @@ function prependRow(tableId, html, max = 40) {
 function handleWSData(data) {
   if (data.type === "status") applyStatus(data.status);
   else if (data.type === "log") logLine(data);
-  else if (data.type === "frame") prependRow("tbl-frames", frameRow(data.frame));
-  else if (data.type === "action") prependRow("tbl-actions", actionRow(data.action));
+  else if (data.type === "frame") { prependRow("tbl-frames", frameRow(data.frame)); playSound("capture"); }
+  else if (data.type === "action") {
+    prependRow("tbl-actions", actionRow(data.action));
+    if (data.action && data.action.success === false) playSound("error");
+  }
   else if (data.type === "preview") updatePreview(data.token, data.meta);
   else if (data.type === "alert") onAlert(data.alert);
 }
@@ -3394,6 +3439,7 @@ async function init() {
   wireSchedule();                       // AI 야간 계획 — 상태필터/새로고침 바인딩
   wireTarget();                         // 대상 페이지(Skygraph dossier) 검색 바인딩
   wireAlerts();                         // 위험 알림 종/배지 + 초기 미확인 로드
+  initSound();                          // 사운드 기반(촬영음·알림음) + 음소거 토글
 }
 
 // ---------- 버튼 핸들러 ----------

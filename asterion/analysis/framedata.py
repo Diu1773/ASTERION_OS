@@ -140,47 +140,54 @@ class FrameData:
         return pts
 
     def detect_stars(self, frame_id: int, thresh_sigma: float = 5.0,
-                     fwhm_stars: int = 15) -> dict[str, Any]:
+                     fwhm_stars: int = 30, min_area: int = 3) -> dict[str, Any]:
         """별 검출 + FWHM(순수 numpy). 강건 배경(중앙값)·노이즈((p84−p16)/2) → 임계 위
-        로컬맥스(3×3)를 별 중심으로 카운트, 밝은 별 몇 개의 반치폭 면적→등가 FWHM(px).
+        픽셀에서만 3×3 로컬맥스 검사(희소 — 대형 센서도 빠름), 각 봉우리의 반치폭 면적이
+        min_area 이상이면 진짜 별로 카운트(단일픽셀 노이즈 제거). FWHM=별들 등가지름 중앙값.
         점광원 가정(LIGHT용). scipy 비의존."""
         data, frame, status = self._load(frame_id)
         if status != "ok":
             return {"status": status, "star_count": None, "fwhm": None}
-        d = data.astype(np.float64)
-        if d.shape[0] < 3 or d.shape[1] < 3:
-            return {"status": "too_small", "star_count": None, "fwhm": None}
-        bg = float(np.median(d))
-        p16, p84 = np.percentile(d, [16, 84])
-        sigma = float((p84 - p16) / 2) or 1.0
-        thr = bg + thresh_sigma * sigma
+        d = data   # float32 그대로 — 전체 float64 변환 안 함(대형 센서 비용↓)
         h, w = d.shape
+        if h < 3 or w < 3:
+            return {"status": "too_small", "star_count": None, "fwhm": None}
+        # 강건 배경·노이즈를 퍼센타일 1회로(median 합침 → 분할 1패스). 임계는 이미지
+        # 크기에 적응: 큰 센서일수록 5σ도 노이즈 false가 많아짐(N·P(>kσ)<1 → k≈√(2lnN)).
+        import math
+        samp = d[::2, ::2]   # 배경 통계는 서브샘플로 충분(분할 비용↓)
+        p16, bg, p84 = (float(v) for v in np.percentile(samp, [16, 50, 84]))
+        sigma = (p84 - p16) / 2 or 1.0
+        eff = max(thresh_sigma, math.sqrt(2.0 * math.log(max(2, h * w))))
+        thr = bg + eff * sigma
         c = d[1:h - 1, 1:w - 1]
-        ge = np.ones_like(c, dtype=bool)
+        cy, cx = np.where(c > thr)            # 임계 통과 위치(희소)
+        if len(cy) == 0:
+            return {"status": "ok", "star_count": 0, "fwhm": None,
+                    "bg": round(bg, 1), "sigma": round(sigma, 1)}
+        cv = c[cy, cx]
+        oy, ox = cy + 1, cx + 1               # 원본 좌표
+        ismax = np.ones(len(cy), dtype=bool)  # 후보 위치에서만 3×3 로컬맥스 비교
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 if dy == 0 and dx == 0:
                     continue
-                ge &= c >= d[1 + dy:h - 1 + dy, 1 + dx:w - 1 + dx]
-        peaks = ge & (c > thr)
-        ys, xs = np.where(peaks)
-        star_count = int(len(ys))
-        fwhm = None
-        if star_count:
-            vals = c[ys, xs]
-            order = np.argsort(vals)[::-1][:fwhm_stars]
-            fwhms = []
-            for k in order:
-                cy, cx = int(ys[k]) + 1, int(xs[k]) + 1     # 원본 좌표
-                half = bg + (d[cy, cx] - bg) / 2
-                r = 8
-                box = d[max(0, cy - r):cy + r + 1, max(0, cx - r):cx + r + 1]
-                area = int((box >= half).sum())
-                if area > 0:
+                ismax &= cv >= d[oy + dy, ox + dx]
+        py, px, pv = oy[ismax], ox[ismax], cv[ismax]
+        order = np.argsort(pv)[::-1][:3000]   # 밝은 순 + 상한
+        py, px = py[order], px[order]
+        count, fwhms = 0, []
+        for i in range(len(py)):
+            ry, rx = int(py[i]), int(px[i])
+            half = bg + (float(d[ry, rx]) - bg) / 2
+            box = d[max(0, ry - 8):ry + 9, max(0, rx - 8):rx + 9]
+            area = int((box >= half).sum())
+            if area >= min_area:              # 단일픽셀 노이즈 봉우리 제거
+                count += 1
+                if len(fwhms) < fwhm_stars:
                     fwhms.append(2.0 * np.sqrt(area / np.pi))   # 등가 지름
-            if fwhms:
-                fwhm = round(float(np.median(fwhms)), 2)
-        return {"status": "ok", "star_count": star_count, "fwhm": fwhm,
+        fwhm = round(float(np.median(fwhms)), 2) if fwhms else None
+        return {"status": "ok", "star_count": count, "fwhm": fwhm,
                 "bg": round(bg, 1), "sigma": round(sigma, 1)}
 
     def profile(self, frame_id: int, axis: str = "row",

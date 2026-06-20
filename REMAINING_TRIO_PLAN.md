@@ -1,5 +1,8 @@
 # 잔여 3종 PLAN — Sentinel FWHM · 기상 안전연동 · 픽셀 뷰어 UI (자율 빌드 계약서)
 
+> **상태: ✅ W1~W4 완료(2026-06-20, /goal 자율빌드).** Sentinel 별검출/FWHM + 원격기상 안전연동 +
+> 픽셀 뷰어 UI(라이브 검증) + 풀리뷰(detect_stars 노이즈제거·5.6× 가속).
+
 > 사용자 "다"(1,2,3 모두). `/goal`/직접 지시 — 단계별 SIM 검증 후 커밋. 막히면 깨끗이 두고 로그.
 > 검증 친화 순서: W1 Sentinel(백엔드·합성검증) → W2 안전연동(백엔드) → W3 픽셀UI(프론트).
 
@@ -39,7 +42,18 @@
   (가로/세로)·통계 + Sentinel verdict(FWHM·별수). pvLoadFrames/pvShow/drawHistogram/drawProfile,
   PANEL_DEF/PROTO 등록. ✅검증: 데이터경로(15프레임·histogram·profile·sentinel FWHM 5.17) + **라이브 UI**
   (통계 렌더·히스토그램/프로파일 캔버스 페인트·콘솔에러 0).
-- [ ] **W4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
+- [x] **W4 — 풀리뷰 + 회귀**: 정독 리뷰 — detect_stars 2결함 확정·수정: ①노이즈 false가 count/FWHM
+  오염(대형 노이즈서 count13·fwhm2.76) → 적응 임계 max(5,√(2lnN)) + 면적필터로 count4·fwhm안정,
+  ②성능 1418ms(전체 float64변환+8회 전체비교) → 희소 로컬맥스(임계 통과위치만)+float32+서브샘플
+  퍼센타일로 **253ms(5.6×)**. ✅검증: 작은 별8·대형 별4 정확·빈0, Sentinel·create_app 100라우트 회귀.
+
+## 결정 로그(추가)
+- `2026-06-20 W1 — framedata.detect_stars(강건배경→임계→로컬맥스→반치폭면적 FWHM) + Sentinel LIGHT 반영.`
+- `2026-06-20 W2 — current_weather(신선 원격) + StatusSampler.weather_ingest_fn(로컬 없을 때 폴백,
+  fail-closed). config weather.ingest_fallback. 로컬 경로·fail-closed 보존.`
+- `2026-06-20 W3 — ANALYSIS '프레임 뷰어'(histogram 로그/profile/stats + Sentinel verdict). 라이브 검증.`
+- `2026-06-20 W4 — detect_stars: 희소 로컬맥스(np.where(c>thr) 위치만 비교)로 O(별후보), 적응 임계로
+  대형센서 노이즈 false 제거, 서브샘플 퍼센타일. 1418→253ms·정확. scipy 비의존 유지.`
 
 ## 4~5. 게이트·가드레일
 SIM/합성/임시DB. DB 경로 asterion/data. 기존 보존(safety는 fail-closed 유지·추가형). config.local.json 금지.

@@ -130,6 +130,35 @@ def quality_timeseries(db: Db, *, target: str = "", session_id: int | None = Non
     return db.query(_q)
 
 
+def quality_facets(db: Db) -> dict[str, list]:
+    """품질 추이 드롭다운용 — 실제 촬영된 LIGHT 프레임에 존재하는 대상·필터만(안 찍은 건 제외).
+    필터=LIGHT distinct filter_name, 대상=LIGHT 프레임 있는 세션→plan/target 또는 레거시 summary."""
+    def _q(s):
+        filters = sorted({r[0] for r in s.query(Frame.filter_name)
+                          .filter(Frame.image_type == "LIGHT", Frame.filter_name != "")
+                          .distinct().all()})
+        sess_ids = {r[0] for r in s.query(Frame.session_id)
+                    .filter(Frame.image_type == "LIGHT").distinct().all()}
+        targets = set()
+        for se in (s.query(ObservationSession)
+                   .filter(ObservationSession.id.in_(sess_ids or [-1])).all()):
+            nm = None
+            if se.plan_id:
+                pl = s.get(ObservationPlan, se.plan_id)
+                if pl and pl.target_id:
+                    tg = s.get(Target, pl.target_id)
+                    nm = tg.name if tg else None
+            if not nm:
+                try:
+                    nm = json.loads(se.summary_json or "{}").get("target")
+                except Exception:
+                    nm = None
+            if nm:
+                targets.add(nm)
+        return {"targets": sorted(targets), "filters": filters}
+    return db.query(_q)
+
+
 def target_dossier(db: Db, name: str, lat: float = 36.64) -> dict[str, Any]:
     name = (name or "").strip()
 

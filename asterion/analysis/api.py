@@ -107,7 +107,8 @@ def build_analysis_router(sentinel: Any, framedata: Any = None,
         from ..core import skygraph
         return {"points": skygraph.quality_timeseries(
             framedata.db, target=target, session_id=session_id, night=night,
-            filt=filter, show_raw=show_raw)}
+            filt=filter, show_raw=show_raw),
+            "facets": skygraph.quality_facets(framedata.db)}   # 촬영된 대상·필터만
 
     # ---------- Calibration Library (§10.5) ----------
 

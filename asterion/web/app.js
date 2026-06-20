@@ -1498,17 +1498,27 @@ function drawTimeSeries(cv, points, key, color) {
   ctx.fillText(String(Math.round(hi)), 2, 10);
   ctx.fillText(String(Math.round(lo)), 2, h - 3);
 }
+function qvFill(sel, vals, allLabel) {   // 드롭다운을 '촬영된 것'만으로 채우되 현재 선택 보존
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${allLabel}</option>`
+    + (vals || []).map((v) => `<option value="${_schEsc(v)}">${_schEsc(v)}</option>`).join("");
+  if (cur && (vals || []).includes(cur)) sel.value = cur;
+}
 async function qvLoad() {
   const tgt = $("qv-target"), flt = $("qv-filter");
   const params = new URLSearchParams();
   if (tgt && tgt.value) params.set("target", tgt.value);
   if (flt && flt.value) params.set("filter", flt.value);
   if (qvShowRaw) params.set("show_raw", "true");
-  let pts = [];
+  let pts = [], facets = {};
   try {
     const d = await (await fetch("/api/timeseries?" + params.toString())).json();
-    pts = d.points || [];
+    pts = d.points || []; facets = d.facets || {};
   } catch (e) { pts = []; }
+  // 드롭다운 = 실제 촬영된 대상·필터만(안 찍은 카탈로그/필터는 제외)
+  qvFill(tgt, facets.targets, "전체 대상");
+  qvFill(flt, facets.filters, "전체 필터");
   const empty = $("qv-empty"); if (empty) empty.hidden = pts.length > 0;
   const note = $("qv-note");
   if (note) {
@@ -1518,20 +1528,6 @@ async function qvLoad() {
   drawTimeSeries($("qv-bg"), pts, "background_adu", "#4cc9f0");
   drawTimeSeries($("qv-fwhm"), pts, "fwhm", "#f0b6ad");
   drawTimeSeries($("qv-stars"), pts, "star_count", "#34d399");
-}
-async function qvLoadTargets() {
-  const sel = $("qv-target"); if (!sel || sel.dataset.f) return;
-  try {
-    const d = await (await fetch("/api/targets")).json();
-    const arr = Array.isArray(d) ? d : (d.targets || d.items || []);
-    if (arr.length) {
-      sel.innerHTML = '<option value="">전체 대상</option>' + arr.map((t) => {
-        const nm = _schEsc(t.name || t.target || String(t));
-        return `<option value="${nm}">${nm}</option>`;
-      }).join("");
-    }
-    sel.dataset.f = "1";
-  } catch (e) { /* noop — 전체 대상만 */ }
 }
 function qvWire() {
   const rl = $("qv-reload"); if (rl && !rl.dataset.w) { rl.dataset.w = "1"; rl.onclick = qvLoad; }
@@ -1790,18 +1786,46 @@ async function loadWeatherSources() {
 }
 
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
-// 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
-// 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
-const SOUNDS = {
-  capture:        { type: "square",   vol: 0.07, tones: [[2200, 0.0, 0.022], [1700, 0.03, 0.018]] },
-  alert_warn:     { type: "square",   vol: 0.12, tones: [[880, 0.0, 0.18]] },
-  alert_critical: { type: "square",   vol: 0.15, tones: [[880, 0.0, 0.14], [660, 0.18, 0.14], [880, 0.36, 0.18]] },
-  success:        { type: "sine",     vol: 0.10, tones: [[660, 0.0, 0.09], [880, 0.09, 0.15]] },
-  error:          { type: "sawtooth", vol: 0.10, tones: [[320, 0.0, 0.16], [200, 0.17, 0.22]] },
-  connect:        { type: "sine",     vol: 0.08, tones: [[440, 0.0, 0.05], [880, 0.06, 0.08]] },
-  disconnect:     { type: "sine",     vol: 0.08, tones: [[880, 0.0, 0.05], [440, 0.06, 0.10]] },
+// 미션컨트롤 톤: 맨 오실레이터(8비트 비프)가 아니라 저역통과 필터·부드러운 엔벨로프·
+// 짧은 합성 리버브를 거친 '정돈된 UI 사운드'. 모든 소리가 한 음계(NOTE)를 공유해
+// 한 가족처럼 들리게 설계. 신호경로: 보이스 → 마스터버스(리버브 send) → 리미터 → 출력.
+//
+// 새 소리 추가는 SOUNDS에 한 줄:
+//   tones: [음높이Hz, 시작offset(s), 길이(s)] 시퀀스
+//   음색 토큰 — type:파형  vol:최대게인  cut:저역통과컷오프(Hz·거친 배음 제거)
+//             detune:보강 2번째 오실레이터 디튠(cents·두께)  sub:옥타브 아래 레이어 게인(무게)
+//             rev:리버브 send(0~1)  atk·rel:어택·릴리스(s)
+
+// 공유 음계(펜타토닉 계열) — 모든 소리가 같은 음에서 출발해 통일감을 준다.
+const NOTE = {
+  C4: 261.63, E4: 329.63, G4: 392.00, A4: 440.00,
+  C5: 523.25, D5: 587.33, E5: 659.25, G5: 783.99, A5: 880.00,
+  C6: 1046.50, D6: 1174.66, E6: 1318.51,
 };
-let _audioCtx = null, _soundMuted = false, _soundVol = 0.8;
+const SOUNDS = {
+  // 텔레메트리(프레임 저장) — 자주 울리므로 아주 작고 짧은 '데이터 틱'
+  capture:        { type: "sine",     vol: 0.05, cut: 3200, rev: 0.10, atk: 0.004, rel: 0.05,
+                    tones: [[NOTE.E6, 0.0, 0.05]] },
+  // 확정/성공 — 상승 3음(시그니처)
+  success:        { type: "sine",     vol: 0.09, cut: 4200, detune: 4, rev: 0.22, atk: 0.006, rel: 0.18,
+                    tones: [[NOTE.C5, 0.0, 0.12], [NOTE.E5, 0.07, 0.12], [NOTE.G5, 0.15, 0.26]] },
+  // 오류 — 어둡고 부드러운 하강(거슬리지 않게 저역통과 강하게)
+  error:          { type: "triangle", vol: 0.11, cut: 1100, rev: 0.18, atk: 0.006, rel: 0.24,
+                    tones: [[NOTE.A4, 0.0, 0.16], [NOTE.E4, 0.12, 0.30]] },
+  // 연결/해제 — 짧은 상승/하강 블립
+  connect:        { type: "sine",     vol: 0.07, cut: 3600, rev: 0.14, atk: 0.004, rel: 0.10,
+                    tones: [[NOTE.A4, 0.0, 0.07], [NOTE.E5, 0.06, 0.12]] },
+  disconnect:     { type: "sine",     vol: 0.07, cut: 2600, rev: 0.14, atk: 0.004, rel: 0.12,
+                    tones: [[NOTE.E5, 0.0, 0.07], [NOTE.A4, 0.06, 0.14]] },
+  // 경고 — 차분하지만 주의 끄는 2펄스(약간의 두께 + 무게)
+  alert_warn:     { type: "sine",     vol: 0.12, cut: 2400, detune: 6, sub: 0.25, rev: 0.30, atk: 0.008, rel: 0.20,
+                    tones: [[NOTE.D5, 0.0, 0.22], [NOTE.D5, 0.30, 0.26]] },
+  // 위험 — 무게 있는 3음 2회 반복(미션컨트롤 경보; 단3도로 긴박감)
+  alert_critical: { type: "sine",     vol: 0.14, cut: 2200, detune: 7, sub: 0.40, rev: 0.34, atk: 0.008, rel: 0.18,
+                    tones: [[NOTE.A5, 0.0, 0.15], [NOTE.C6, 0.13, 0.15], [NOTE.A5, 0.30, 0.15],
+                            [NOTE.A5, 0.54, 0.15], [NOTE.C6, 0.67, 0.15], [NOTE.A5, 0.84, 0.22]] },
+};
+let _audioCtx = null, _soundMuted = false, _soundVol = 0.8, _bus = null;
 function _ctx() {
   if (!_audioCtx) {
     const C = window.AudioContext || window.webkitAudioContext;
@@ -1810,21 +1834,70 @@ function _ctx() {
   if (_audioCtx && _audioCtx.state === "suspended") { try { _audioCtx.resume(); } catch (e) { /**/ } }
   return _audioCtx;
 }
+// 합성 임펄스로 짧은 리버브(공간감) — 외부 파일 없이 '싸구려 비프' 탈피.
+function _reverbIR(ctx, seconds, decay) {
+  const rate = ctx.sampleRate, len = Math.max(1, Math.floor(rate * seconds));
+  const ir = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return ir;
+}
+// 마스터 버스: 보이스 합 → 리미터(피크 보호·일정 음량) → 출력, 그리고 리버브 send 갈래.
+function _ensureBus(ctx) {
+  if (_bus && _bus.ctx === ctx) return _bus;
+  const master = ctx.createGain(); master.gain.value = 1;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.knee.value = 24; comp.ratio.value = 6;
+  comp.attack.value = 0.003; comp.release.value = 0.18;
+  master.connect(comp); comp.connect(ctx.destination);
+  let reverbSend = null;
+  try {
+    const conv = ctx.createConvolver(); conv.buffer = _reverbIR(ctx, 0.9, 3.2);
+    const wet = ctx.createGain(); wet.gain.value = 0.5;
+    reverbSend = ctx.createGain(); reverbSend.gain.value = 1;
+    reverbSend.connect(conv); conv.connect(wet); wet.connect(master);
+  } catch (e) { reverbSend = null; }
+  _bus = { ctx, master, reverbSend };
+  return _bus;
+}
+// 한 음(tone) 합성: 필터·엔벨로프·디튠/서브 레이어를 갖춘 보이스.
+function _voice(ctx, bus, spec, tone) {
+  const t0 = ctx.currentTime + tone[1], dur = tone[2];
+  const atk = spec.atk ?? 0.006, rel = spec.rel ?? 0.12;
+  const peak = Math.max((spec.vol ?? 0.1) * _soundVol, 0.0002);
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = spec.cut ?? 4000; lp.Q.value = 0.7;
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0);
+  lp.connect(g); g.connect(bus.master);
+  if (bus.reverbSend && (spec.rev ?? 0) > 0) {
+    const send = ctx.createGain(); send.gain.value = spec.rev;
+    g.connect(send); send.connect(bus.reverbSend);
+  }
+  const mkOsc = (freq, detune, gainMul) => {
+    const o = ctx.createOscillator();
+    o.type = spec.type || "sine"; o.frequency.value = freq;
+    if (detune) o.detune.value = detune;
+    if (gainMul != null && gainMul !== 1) {
+      const og = ctx.createGain(); og.gain.value = gainMul; o.connect(og); og.connect(lp);
+    } else { o.connect(lp); }
+    o.start(t0); o.stop(t0 + dur + rel + 0.05);
+  };
+  mkOsc(tone[0], 0, 1);                              // 기본음
+  if (spec.detune) mkOsc(tone[0], spec.detune, 0.6); // 디튠 보강 레이어(두께)
+  if (spec.sub) mkOsc(tone[0] / 2, 0, spec.sub);     // 옥타브 아래(무게)
+  // 엔벨로프: 부드러운 어택 + 매끈한 지수 릴리스(클릭/팝 제거)
+  g.gain.exponentialRampToValueAtTime(peak, t0 + atk);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + rel);
+}
 function playSound(name) {
   if (_soundMuted) return;
   const spec = SOUNDS[name]; if (!spec) return;
   const ctx = _ctx(); if (!ctx) return;
   try {
-    spec.tones.forEach((tn) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = spec.type || "square"; o.frequency.value = tn[0];
-      o.connect(g); g.connect(ctx.destination);
-      const t0 = ctx.currentTime + tn[1], d = tn[2], vol = (spec.vol || 0.1) * _soundVol;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
-      o.start(t0); o.stop(t0 + d + 0.02);
-    });
+    const bus = _ensureBus(ctx);
+    spec.tones.forEach((tn) => _voice(ctx, bus, spec, tn));
   } catch (e) { /* 자동재생 차단 등 — 무시(시각 피드백은 남음) */ }
 }
 function updateSoundBtn() {
@@ -2585,7 +2658,7 @@ function showTab(tab) {
   if (tab === "env") { loadForecast(); loadWeatherSources(); }   // 기상예보 + 분산 소스 — 표시 시 최신
   if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
-  if (tab === "analysis") { qvWire(); qvLoadTargets(); qvLoad(); }   // 품질 추이 — PP 시계열
+  if (tab === "analysis") { qvWire(); qvLoad(); }   // 품질 추이 — PP 시계열(드롭다운은 qvLoad가 facets로)
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }

@@ -1030,6 +1030,7 @@ body:not(.devmode) .devmode-only { display: none; }
 .sch-badge.st-ok { color:#bfe6a3; background:#14210f; }
 .sch-badge.st-run { color:#f0b6ad; background:#231311; }
 .sch-badge.st-done { color:#69727e; background:#0e1218; }
+.sch-badge.st-stale { color:#e6c07a; background:#231f10; }
 /* 멀티나잇 캠페인 패널 */
 .cmp-empty { font-size:12px; color:var(--faint); text-align:center; padding:18px 6px; }
 .cmp-empty b { color:var(--accent); font-weight:500; }

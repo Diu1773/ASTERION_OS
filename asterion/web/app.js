@@ -1707,10 +1707,10 @@ function renderCampaigns(list) {
 async function loadCampaigns() {
   try {
     const r = await fetch("/api/campaigns");
-    if (!r.ok) return;
+    if (!r.ok) { renderCampaigns([]); return; }   // 실패 시 stale 잔존 대신 빈 상태로
     const d = await r.json();
     renderCampaigns(d.campaigns || []);
-  } catch (e) { /* noop */ }
+  } catch (e) { renderCampaigns([]); }
 }
 function wireCampaigns() {
   const nb = $("cmp-new"), form = $("cmp-form");
@@ -1768,17 +1768,19 @@ function renderForecast(d) {
   g.innerHTML = hrs.map((h) => {
     const cloud = Math.round((Number(h.cloud_frac) || 0) * 100);
     const pp = Number(h.precip_prob) || 0;
+    const pct = Math.round(pp * 100);
     const cls = pp >= 0.8 ? "red" : (pp >= 0.5 ? "amber" : "teal");
     const hhmm = (h.time_utc || "").slice(11, 16);
-    return `<div class="fc-bar ${cls}" style="height:${Math.max(3, cloud)}%" title="${hhmm} UTC · 구름 ${cloud}% · 강수 ${Math.round(pp * 100)}%"></div>`;
+    // 강수확률은 색으로만 구분되므로 aria-label로 텍스트 대체 제공(WCAG 1.4.1)
+    return `<div class="fc-bar ${cls}" style="height:${Math.max(3, cloud)}%" role="img" aria-label="${hhmm} 구름 ${cloud}% 강수 ${pct}%" title="${hhmm} UTC · 구름 ${cloud}% · 강수 ${pct}%"></div>`;
   }).join("");
 }
 async function loadForecast() {
   try {
     const r = await fetch("/api/forecast?hours=24");
-    if (!r.ok) return;
+    if (!r.ok) { renderForecast({ hours: [] }); return; }
     renderForecast(await r.json());
-  } catch (e) { /* noop */ }
+  } catch (e) { renderForecast({ hours: [] }); }
 }
 
 // ---------- 분산 기상 소스 — 기상 패널 하단(어느 PC가 무엇을 언제 올렸나) ----------
@@ -1797,21 +1799,26 @@ function renderWeatherSources(list) {
   const n = $("w-src-n"); if (n) n.textContent = list.length ? `(${list.length})` : "";
   const wrap = $("w-src-list"); if (!wrap) return;
   wrap.innerHTML = list.map((s) => {
-    const stale = (Date.now() - new Date(s.utc).getTime()) > 600000;   // 10분↑ = STALE
-    const cls = stale ? "st-run" : "st-ok";
-    const temp = (s.temp_c == null) ? "—" : Math.round(s.temp_c) + "°C";
-    const cloud = (s.cloud_score == null) ? "" : " · 구름 " + Number(s.cloud_score).toFixed(2);
+    const t = new Date(s.utc).getTime();
+    const bad = isNaN(t);                                       // 잘못된 ISO → 신선으로 위장 금지
+    const stale = !bad && (Date.now() - t) > 600000;            // 10분↑ = STALE
+    const cls = (stale || bad) ? "st-stale" : "st-ok";          // STALE은 '실행중'(st-run) 아님 — 전용 색
+    const tc = Number(s.temp_c);
+    const temp = (s.temp_c == null || isNaN(tc)) ? "—" : Math.round(tc) + "°C";
+    const cc = Number(s.cloud_score);
+    const cloud = (s.cloud_score == null || isNaN(cc)) ? "" : " · 구름 " + cc.toFixed(2);
+    const age = bad ? "시각 미상" : _wAgo(s.utc);
     return `<div class="w-src-row"><span class="w-src-id">${_schEsc(s.source_id)}</span>`
       + `<span class="sch-dim">${temp}${cloud}</span>`
-      + `<span class="sch-badge ${cls}">${_wAgo(s.utc)}${stale ? " · STALE" : ""}</span></div>`;
+      + `<span class="sch-badge ${cls}">${age}${stale ? " · STALE" : ""}</span></div>`;
   }).join("");
 }
 async function loadWeatherSources() {
   try {
     const r = await fetch("/api/weather/sources");
-    if (!r.ok) return;
+    if (!r.ok) { renderWeatherSources([]); return; }
     renderWeatherSources(await r.json());
-  } catch (e) { /* noop */ }
+  } catch (e) { renderWeatherSources([]); }
 }
 
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------

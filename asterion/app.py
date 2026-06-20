@@ -380,6 +380,12 @@ def create_app() -> FastAPI:
         return {"target": name, "n": len(frames), "zp": 25.0,
                 "points": framedata.light_curve(frames)}
 
+    @app.get("/api/feedback/{name}")
+    async def api_feedback(name: str):
+        """피드백 학습 — 대상의 결과를 분석해 다음 관측 추천(노출/재촬영/필터). Decision 적재."""
+        from .analysis.feedback import target_feedback
+        return target_feedback(db, name)
+
     @app.get("/api/sysinfo")
     async def api_sysinfo():
         """런타임 자원 — 버전·업타임·디스크 여유(이미지 저장용). 1Hz status와 분리."""

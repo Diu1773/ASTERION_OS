@@ -31,8 +31,10 @@
   night_status + 핸들러. NightRunner.start가 큐를 동기 구성하게 개선(직후 status/응답에 큐 보임).
   ✅검증: run_night→큐즉시(2)·완료 done2, 교차배제·stop·미연결 사유, NightRunner S3/S5 회귀 무손상,
   create_app 97라우트, 에이전트 16도구.
-- [ ] **A2 — 피드백 학습**: feedback.target_feedback(불량률·SNR→추천) + Feedback 적재 + 도구 + dossier 노출.
-  검증: 시드(불량 많은/적은 대상)→추천 분기, Feedback row 적재.
+- [x] **A2 — 피드백 학습**: `analysis/feedback.py` target_feedback(dossier 품질 + 측광 SNR/포화 → 규칙
+  추천 + exposure_hint) + Decision(source=feedback) 적재 + 도구 target_feedback + `/api/feedback/{name}` +
+  Target Page '학습 피드백' 박스. ✅검증: GOOD→keep/양호, BADX→decrease/포화·재촬영, Decision 2건,
+  도구·route, **라이브 UI**(DEMO 변광성 피드백 박스 렌더, 콘솔에러 0).
 - [ ] **A3 — 학습 반영**: plan_night이 대상별 feedback 권장노출 반영(있으면). 검증: 추천 있는 대상 계획에 반영.
 - [ ] **A4 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
 
@@ -50,3 +52,8 @@
   _build_queue를 동기 호출해 큐를 즉시 _state에 노출(기존엔 async 태스크가 만들어 start 직후 비어 보임 —
   /api/nightrunner/start 응답도 개선). _loop는 prebuilt queue 인자 받음. 안전은 그대로 NightRunner의
   _safety_hold가 책임(AI는 시작/정지만, 게이트 우회 없음). 검증: 도구 위임·교차배제·회귀 S3/S5.`
+- `2026-06-20 A2 — analysis/feedback.py(규칙기반, 설명가능): dossier 불량률·필터편중 + 측광 평균SNR·
+  포화 → 추천 + exposure_hint(decrease/increase/keep). 학습=Decision(source=feedback)에 근거json 적재
+  (Feedback 테이블은 사람교정용이라 부적합 → Decision 사용). 도구 target_feedback + /api/feedback/{name}
+  + Target Page 박스. **라이브 UI 검증 성공**(이 환경 프리뷰가 이번엔 협조 — DEMO 변광성 라이트커브
+  13.8% 페인트 + 피드백 박스 렌더 + 콘솔에러 0). A3가 exposure_hint를 plan_night에 반영 예정.`

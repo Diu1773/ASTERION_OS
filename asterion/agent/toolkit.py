@@ -114,6 +114,11 @@ class ToolKit:
                "진행 중인 무인 야간 운영을 정지(현재 계획 종료 후 멈춤). 예: '야간 운영 멈춰', '그만 돌려'."),
             fn("night_status",
                "무인 야간 운영 현황 — 활성·현재 대상·대기 큐 길이·완료/실패/스킵 수. 예: '지금 어디까지 돌았어'."),
+            fn("target_feedback",
+               "한 대상의 관측 결과(품질·측광 SNR·불량률·포화·필터분포)를 분석해 다음 관측 추천을 낸다 "
+               "— 노출↑/↓·재촬영·필터 보강 등. 학습형 피드백(근거와 함께 Decision에 기록). "
+               "예: 'M13 어떻게 찍는 게 좋아', 'NGC 6888 피드백 줘'.",
+               {"target": {"type": "string"}}, ["target"]),
         ]
 
     # ---------- 디스패치 ----------
@@ -512,6 +517,15 @@ class ToolKit:
                 "queue_len": len(st.get("queue", [])),
                 "done": len(st.get("done", [])), "failed": len(st.get("failed", [])),
                 "skipped": len(st.get("skipped", []))}
+
+    async def _t_target_feedback(self, a: dict) -> dict:
+        if self.db is None:
+            return {"error": "DB 미연결"}
+        name = (a.get("target") or "").strip()
+        if not name:
+            return {"error": "대상 이름 필요"}
+        from ..analysis.feedback import target_feedback
+        return await asyncio.to_thread(target_feedback, self.db, name)
 
     async def _t_plan_night(self, a: dict) -> dict:
         if self.meridian is None:

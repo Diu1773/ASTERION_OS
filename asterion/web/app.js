@@ -1331,7 +1331,20 @@ async function loadDossier(name) {
     const d = await (await fetch("/api/targets/" + encodeURIComponent(name))).json();
     renderDossier(d);
     if (d.stats && d.stats.n_lights) loadLightCurve(d.name);   // 라이트커브
+    loadFeedback(d.name);                                       // 학습 피드백(A2)
   } catch (e) { if (body) body.innerHTML = '<div class="hint">조회 실패</div>'; }
+}
+async function loadFeedback(name) {
+  const box = $("tp-fb"); if (!box) return;
+  try {
+    const d = await (await fetch("/api/feedback/" + encodeURIComponent(name))).json();
+    const recs = d.recommendations || [];
+    if (!recs.length) { box.innerHTML = ""; return; }
+    const hint = d.exposure_hint;
+    const ht = hint === "increase" ? "노출 늘리기" : hint === "decrease" ? "노출 줄이기" : "현 설정 유지";
+    box.innerHTML = '<div class="tp-fb-h">학습 피드백 · ' + _schEsc(ht) + "</div>"
+      + recs.map((r) => '<div class="tp-fb-r">• ' + _schEsc(r) + "</div>").join("");
+  } catch (e) { /* noop */ }
 }
 async function loadLightCurve(name) {
   const cv = $("tp-lc"); if (!cv) return;
@@ -1406,6 +1419,7 @@ function renderDossier(d) {
     + '<div class="tp-stat"><span>LIGHT</span><b>' + (st.n_lights || 0) + "</b><i>" + (st.bad_lights ? st.bad_lights + " 불량" : "양호") + "</i></div>"
     + '<div class="tp-stat"><span>총 적분</span><b>' + _fmtInteg(st.integration_s) + "</b></div>"
     + '<div class="tp-stat"><span>관측요청</span><b>' + (st.n_requests || 0) + "</b></div></div>"
+    + '<div id="tp-fb" class="tp-fb"></div>'
     + '<div class="tp-filt">필터 ' + filt + "</div>"
     + (st.n_lights ? '<div class="tp-sec">라이트커브 · 경량 조리개 측광</div><canvas id="tp-lc" class="tp-lc"></canvas>' : "")
     + (reqRows ? '<div class="tp-sec">관측 요청</div><div class="tbl-scroll tp-scroll"><table class="tbl sch-tbl"><thead><tr><th>#</th><th>상태</th><th>필터·노출</th><th>슬롯</th><th>생성</th></tr></thead><tbody>' + reqRows + "</tbody></table></div>" : "")

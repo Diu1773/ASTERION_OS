@@ -278,6 +278,8 @@ def create_app() -> FastAPI:
     forge = Forge(cfg, db, calibration, frames_dir=cfg.data_dir / "frames",
                   events=events)
     sampler.forge_status = forge.status_dict
+    # 시계열 품질: 캡처 시 Forge로 보정→측정→QualityMetric 영속(lazy 주입 — forge가 orch보다 뒤 생성).
+    orch.measure_fn = forge.measure_calibrated
     # 돔 가드 — 안전 '판정'(safety)과 분리된 '행동'(비상 자동닫힘 + 슬레이빙). 샘플러가
     # 매 스냅샷마다 호출. 장비 키 비의존 — 돔이 REGISTRY에 있으면 자동 동작.
     sampler.safety_actuator = DomeGuard(

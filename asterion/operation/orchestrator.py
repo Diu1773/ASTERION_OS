@@ -51,7 +51,8 @@ class ObservationOrchestrator:
                  safety_fn: Callable[[], dict] | None = None,
                  max_pause_s: float | None = None,
                  platesolve_fn: Callable[[float, float], dict | None] | None = None,
-                 autofocus_fn: Callable[[], dict | None] | None = None):
+                 autofocus_fn: Callable[[], dict | None] | None = None,
+                 measure_fn: Callable[[Any, dict], tuple] | None = None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -63,6 +64,11 @@ class ObservationOrchestrator:
         # 주입형 후크 (operation/hooks.py). None이면 ActionLog만 남기는 no-op.
         self.platesolve_fn = platesolve_fn
         self.autofocus_fn = autofocus_fn
+        # measure_fn(img, meta)->(cal_array, calmeta): 캡처 시 PP 보정+상태. None이면 raw 측정.
+        # Forge.measure_calibrated를 lazy 주입(생성순서 무관). 시계열 품질을 보정본에서 1회 측정.
+        self.measure_fn = measure_fn
+        from ..analysis.framedata import FrameData
+        self.framedata = FrameData(db)
         # safety_fn: 현재 안전 스냅샷 dict({"state","reasons",...})를 돌려주는 콜러블.
         # None이면 안전 게이트 비활성(드라이버 직접 테스트용). 운영에선 sampler가 주입.
         self.safety_fn = safety_fn
@@ -357,7 +363,14 @@ class ObservationOrchestrator:
                 "expose_light",
                 {"filter": filt, "exposure_s": round(exposure, 3), "seq": seq},
                 lambda: asyncio.to_thread(cam.expose, exposure, True))
-            stats = self._stats(img)
+            stats = self._stats(img)   # as-captured(raw) 통계 — Frame 기록은 그대로 보존
+            # 시계열 품질(PP): 보정본에서 fwhm/별수/배경을 1회 측정 + 보정상태 태깅(없으면 raw).
+            # 노출 미스매치 다크 등은 measure_fn 내부(masters_for)가 이미 거름.
+            cal, calmeta = (self.measure_fn(
+                img, {"type": "LIGHT", "filter": filt, "exposure_s": exposure,
+                      "binning": 1, "ccd_temp": None})
+                if self.measure_fn else (img, {"calibrated": False, "reason": "no_forge"}))
+            qual = await asyncio.to_thread(self.framedata.detect_stars, 0, arr=cal)
             mount_st = await asyncio.to_thread(mount.status)
             tstate = self.db.add(TelescopeState(
                 ra_hours=mount_st.ra_hours, dec_degs=mount_st.dec_degs,
@@ -376,7 +389,14 @@ class ObservationOrchestrator:
             self.db.add(QualityMetric(
                 frame_id=frame.id, median_adu=stats["median"],
                 std_adu=stats["std"], min_adu=stats["min"], max_adu=stats["max"],
-                saturation_frac=stats["sat_frac"], verdict="ok"))
+                saturation_frac=stats["sat_frac"], verdict="ok",
+                fwhm=qual.get("fwhm"), star_count=qual.get("star_count"),
+                background_adu=qual.get("bg"),
+                calibrated=bool(calmeta.get("calibrated")),
+                cal_sources_json=json.dumps(
+                    {"reason": calmeta.get("reason", ""), "applied": calmeta.get("applied", []),
+                     "sources": calmeta.get("sources", {}), "warnings": calmeta.get("warnings", [])},
+                    ensure_ascii=False)))
             self.events.frame(row_to_dict(frame))
             if self.preview_cb:
                 await self.preview_cb(img, {

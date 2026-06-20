@@ -22,8 +22,9 @@
 - **B3 풀리뷰 + 회귀**.
 
 ## 3. 체크리스트
-- [ ] **B1 — 측광 merit**: 프로파일별 w_win + dwell(dur). 검증: photometry_short는 긴 관측창 대상 상위·
-  슬롯이 관측창만큼 길게 / photometry_long은 짧은 슬롯·여러 대상 / imaging 현행 유지. 회귀.
+- [x] **B1 — 측광 merit**: 프로파일 config{photometry_short:(w_win25,dwell window), photometry_long:
+  (w_win2,quick), imaging:(6,exposure)}. merit win가중 + dur_for(c) 프로파일별. _t_plan_night이 goal_type
+  photometry_*→profile. ✅검증: short 1대상 3.15h 연속 / long 6대상 각 0.2h / imaging 현행 0.5h.
 - [ ] **B2 — 월출몰 시각**: _moon_riseset + moon_sum 노출. 검증: 합성/실제로 rise<set 또는 부호변화 시각 타당.
 - [ ] **B3 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
 

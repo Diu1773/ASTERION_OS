@@ -384,6 +384,10 @@ class ToolKit:
         moon, m_illum, m_alt, m_bright = self._moon_metrics(now + (hours / 2) * u.hour, loc)
         nb = (profile == "imaging_narrowband") or self._is_narrowband(strategy.get("filters"))
         w_moon = 0.02 if nb else 0.25   # 협대역(Ha/OIII/SII)은 달빛 대부분 차단 → 달이격 거의 무시
+        # 측광 프로파일별 merit 관측창가중·체류(dwell). 단주기=이벤트 전 구간 연속, 장주기=빈틈 1방문.
+        # imaging/캠페인은 현행 유지(w_win 6, 노출 기반 dur).
+        w_win, dwell = {"photometry_short": (25.0, "window"),
+                        "photometry_long": (2.0, "quick")}.get(profile, (6.0, "exposure"))
         cand = []
         for o in DSO:
             if types and o["t"] not in types:
@@ -402,7 +406,7 @@ class ToolKit:
             cand.append({"o": o, "label": label, "peak": peak, "tr": peak_off,
                          "win": (min(obs), max(obs)), "moon": sep})
         for c in cand:   # merit: 고도 + 관측창길이 + (달이격 × 프로파일가중 × 달밝힘)
-            c["score"] = (c["peak"] + (c["win"][1] - c["win"][0]) * 6
+            c["score"] = (c["peak"] + (c["win"][1] - c["win"][0]) * w_win
                           + c["moon"] * w_moon * m_bright)
         if campaign:   # 긴급도 — 관측창 빨리 끝나는(곧 지는) 것 먼저
             cand.sort(key=lambda c: (c["win"][1], -c["peak"]))
@@ -410,8 +414,15 @@ class ToolKit:
             cand.sort(key=lambda c: -c["score"])
         sel = cand[:max(1, count)]
         sel.sort(key=lambda c: c["tr"])   # 배치는 시간순
-        dur = (len(strategy["filters"]) * strategy["exposure_s"]
-               * strategy["count_per_filter"]) / 3600 + 1 / 6   # +10분 오버헤드
+        base_dur = (len(strategy["filters"]) * strategy["exposure_s"]
+                    * strategy["count_per_filter"]) / 3600 + 1 / 6   # +10분 오버헤드
+
+        def dur_for(c):   # 프로파일별 체류시간(슬롯 길이)
+            if dwell == "window":   # 단주기: 관측창 전체 연속(최대 4h) — 이벤트 통째로
+                return min(c["win"][1] - c["win"][0], 4.0) + 1 / 6
+            if dwell == "quick":    # 장주기: 빠른 1방문(빈틈 채우기) — 더 많은 대상 수용
+                return strategy["exposure_s"] / 3600 + 1 / 6
+            return base_dur
 
         def hm(off):
             d = datetime.fromtimestamp(now.unix + off * 3600 + 9 * 3600, tz=timezone.utc)
@@ -422,7 +433,7 @@ class ToolKit:
             s = max(cursor, c["win"][0])
             if s >= c["win"][1]:
                 continue   # 남은 창에 슬롯 못 맞춤
-            e = min(s + dur, c["win"][1] + 0.15)
+            e = min(s + dur_for(c), c["win"][1] + 0.15)
             cursor = e
             o, label = c["o"], c["label"]
             st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e),
@@ -557,7 +568,8 @@ class ToolKit:
         gtype = (goal.get("goal_type") if goal else "") or ""
         campaign = gtype == "campaign"
         # 프로파일: 목표가 imaging_* 면 그것, 아니면 필터로 추론(merit의 달 가중 선택)
-        profile = gtype if gtype.startswith("imaging_") else (a.get("profile") or None)
+        profile = (gtype if gtype.startswith(("imaging_", "photometry_"))
+                   else (a.get("profile") or None))
         gp = goal.get("params", {}) if goal else {}
         setname = (gp.get("set") or "") if campaign else ""
         types = match_type(a.get("type")) or (match_type(setname) if campaign else None)

@@ -17,6 +17,38 @@ from ..core.ontology import Db, Decision
 from .framedata import FrameData
 
 
+def latest_hint(db: Db, name: str) -> str | None:
+    """대상의 최신 feedback Decision의 exposure_hint(없으면 None). plan_night(A3)이 적응에 사용.
+    coarse 프리필터(name 포함) 후 evidence_json을 파싱해 target 정확매칭."""
+    name = (name or "").strip()
+    if db is None or not name:
+        return None
+
+    def _q(s):
+        rows = (s.query(Decision)
+                .filter(Decision.source == "feedback",
+                        Decision.evidence_json.contains(f'"{name}"'))
+                .order_by(Decision.id.desc()).limit(10).all())
+        for row in rows:
+            try:
+                ev = json.loads(row.evidence_json or "{}")
+            except Exception:
+                continue
+            if ev.get("target") == name:
+                return ev.get("exposure_hint")
+        return None
+    return db.query(_q)
+
+
+def adapt_exposure(exposure_s: float, hint: str | None) -> float:
+    """feedback 힌트로 노출 조정 — increase ×1.5 / decrease ×0.7 / 그 외 그대로."""
+    if hint == "increase":
+        return round(exposure_s * 1.5, 1)
+    if hint == "decrease":
+        return round(exposure_s * 0.7, 1)
+    return exposure_s
+
+
 def _exposure_hint(mean_snr: float | None, n_sat: int, floor: float) -> str:
     """다음 관측 노출 방향 — A3가 소비. decrease(포화) / increase(저SNR) / keep."""
     if n_sat > 0:

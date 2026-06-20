@@ -35,7 +35,10 @@
   추천 + exposure_hint) + Decision(source=feedback) 적재 + 도구 target_feedback + `/api/feedback/{name}` +
   Target Page '학습 피드백' 박스. ✅검증: GOOD→keep/양호, BADX→decrease/포화·재촬영, Decision 2건,
   도구·route, **라이브 UI**(DEMO 변광성 피드백 박스 렌더, 콘솔에러 0).
-- [ ] **A3 — 학습 반영**: plan_night이 대상별 feedback 권장노출 반영(있으면). 검증: 추천 있는 대상 계획에 반영.
+- [x] **A3 — 학습 반영**: feedback.latest_hint(최신 Decision의 exposure_hint) + adapt_exposure(inc×1.5/
+  dec×0.7). _night_plan이 각 계획 생성 시 라벨로 힌트 조회 → 노출 적응 + st2/응답에 feedback_hint.
+  ✅검증: latest_hint 정확매칭(M5≠M51), adapt 180/84/120, _night_plan이 decrease 시드 대상 노출 120→84
+  전부 적응. **루프 닫힘**(결과→추천→다음 계획).
 - [ ] **A4 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
 
 ## 4. 검증 게이트

@@ -428,12 +428,18 @@ class ToolKit:
             st2 = dict(strategy, slot_start=hm(s), slot_end=hm(e),
                        slot_peak_alt=round(c["peak"], 1), slot_moon_sep=round(c["moon"]),
                        slot_moon_illum=round(m_illum * 100), slot_moon_alt=round(m_alt))
+            hint = self._fb_hint(label)   # 피드백 학습(A3): 지난 결과 → 노출 적응
+            if hint in ("increase", "decrease"):
+                st2["exposure_s"] = self._adapt_exposure(st2["exposure_s"], hint)
+                st2["feedback_hint"] = hint
             plan = self.meridian.create_plan(
                 target_name=label, ra_hours=o["ra"], dec_degs=o["dec"], strategy=st2)
             out.append({"plan_id": plan.get("id"), "target": label,
                         "type": TYPE_KO.get(o["t"], o["t"]),
                         "slot": hm(s) + "–" + hm(e), "max_alt": round(c["peak"], 1),
-                        "moon_sep": round(c["moon"]), "mag": o["mag"]})
+                        "moon_sep": round(c["moon"]), "mag": o["mag"],
+                        "exposure_s": st2["exposure_s"],
+                        "feedback_hint": st2.get("feedback_hint")})
         moon_sum = {"illum_pct": round(m_illum * 100), "alt": round(m_alt, 1),
                     "up": m_alt > 0, "profile": "협대역" if nb else "광대역",
                     "weighted": round(m_bright, 2)}
@@ -468,6 +474,21 @@ class ToolKit:
     @staticmethod
     def _dso_label(o):
         return (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
+
+    def _fb_hint(self, label: str):
+        """대상의 최신 feedback exposure_hint(없으면 None) — A3 적응형 계획."""
+        if self.db is None:
+            return None
+        try:
+            from ..analysis.feedback import latest_hint
+            return latest_hint(self.db, label)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _adapt_exposure(exposure_s, hint):
+        from ..analysis.feedback import adapt_exposure
+        return adapt_exposure(exposure_s, hint)
 
     async def _t_set_goal(self, a: dict) -> dict:
         if self.meridian is None:

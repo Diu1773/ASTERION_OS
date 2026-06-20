@@ -1758,6 +1758,29 @@ function wireCampaigns() {
   }
 }
 
+// ---------- 기상예보 — 기상 탭 (스케줄러 게이팅과 동일 소스) ----------
+// /api/forecast 정시별 구름/강수확률을 24h 막대로. 색=강수확률 임계(틸<50%·앰버≥50%·레드≥80%)
+// = 스케줄러 페널티/하드스킵 경계와 동일. 읽기 전용.
+function renderForecast(d) {
+  const g = $("fc-graph"); if (!g) return;
+  const hrs = (d && d.hours) || [];
+  const prov = $("fc-provider"); if (prov) prov.textContent = (d && d.provider) ? ("provider: " + d.provider) : "";
+  g.innerHTML = hrs.map((h) => {
+    const cloud = Math.round((Number(h.cloud_frac) || 0) * 100);
+    const pp = Number(h.precip_prob) || 0;
+    const cls = pp >= 0.8 ? "red" : (pp >= 0.5 ? "amber" : "teal");
+    const hhmm = (h.time_utc || "").slice(11, 16);
+    return `<div class="fc-bar ${cls}" style="height:${Math.max(3, cloud)}%" title="${hhmm} UTC · 구름 ${cloud}% · 강수 ${Math.round(pp * 100)}%"></div>`;
+  }).join("");
+}
+async function loadForecast() {
+  try {
+    const r = await fetch("/api/forecast?hours=24");
+    if (!r.ok) return;
+    renderForecast(await r.json());
+  } catch (e) { /* noop */ }
+}
+
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
 // 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
 // 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
@@ -1976,7 +1999,7 @@ const PROTO_GS_H = {
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
   forge: 8, pixview: 12, connections: 7, "log-sys": 7, sysinfo: 5,
-  nightrunner: 14, campaign: 12,
+  nightrunner: 14, campaign: 12, forecast: 7,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -1994,6 +2017,7 @@ const PROTO_GS_LAYOUT = {
   weather:      { x: 0, y: 8, w: 4, h: 10 },
   "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
   "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
+  forecast:     { x: 0, y: 18, w: 12, h: 7 },
   // 계획(plan) — 캠페인(여러밤)이 최상위, 그 아래 스케줄(오늘밤)→타임라인→FOV→추천→대상
   campaign: { x: 0, y: 0,  w: 12, h: 12 },
   schedule: { x: 0, y: 12, w: 12, h: 14 },
@@ -2033,6 +2057,7 @@ const PANEL_DEF = {
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
   nightrunner:  { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 14, maxW: 12 },
   campaign:     { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 8,  defW: 12, defH: 12, maxW: 12 },
+  forecast:     { klass: "mixed",   fills: false,    ar: null,    minW: 6, minH: 5,  defW: 12, defH: 7,  maxW: 12 },
   fov:          { klass: "viz",     fills: false,    ar: null,    minW: 8, minH: 10, defW: 12, defH: 13, maxW: 12 },
   tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
   target:       { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 16, maxW: 12 },
@@ -2549,6 +2574,7 @@ function showTab(tab) {
   if (PROTO_TABS.has(tab) && typeof GridStack !== "undefined") ensureGridStack(tab);
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
+  if (tab === "env") loadForecast();   // 기상예보 — 표시 시 최신 예보
   if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
   if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록

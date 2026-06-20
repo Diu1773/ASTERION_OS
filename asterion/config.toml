@@ -10,6 +10,15 @@ elevation_m = 200
 focal_length_mm = 2939  # PlaneWave (TODO: 실제 값 확인)
 instrument = "ZWO ASI071MC Pro"
 
+# 사이트 프로파일 — 스케줄러 merit/하드제약에 반영(없으면 무영향).
+[site_profile]
+bortle = 4                 # 광공해 등급(1 어두움~9 도심). >4면 광대역에서 어두운 대상 merit↓
+dome_type = "manual"       # manual/electric/roll-off (참고용)
+# 지평선 마스크 — 방위(0=북,90=동,180=남,270=서)별 한계고도(도). 건물/산 너머는 관측 불가.
+# [[방위, 최소고도], …] 비우면 평지(0°). 예) 동쪽 30° 능선:
+# horizon_mask = [[0, 5], [80, 5], [100, 30], [120, 30], [140, 5], [359, 5]]
+horizon_mask = []
+
 [server]
 host = "127.0.0.1"
 port = 8520

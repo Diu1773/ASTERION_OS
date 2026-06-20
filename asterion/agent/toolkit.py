@@ -359,6 +359,45 @@ class ToolKit:
         s = math.sin(d) * math.sin(p) + math.cos(d) * math.cos(p) * math.cos(hr)
         return math.degrees(math.asin(max(-1.0, min(1.0, s))))
 
+    def _radec_altaz(self, ra_h, dec_d, lst_h):
+        """고도+방위(도). 지평선 마스크(방위별 한계고도) 적용용."""
+        ha = (lst_h - ra_h) * 15.0
+        ha = ((ha + 180) % 360 + 360) % 360 - 180
+        hr = math.radians(ha); d = math.radians(dec_d); p = math.radians(self.lat)
+        alt = math.asin(max(-1.0, min(1.0,
+              math.sin(d) * math.sin(p) + math.cos(d) * math.cos(p) * math.cos(hr))))
+        caz = ((math.sin(d) - math.sin(alt) * math.sin(p))
+               / max(1e-9, math.cos(alt) * math.cos(p)))
+        az = math.acos(max(-1.0, min(1.0, caz)))
+        if math.sin(hr) > 0:
+            az = 2 * math.pi - az
+        return math.degrees(alt), math.degrees(az)
+
+    def _site_profile(self) -> dict:
+        """사이트 프로파일(보틀·지평선 마스크·돔형태). config [site_profile]."""
+        raw = self.cfg.get("site_profile", {}) or {}
+        return raw if isinstance(raw, dict) else {}
+
+    @staticmethod
+    def _horizon_at(az: float, mask) -> float:
+        """방위 az(도)에서 지평선 마스크 한계고도(도). mask=[[az,min_alt],…], 비면 0.
+        방위 순환 선형보간 — 건물/산으로 가린 방위는 그 고도 미만이 관측 불가."""
+        if not mask:
+            return 0.0
+        pts = sorted((float(p[0]) % 360, float(p[1])) for p in mask if len(p) >= 2)
+        if not pts:
+            return 0.0
+        az %= 360
+        prev = (pts[-1][0] - 360, pts[-1][1])   # 순환: 마지막 점을 -360으로
+        for a, h in pts:
+            if az <= a:
+                a0, h0 = prev
+                return h if a == a0 else h0 + (h - h0) * (az - a0) / (a - a0)
+            prev = (a, h)
+        a0, h0 = pts[-1]                         # az가 마지막 점 초과 → 첫 점(+360)까지
+        a1, h1 = pts[0][0] + 360, pts[0][1]
+        return h0 if a1 == a0 else h0 + (h1 - h0) * (az - a0) / (a1 - a0)
+
     def _night_plan(self, hours, types, count, strategy, campaign=False, exclude=None,
                     idpred=None, profile=None):
         """야간 스케줄러(to_thread). 하드제약(고도≥30·다크) → merit(고도+관측창+달) →
@@ -388,6 +427,10 @@ class ToolKit:
         # imaging/캠페인은 현행 유지(w_win 6, 노출 기반 dur).
         w_win, dwell = {"photometry_short": (25.0, "window"),
                         "photometry_long": (2.0, "quick")}.get(profile, (6.0, "exposure"))
+        # 사이트 프로파일: 지평선 마스크(방위별 한계고도, 하드제약) + 보틀(광공해, 광대역 merit).
+        site = self._site_profile()
+        hmask = site.get("horizon_mask") or []
+        bortle = site.get("bortle")
         cand = []
         for o in DSO:
             if types and o["t"] not in types:
@@ -397,17 +440,20 @@ class ToolKit:
             label = (o["name"] or o["id"]) + (f" ({o['id']})" if o["name"] else "")
             if exclude and label in exclude:
                 continue   # 이미 관측 완료 — 캠페인 '안 찍은 것'만
-            alts = [(off, self._radec_alt(o["ra"], o["dec"], lst)) for off, lst, _ in use]
-            peak_off, peak = max(alts, key=lambda x: x[1])
-            obs = [off for off, a in alts if a >= 30]
+            aa = [(off, self._radec_altaz(o["ra"], o["dec"], lst)) for off, lst, _ in use]
+            peak_off, peak = max(((off, a) for off, (a, _) in aa), key=lambda x: x[1])
+            # 하드제약: 고도 30°↑ + 지평선 마스크(건물/산 너머) 위
+            obs = [off for off, (a, az) in aa if a >= 30 and a >= self._horizon_at(az, hmask)]
             if peak < 30 or not obs:
-                continue   # 하드 제약: 고도 30° 못 넘으면 제외(위도/저고도 대상)
+                continue
             sep = float(SkyCoord(o["ra"] * 15 * u.deg, o["dec"] * u.deg).separation(moon).deg)
             cand.append({"o": o, "label": label, "peak": peak, "tr": peak_off,
                          "win": (min(obs), max(obs)), "moon": sep})
-        for c in cand:   # merit: 고도 + 관측창길이 + (달이격 × 프로파일가중 × 달밝힘)
+        for c in cand:   # merit: 고도 + 관측창길이 + (달이격 × 프로파일가중 × 달밝힘) − 광공해
             c["score"] = (c["peak"] + (c["win"][1] - c["win"][0]) * w_win
                           + c["moon"] * w_moon * m_bright)
+            if not nb and bortle and bortle > 4:   # 광공해: 광대역에서 '어두운 대상'이 불리
+                c["score"] -= (float(bortle) - 4) * 0.5 * max(0.0, c["o"]["mag"] - 6.0)
         if campaign:   # 긴급도 — 관측창 빨리 끝나는(곧 지는) 것 먼저
             cand.sort(key=lambda c: (c["win"][1], -c["peak"]))
         else:

@@ -1489,13 +1489,15 @@ async function pvShow(id) {
   if (!id) return;
   const base = "/api/analysis/frames/" + id;
   try {
-    const [st, hist, prof, sent] = await Promise.all([
+    const [st, hist, prof, sent, prov] = await Promise.all([
       fetch(base + "/stats").then((r) => r.json()),
       fetch(base + "/histogram?bins=128").then((r) => r.json()),
       fetch(base + "/profile?axis=" + pvAxis).then((r) => r.json()),
       fetch("/api/sentinel/frames/" + id).then((r) => r.json()).catch(() => null),
+      fetch("/api/frames/" + id + "/provenance").then((r) => r.json()).catch(() => null),
     ]);
     pvRenderStats(st, sent);
+    pvRenderProv(prov);
     drawHistogram($("pv-hist"), hist);
     drawProfile($("pv-prof"), prof);
   } catch (e) { if ($("pv-stats")) $("pv-stats").textContent = "조회 실패 (FITS 파일 없음?)"; }
@@ -1518,6 +1520,23 @@ function pvRenderStats(st, sent) {
     v.className = "pv-verdict " + (sent.verdict === "rejected" ? "bad"
       : sent.verdict === "warning" ? "warn" : "ok");
   } else if (v) { v.textContent = ""; }
+}
+function pvRenderProv(p) {   // 프레임 계보(Provenance) 한 줄
+  const el = $("pv-prov"); if (!el) return;
+  if (!p || !p.lineage) { el.innerHTML = ""; return; }
+  const t = p.target, w = p.weather, bits = [];
+  if (t && (t.type_ko || t.magnitude != null)) {
+    bits.push(_schEsc(t.type_ko || "") + (t.magnitude != null ? " " + t.magnitude + "등급" : ""));
+  }
+  if (w) bits.push("기상 " + (w.temp_c != null ? Math.round(w.temp_c) + "°C" : "")
+    + (w.cloud_score != null ? " 구름 " + w.cloud_score : ""));
+  if ((p.calibration_candidates || []).length) {
+    bits.push("보정 " + p.calibration_candidates.map((c) => c.kind).join("/"));
+  }
+  if ((p.decisions || []).length) bits.push("결정 " + p.decisions.length);
+  el.innerHTML = '<span class="pv-prov-lab">계보</span> <span class="pv-prov-chain">'
+    + _schEsc(p.lineage) + "</span>"
+    + (bits.length ? ' <span class="pv-prov-sep">·</span> ' + bits.join(' <span class="pv-prov-sep">·</span> ') : "");
 }
 function drawHistogram(cv, hist) {
   if (!cv) return;

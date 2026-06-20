@@ -392,6 +392,14 @@ def create_app() -> FastAPI:
         return {"target": name, "n": len(frames), "zp": 25.0,
                 "points": framedata.light_curve(frames)}
 
+    @app.get("/api/frames/{frame_id}/provenance")
+    async def api_frame_provenance(frame_id: int):
+        """프레임 계보(§9.4) — Target→Plan→Session→Frame + 품질·기상·보정·결정."""
+        p = skygraph.frame_provenance(db, frame_id)
+        if p is None:
+            raise HTTPException(404, f"프레임 #{frame_id} 없음")
+        return p
+
     @app.get("/api/feedback/{name}")
     async def api_feedback(name: str):
         """피드백 학습 — 대상의 결과를 분석해 다음 관측 추천(노출/재촬영/필터). 조회는 읽기전용

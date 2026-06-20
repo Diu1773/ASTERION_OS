@@ -15,7 +15,8 @@ from sqlalchemy import or_
 
 from .dso_catalog import DSO, TYPE_KO
 from .ontology import (
-    Db, Frame, ObservationPlan, ObservationSession, QualityMetric, Target,
+    CalibrationProduct, Db, Decision, Frame, ObservationPlan, ObservationSession,
+    QualityMetric, Target, TelescopeState, WeatherRecord,
 )
 
 _CAT_BY: dict[str, dict] | None = None
@@ -204,4 +205,72 @@ def list_targets(db: Db, lat: float = 36.64) -> list[dict[str, Any]]:
                 "type_ko": TYPE_KO.get(t.type, t.type), "magnitude": t.magnitude,
                 "n_requests": n_plans, "transit_alt": _transit_alt(lat, t.dec_degs)})
         return out
+    return db.query(_q)
+
+
+def frame_provenance(db: Db, frame_id: int) -> dict | None:
+    """한 프레임의 완전한 계보(왜·어떻게·어떤 조건에서 만들어졌나, 로드맵 §9.4). 기존 1급 엣지
+    Target→Plan→Session→Frame + 품질·망원경상태·그 시각 기상·적용가능 보정·관련 결정을 묶는다."""
+    def _q(s):
+        fr = s.get(Frame, frame_id)
+        if fr is None:
+            return None
+        sess = s.get(ObservationSession, fr.session_id) if fr.session_id else None
+        plan = s.get(ObservationPlan, sess.plan_id) if (sess and sess.plan_id) else None
+        tgt = s.get(Target, plan.target_id) if (plan and plan.target_id) else None
+        qm = (s.query(QualityMetric).filter(QualityMetric.frame_id == frame_id)
+              .order_by(QualityMetric.id.desc()).first())
+        ts = (s.get(TelescopeState, fr.telescope_state_id)
+              if fr.telescope_state_id else None)
+        wx = (s.query(WeatherRecord)
+              .filter(WeatherRecord.utc <= (fr.date_obs_utc or "~"))
+              .order_by(WeatherRecord.utc.desc()).first())   # 그 시각 직전 기상
+        cals = []
+        for c in (s.query(CalibrationProduct)
+                  .filter(CalibrationProduct.binning == fr.binning)
+                  .order_by(CalibrationProduct.id.desc()).all()):
+            if c.kind == "flat" and c.filter_name and c.filter_name != fr.filter_name:
+                continue   # flat은 필터 일치만
+            cals.append({"kind": c.kind, "filter": c.filter_name,
+                         "exposure_s": c.exposure_s, "temp_c": c.temperature_c,
+                         "n_frames": c.n_frames})
+        dec = []
+        if tgt and tgt.name:
+            for d in (s.query(Decision)
+                      .filter(Decision.evidence_json.contains(tgt.name))
+                      .order_by(Decision.id.desc()).limit(5).all()):
+                dec.append({"source": d.source, "recommendation": d.recommendation[:120],
+                            "utc": d.utc})
+        chain = " → ".join(x for x in [
+            (tgt.name if tgt else None), (f"계획 #{plan.id}" if plan else None),
+            (f"세션 #{sess.id}" if sess else None), f"프레임 #{fr.id}"] if x)
+        return {
+            "frame": {"id": fr.id, "image_type": fr.image_type, "filter": fr.filter_name,
+                      "exposure_s": fr.exposure_s, "binning": fr.binning,
+                      "date_obs_utc": fr.date_obs_utc, "median_adu": fr.median_adu,
+                      "flag": fr.flag, "file_path": fr.file_path, "checksum": fr.checksum},
+            "quality": (None if not qm else {
+                "verdict": qm.verdict, "reason": qm.reason, "median_adu": qm.median_adu,
+                "saturation_frac": qm.saturation_frac}),
+            "telescope": (None if not ts else {
+                "ra_hours": ts.ra_hours, "dec_degs": ts.dec_degs,
+                "alt_degs": ts.alt_degs, "az_degs": ts.az_degs}),
+            "session": (None if not sess else {
+                "id": sess.id, "kind": sess.kind, "status": sess.status,
+                "summary_json": sess.summary_json}),
+            "plan": (None if not plan else {
+                "id": plan.id, "status": plan.approval_status,
+                "params_json": plan.params_json, "created_utc": plan.created_utc}),
+            "target": (None if not tgt else {
+                "name": tgt.name, "ra_hours": tgt.ra_hours, "dec_degs": tgt.dec_degs,
+                "type": tgt.type, "type_ko": TYPE_KO.get(tgt.type, tgt.type),
+                "magnitude": tgt.magnitude}),
+            "weather": (None if not wx else {
+                "utc": wx.utc, "temp_c": wx.temp_c, "humidity": wx.humidity,
+                "wind_ms": wx.wind_ms, "cloud_score": wx.cloud_score, "rain": wx.rain,
+                "source_id": wx.source_id}),
+            "calibration_candidates": cals[:10],
+            "decisions": dec,
+            "lineage": chain,
+        }
     return db.query(_q)

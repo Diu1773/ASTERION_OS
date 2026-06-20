@@ -31,8 +31,10 @@
 - [x] **W1 — Sentinel FWHM·별 개수**: framedata.detect_stars(강건 배경→임계→3×3 로컬맥스 별 + 반치폭
   면적 FWHM, 순수 numpy) + Sentinel.evaluate가 LIGHT에 반영. ✅검증: 합성 별8 정확·FWHM 5.17(이론 5.18)·
   빈프레임 0·Sentinel placeholder 채움.
-- [ ] **W2 — 기상 안전연동**: current_weather + 샘플러 ingestion 소스 + config. 검증: ingest→current 반영,
-  stale→fail-closed, 기존 로컬 경로 무손상.
+- [x] **W2 — 기상 안전연동**: ingest.current_weather(최신 원격이 max_age 내 신선하면 dict+age, 아니면 None)
+  + StatusSampler weather_ingest_fn(로컬 기상장치 없을 때만 폴백, 신선도=원격 age 반영, stale/none→
+  weather_data None→fail-closed) + app.py 배선(config weather.ingest_fallback 기본 on). ✅검증: current_weather
+  신선/stale/없음/잘못된시각, 스냅샷 정상빌드(로컬 경로 보존·fail-closed 유지).
 - [ ] **W3 — 픽셀 뷰어 UI**: ANALYSIS 패널 + 히스토그램/프로파일/통계 렌더. 검증: 데이터경로+node-check(+가능시 라이브).
 - [ ] **W4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
 

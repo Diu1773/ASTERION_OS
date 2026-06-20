@@ -189,6 +189,11 @@ def create_app() -> FastAPI:
     db = Db(cfg.data_dir / "asterion.db")
     archive = ArchiveRecovery(db, cfg.data_dir / "frames")   # 파일↔DB 정합성(§9.3)
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
+    # 분산 §7: 로컬 기상 장치 없을 때 원격 ingestion 값으로 폴백(fail-closed 유지). config로 끔.
+    if bool(cfg.get("weather.ingest_fallback", True)):
+        from .watchtower.ingest import current_weather
+        _wx_max_age = float(cfg.get("safety.weather_unsafe_seconds", 120.0))
+        sampler.weather_ingest_fn = lambda: current_weather(db, _wx_max_age)
     # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
     watchdog = ConnectionWatchdog(cfg, conn, sampler, events)
     bus = ActionBus(db, events, lambda: sampler.snapshot)

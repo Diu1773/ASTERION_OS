@@ -78,6 +78,37 @@ def ingest_records(db: Db, payload: Any) -> dict[str, Any]:
             "rejected": rejected, "sources": sorted({m["source_id"] for m in mapped})}
 
 
+def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
+    """가장 최신 원격 기상 record가 max_age_s 내로 신선하면 표준 dict(+age_s) 반환, 아니면
+    None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7). age는 record utc(ISO) 기준 —
+    오래됐거나 시각 파싱 실패면 None → fail-closed stale 판정으로 흘러감."""
+    from datetime import datetime, timezone
+
+    def _q(s):
+        row = (s.query(WeatherRecord).filter(WeatherRecord.source_id != "")
+               .order_by(WeatherRecord.id.desc()).first())
+        if row is None:
+            return None
+        return {"source_id": row.source_id, "utc": row.utc, "temp_c": row.temp_c,
+                "humidity": row.humidity, "wind_ms": row.wind_ms,
+                "cloud_score": row.cloud_score, "rain": row.rain,
+                "dew_point_c": row.dew_point_c}
+    rec = db.query(_q)
+    if rec is None:
+        return None
+    try:
+        ts = datetime.fromisoformat(rec["utc"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+    except (ValueError, TypeError):
+        return None
+    if age < 0 or age > max_age_s:
+        return None
+    rec["age_s"] = age
+    return rec
+
+
 def latest_per_source(db: Db) -> list[dict[str, Any]]:
     """source_id별 최신(가장 큰 id) 1건 — 분산 대시보드/상태용."""
     def _q(s):

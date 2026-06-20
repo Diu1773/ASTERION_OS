@@ -62,6 +62,8 @@ class StatusSampler:
         self._last_weather_db = 0.0
         # 마지막으로 연결+유효값 기상을 받은 시각 (monotonic) — fail-closed stale 판정용
         self._last_weather_ok: float | None = None
+        # 원격 ingestion 폴백(분산 §7) — 로컬 기상 장치 없을 때 호출. 신선 dict(+age_s) 또는 None.
+        self.weather_ingest_fn = None
         self._wx_warn_s = float(cfg.get("safety.weather_warn_seconds",
                                         safety.WEATHER_WARN_AGE_S))
         self._wx_unsafe_s = float(cfg.get("safety.weather_unsafe_seconds",
@@ -293,20 +295,29 @@ class StatusSampler:
                            or bool(orchestrator.get("running")))
         # 기상 텔레메트리 신선도 — 연결+유효값을 받은 마지막 시각을 기억한다.
         # 끊기거나 멈추면 경과시간이 늘어 fail-closed stale 판정이 작동한다(§6.5).
-        if weather is not None and weather.connected and any(
-                v is not None for v in (weather.humidity, weather.wind_ms,
-                                        weather.cloud_score, weather.temp_c,
-                                        weather.dew_point_c)):
+        # 로컬 기상 장치가 유효값을 주면 그것을, 없으면 원격 ingestion(§7) 폴백.
+        local_ok = (weather is not None and weather.connected and any(
+            v is not None for v in (weather.humidity, weather.wind_ms,
+                                    weather.cloud_score, weather.temp_c,
+                                    weather.dew_point_c)))
+        weather_data = None
+        if local_ok:
             self._last_weather_ok = time.monotonic()
+            weather_data = {"rain": weather.rain, "wind": weather.wind_ms,
+                            "humidity": weather.humidity, "cloud": weather.cloud_score}
+        elif self.weather_ingest_fn is not None:   # 원격 PC 수신값으로 폴백(분산)
+            rem = self.weather_ingest_fn()          # 신선하면 dict(+age_s), 아니면 None
+            if rem is not None:
+                self._last_weather_ok = time.monotonic() - float(rem.get("age_s", 0))
+                weather_data = {"rain": rem.get("rain"), "wind": rem.get("wind_ms"),
+                                "humidity": rem.get("humidity"), "cloud": rem.get("cloud_score")}
+            # rem이 None이면 weather_data=None → _last_weather_ok 미갱신 → stale=unsafe(fail-closed)
         weather_age = (None if self._last_weather_ok is None
                        else time.monotonic() - self._last_weather_ok)
         # 안전 관련 장비는 REGISTRY의 safety_role로 찾는다 (키 하드코딩 제거).
         missing_required = [s.label for k, s in REGISTRY.items()
                             if s.safety_role == "required"
                             and not statuses[k].connected]
-        weather_data = (None if weather is None else
-                        {"rain": weather.rain, "wind": weather.wind_ms,
-                         "humidity": weather.humidity, "cloud": weather.cloud_score})
         saf = safety.evaluate(
             missing_required=missing_required,
             weather=weather_data,

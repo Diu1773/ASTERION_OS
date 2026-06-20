@@ -1,5 +1,9 @@
 # FORGE UI + 가벼운 라이트커브 PLAN (자율 빌드 계약서)
 
+> **상태: ✅ L1~L4 완료(2026-06-20, /goal 자율빌드).** 조리개측광 백엔드(/api/photometry) →
+> Forge UI 카드(ANALYSIS) → 라이트커브 차트(Target Page) → 풀리뷰(통합검토 통과 + 성능 8× 개선).
+> A/B/C 로드맵 옵션은 이 다음.
+
 > A/B/C 로드맵 옵션보다 **먼저** 마무리. `/goal` 자율 세션이 따라가는 체크리스트 —
 > 한 번에 한 단계, 각 단계 SIM 검증 후 커밋. 막히면 깨끗한 상태로 두고 결정로그 기록.
 
@@ -43,7 +47,10 @@
   점+선). loadDossier가 n_lights>0이면 loadLightCurve→/api/photometry→drawLightCurve. CSS .tp-lc, v=138/169.
   ✅검증: 실DB REGRESS /api/photometry → 실FITS 측광 성공(mag 18.575/flux 371.5/snr 1.56), node --check.
   라이브 DOM은 프리뷰 불안정으로 미검증(데이터경로 실데이터로 갈음).
-- [ ] **L4 — 풀리뷰 + 회귀**: review-full(변경분) + create_app/기존 status 키/SIM 그린.
+- [x] **L4 — 풀리뷰 + 회귀**: ✅review-full 4차원 — 치명 0. 실측으로 성능결함 #1 확정·수정: 측광
+  거리맵을 전체이미지→centroid 윈도우(r_out+1) + 전체 float64변환 제거(슬라이스만 캐스팅).
+  결과 100% 동일, 대형센서 336ms→42ms(I/O 지배), 100프레임 라이트커브 4.3s. 회귀 create_app 97라우트·
+  측광 재검 그린. 남은 #2(gain SNR)·#3(LIKE 이스케이프)는 저위험.
 
 ## 4. 검증 게이트
 - 측광은 **합성 FITS**(astropy.io.fits로 가우시안 별 작성)로 정확도 검증 — 실파일 의존 X.
@@ -61,6 +68,14 @@
 7. 범위 = Forge UI + 라이트커브(L1~L4). A/B/C로 새지 말 것.
 
 ## 6. 결정 로그 (루프가 추가)
+- `2026-06-20 L4 — review-full 통합검토 통과(치명 0). 실측으로 성능결함 확정·수정: (a) 조리개 거리맵을
+  전체 h×w → centroid 주변 (r_out+1) 박스 윈도우(결과 동일, 4195× 빠름), (b) d=data.astype(float64)
+  전체변환 제거 → box/window 슬라이스만 캐스팅. 합산 대형센서(24M) 336ms→42ms(이제 FITS 디스크 I/O
+  지배), 100프레임 라이트커브 4.3s. 결과 100% 불변(V자 mag/flux 동일). 남은 저위험: SNR gain 미보정,
+  .contains LIKE 비이스케이프(json 정확매칭이 거름).`
+- `2026-06-20 L2/L3 — Forge UI 카드(ANALYSIS, applyStatus 렌더 + /api/forge/toggle 왕복 TestClient
+  검증) + 라이트커브 차트(Target Page, /api/photometry, 실DB REGRESS 실FITS 측광 mag 18.575). UI 라이브
+  DOM은 프리뷰 매니저 불안정으로 미검증 — 데이터경로/node-check로 갈음.`
 - `2026-06-20 L1 — 조리개 측광(framedata, analysis층): 중앙1/3 피크→강도가중 centroid→조리개합−
   배경annulus중앙값×면적=flux→mag=−2.5log10(flux)+25. 점광원 가정(goto/platesolve로 중앙). skygraph에
   _target_session_ids 헬퍼 추출(dossier+target_light_frames 공유, T4 중복 제거). light_curve는 실패

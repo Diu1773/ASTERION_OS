@@ -74,7 +74,9 @@ class FrameData:
         data, frame, status = self._load(frame_id)
         if status != "ok":
             return {"status": status, "frame_id": frame_id}
-        d = data.astype(np.float64)
+        # 전체 이미지를 float64로 변환하지 않는다(대형 센서면 수십 ms 낭비) — 측광에 쓰는
+        # 작은 슬라이스(box·window)만 캐스팅. argmax/슬라이싱은 원 dtype 그대로 가능.
+        d = data
         h, w = d.shape
         # 대상 위치: 중앙 1/3 영역의 최대 픽셀
         cy0, cy1, cx0, cx1 = h // 3, 2 * h // 3, w // 3, 2 * w // 3
@@ -86,24 +88,29 @@ class FrameData:
         # 강도가중 centroid (피크 주변 창)
         win = int(max(3, round(r_ap)))
         y0, y1, x0, x1 = max(0, py - win), min(h, py + win + 1), max(0, px - win), min(w, px + win + 1)
-        box = d[y0:y1, x0:x1]
+        box = d[y0:y1, x0:x1].astype(np.float64)
         ys, xs = np.mgrid[y0:y1, x0:x1]
         bsub = box - box.min()
         tot = float(bsub.sum())
         cy, cx = ((float((ys * bsub).sum() / tot), float((xs * bsub).sum() / tot))
                   if tot > 0 else (float(py), float(px)))
-        # 조리개·배경 마스크
-        yy, xx = np.ogrid[0:h, 0:w]
-        rr = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+        # 조리개·배경 마스크 — centroid 주변 (r_out+1) 박스에서만 거리 계산.
+        # 전체 이미지 거리맵은 대형 센서에서 수백 ms(라이트커브 N프레임에 수십 초)라 윈도우화.
+        rad = int(np.ceil(r_out)) + 1
+        wy0, wy1 = max(0, int(cy) - rad), min(h, int(cy) + rad + 1)
+        wx0, wx1 = max(0, int(cx) - rad), min(w, int(cx) + rad + 1)
+        wd = d[wy0:wy1, wx0:wx1].astype(np.float64)
+        wyy, wxx = np.ogrid[wy0:wy1, wx0:wx1]
+        rr = np.sqrt((wyy - cy) ** 2 + (wxx - cx) ** 2)
         ap = rr <= r_ap
         ann = (rr >= r_in) & (rr <= r_out)
         if not ap.any():
             return {"status": "no_aperture", "frame_id": frame_id}
-        bg = float(np.median(d[ann])) if ann.any() else 0.0
+        bg = float(np.median(wd[ann])) if ann.any() else 0.0
         ap_pix = int(ap.sum())
-        ap_sum = float(d[ap].sum())
+        ap_sum = float(wd[ap].sum())
         flux = ap_sum - bg * ap_pix
-        peak = float(d[ap].max())
+        peak = float(wd[ap].max())
         noise = float(np.sqrt(max(1.0, abs(ap_sum))))   # 포아송 근사(read/gain 무시)
         snr = flux / noise if noise > 0 else 0.0
         mag = (-2.5 * np.log10(flux) + zp) if flux > 0 else None

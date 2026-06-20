@@ -1,0 +1,47 @@
+# A. 차별화 — 피드백 학습 + 대화 제어 PLAN (자율 빌드 계약서)
+
+> 로드맵 옵션 A. 경쟁 빈틈([[asterion-competitive-landscape]]): 기본기는 표준이고 빈틈이
+> **대화 제어 + 피드백 학습**. `/goal` 자율 세션 체크리스트 — 한 단계씩 SIM 검증 후 커밋.
+
+## 0. 목표
+1. **대화 제어**: 챗으로 무인 야간 운영(Night Runner)을 제어 — "오늘 밤 자동으로 돌려",
+   "야간 운영 멈춰", "지금 어디까지 돌았어". 계획만 짜던 AI가 이제 *실행·중단·조회*까지.
+2. **피드백 학습**: 관측 결과(품질 verdict·측광 SNR·불량률)를 읽어 **다음 계획에 반영할 추천**을
+   낸다 — "이 대상 LIGHT 30% 불량 → 노출↓", "SNR 낮음 → 적분↑". 챗·dossier로 노출.
+
+## 1. 현재 상태 (있는 것)
+- **Night Runner**: `operation/night_runner.py`(start/request_stop/status_dict, /api/nightrunner). [[asterion-nightrunner-build]]
+- **AI 도구계층**: `agent/toolkit.py` — `specs`(fn() 도구정의) + `_t_<name>` 핸들러 디스패치. 이미
+  plan_night/set_goal/run_plan 등. ToolKit.__init__(cfg,snapshot_fn,meridian,orchestrator,bus,drivers,db,sentinel).
+- **결과 데이터**: `core/skygraph.py` dossier(프레임·품질·불량률), `framedata.photometry`(SNR), Sentinel verdict,
+  ontology `Feedback`/`Decision` 테이블(이미 존재).
+
+## 2. 설계
+- **A1 대화 제어**: ToolKit에 `night_runner` 주입 + 도구 `run_night`(now 옵션)·`stop_night`·`night_status`.
+  NightRunner.start/request_stop/status_dict 래핑. app.py ToolKit 생성에 night_runner 전달.
+- **A2 피드백 학습**: `analysis/feedback.py` `target_feedback(db, name)` — dossier+측광에서 불량률·평균SNR·
+  필터별 결과 → 규칙기반 추천(노출/적분/필터/재촬영). ontology Feedback에 적재(설명가능). 도구 `target_feedback`
+  + dossier에 surface.
+- **A3 학습 반영**: plan_night/merit가 feedback을 소비(대상별 권장 노출/제외) — 적응형. (작게: 추천을
+  계획 strategy 기본값에 반영)
+- **A4 풀리뷰 + 회귀**.
+
+## 3. 체크리스트
+- [ ] **A1 — 대화 제어 도구**: ToolKit night_runner 주입 + run_night/stop_night/night_status 도구·핸들러.
+  검증: FakeNR/실ToolKit로 도구 호출→start/stop/status 위임, 교차배제 사유 반환, create_app 회귀.
+- [ ] **A2 — 피드백 학습**: feedback.target_feedback(불량률·SNR→추천) + Feedback 적재 + 도구 + dossier 노출.
+  검증: 시드(불량 많은/적은 대상)→추천 분기, Feedback row 적재.
+- [ ] **A3 — 학습 반영**: plan_night이 대상별 feedback 권장노출 반영(있으면). 검증: 추천 있는 대상 계획에 반영.
+- [ ] **A4 — 풀리뷰 + 회귀**: review-full + create_app/SIM 그린.
+
+## 4. 검증 게이트
+- SIM 직접 스크립트/TestClient/Fake 주입. DB 경로 `asterion/data/asterion.db`. 임시DB/시드 정리.
+- 프리뷰 불안정 → 데이터경로+node-check. 콘솔/서버 에러 0, 기존 동작 보존.
+
+## 5. 가드레일
+1. SIM 전용. 2. 매 증분 커밋(+Co-Authored-By). 3. 기존 보존(additive). 4. config.local.json 금지.
+5. 레이어(agent→operation/core, analysis→core). 6. 막히면 멈춤+결정로그. 7. 범위 A(A1~A4).
+   **실행 도구는 ActionBus/사전조건 그대로 — AI가 안전게이트 우회 금지(추천·제어만, 안전은 NightRunner/Orchestrator가).**
+
+## 6. 결정 로그
+-

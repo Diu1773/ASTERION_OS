@@ -35,7 +35,10 @@
   + StatusSampler weather_ingest_fn(로컬 기상장치 없을 때만 폴백, 신선도=원격 age 반영, stale/none→
   weather_data None→fail-closed) + app.py 배선(config weather.ingest_fallback 기본 on). ✅검증: current_weather
   신선/stale/없음/잘못된시각, 스냅샷 정상빌드(로컬 경로 보존·fail-closed 유지).
-- [ ] **W3 — 픽셀 뷰어 UI**: ANALYSIS 패널 + 히스토그램/프로파일/통계 렌더. 검증: 데이터경로+node-check(+가능시 라이브).
+- [x] **W3 — 픽셀 뷰어 UI**: ANALYSIS 탭 '프레임 뷰어' — 프레임 선택 + 히스토그램(로그)·라인프로파일
+  (가로/세로)·통계 + Sentinel verdict(FWHM·별수). pvLoadFrames/pvShow/drawHistogram/drawProfile,
+  PANEL_DEF/PROTO 등록. ✅검증: 데이터경로(15프레임·histogram·profile·sentinel FWHM 5.17) + **라이브 UI**
+  (통계 렌더·히스토그램/프로파일 캔버스 페인트·콘솔에러 0).
 - [ ] **W4 — 풀리뷰 + 회귀**: 리뷰 + create_app/SIM 그린.
 
 ## 4~5. 게이트·가드레일

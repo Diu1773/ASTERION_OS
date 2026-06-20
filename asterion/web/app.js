@@ -1468,6 +1468,100 @@ function wireForge() {
   if (save && !save.dataset.w) { save.dataset.w = "1"; save.onclick = () => forgeToggle("save"); }
 }
 
+// ---------- 프레임 뷰어 (픽셀 분석, ANALYSIS 탭) ----------
+// 저장된 FITS의 히스토그램·라인프로파일·통계 + Sentinel 품질(FWHM·별 수)을 본다.
+// framedata 백엔드(/api/analysis/frames/*) 활용. 점광원 측광/별검출은 W1.
+let pvWired = false, pvAxis = "row";
+async function pvLoadFrames() {
+  const sel = $("pv-frame"); if (!sel) return;
+  let arr = [];
+  try {
+    const d = await (await fetch("/api/frames")).json();
+    arr = Array.isArray(d) ? d : (d.items || d.frames || []);
+  } catch (e) { arr = []; }
+  sel.innerHTML = arr.slice(0, 50).map((f) =>
+    '<option value="' + f.id + '">#' + f.id + " · " + _schEsc(f.image_type || "")
+    + " " + _schEsc(f.filter_name || f.filter || "") + " · "
+    + _schEsc(String(f.date_obs_utc || "").slice(11, 19)) + "</option>").join("");
+  if (sel.value) pvShow(+sel.value);
+}
+async function pvShow(id) {
+  if (!id) return;
+  const base = "/api/analysis/frames/" + id;
+  try {
+    const [st, hist, prof, sent] = await Promise.all([
+      fetch(base + "/stats").then((r) => r.json()),
+      fetch(base + "/histogram?bins=128").then((r) => r.json()),
+      fetch(base + "/profile?axis=" + pvAxis).then((r) => r.json()),
+      fetch("/api/sentinel/frames/" + id).then((r) => r.json()).catch(() => null),
+    ]);
+    pvRenderStats(st, sent);
+    drawHistogram($("pv-hist"), hist);
+    drawProfile($("pv-prof"), prof);
+  } catch (e) { if ($("pv-stats")) $("pv-stats").textContent = "조회 실패 (FITS 파일 없음?)"; }
+}
+function pvRenderStats(st, sent) {
+  const el = $("pv-stats"); if (!el) return;
+  if (st && st.status && st.status !== "ok") {
+    el.textContent = "픽셀 데이터 없음 (" + st.status + ")";
+    if ($("pv-verdict")) $("pv-verdict").textContent = ""; return;
+  }
+  const f = (v) => (v == null ? "—" : Math.round(v));
+  el.innerHTML = ["크기 " + st.width + "×" + st.height, "중앙값 " + f(st.median),
+    "평균 " + f(st.mean), "σ " + f(st.std), "min " + f(st.min), "max " + f(st.max)]
+    .map((s) => '<span class="pv-st">' + s + "</span>").join("");
+  const v = $("pv-verdict");
+  if (v && sent && sent.metrics) {
+    const m = sent.metrics;
+    v.textContent = (sent.verdict || "") + (m.fwhm != null ? " · FWHM " + m.fwhm + "px" : "")
+      + (m.star_count != null ? " · 별 " + m.star_count : "");
+    v.className = "pv-verdict " + (sent.verdict === "rejected" ? "bad"
+      : sent.verdict === "warning" ? "warn" : "ok");
+  } else if (v) { v.textContent = ""; }
+}
+function drawHistogram(cv, hist) {
+  if (!cv) return;
+  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
+  const counts = (hist && hist.counts) || [];
+  if (!counts.length) return;
+  const pad = 4, n = counts.length, mx = Math.max.apply(null, counts) || 1;
+  const bw = (w - pad * 2) / n;
+  ctx.fillStyle = "#4cc9f0";
+  counts.forEach((c, i) => {   // 로그 스케일(천문 히스토그램은 피크가 강함)
+    const bh = Math.log10(1 + c) / Math.log10(1 + mx) * (h - pad * 2);
+    ctx.fillRect(pad + i * bw, h - pad - bh, Math.max(1, bw - 0.5), bh);
+  });
+}
+function drawProfile(cv, prof) {
+  if (!cv) return;
+  const { ctx, w, h } = hidpi(cv); ctx.clearRect(0, 0, w, h);
+  const vals = (prof && prof.values) || [];
+  if (!vals.length) return;
+  const pad = 6, n = vals.length;
+  let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  if (hi === lo) hi = lo + 1;
+  ctx.beginPath();
+  vals.forEach((v, i) => {
+    const x = pad + (n > 1 ? i / (n - 1) : 0) * (w - pad * 2);
+    const y = h - pad - (v - lo) / (hi - lo) * (h - pad * 2);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.strokeStyle = "#34d399"; ctx.lineWidth = 1.3; ctx.stroke();
+}
+function wirePixview() {
+  if (pvWired) return; pvWired = true;
+  const sel = $("pv-frame"); if (sel) sel.onchange = () => pvShow(+sel.value);
+  const ax = $("pv-axis");
+  if (ax) ax.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      ax.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on"); pvAxis = b.dataset.a;
+      const s = $("pv-frame"); if (s && s.value) pvShow(+s.value);
+    };
+  });
+  const rl = $("pv-reload"); if (rl) rl.onclick = pvLoadFrames;
+}
+
 // ---------- 시계열 플롯 빌더 ----------
 
 const PALETTE = ["#4cc9f0", "#34d399", "#fbbf24", "#fb7185",
@@ -1627,7 +1721,7 @@ const PROTO_GS_H = {
   sky: 9, skyflat: 9, mount: 6, camera: 6, focuser: 5, image: 7,
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
-  forge: 8, connections: 7, "log-sys": 7, sysinfo: 5,
+  forge: 8, pixview: 12, connections: 7, "log-sys": 7, sysinfo: 5,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -1656,6 +1750,7 @@ const PROTO_GS_LAYOUT = {
   frames:  { x: 0, y: 10, w: 6,  h: 8  },
   actions: { x: 6, y: 10, w: 6,  h: 8  },
   forge:   { x: 0, y: 18, w: 12, h: 8  },
+  pixview: { x: 0, y: 26, w: 12, h: 12 },
   // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
   connections: { x: 0, y: 0,  w: 8,  h: 20 },
   "log-sys":   { x: 8, y: 0,  w: 4,  h: 20 },
@@ -1685,6 +1780,7 @@ const PANEL_DEF = {
   frames:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   forge:        { klass: "control", fills: false,    ar: null,    minW: 6, minH: 5,  defW: 12, defH: 8,  maxW: 12 },
+  pixview:      { klass: "control", fills: false,    ar: null,    minW: 8, minH: 8,  defW: 12, defH: 12, maxW: 12 },
   connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 20, maxW: 12 },
   "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 20, maxW: 12 },
   sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 11, maxW: 12, maxH: 13 },
@@ -2194,6 +2290,7 @@ function showTab(tab) {
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
   if (tab === "plan") loadSchedule();   // AI 야간 계획 — 표시될 때 최신 plan 불러오기(캔버스 폭 확보 후)
+  if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }

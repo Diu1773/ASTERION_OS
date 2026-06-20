@@ -115,8 +115,10 @@ class NightRunner:
             raise ActionError("관측(Orchestrator) 실행 중 — 야간 운영 시작 거부")
         self._stop.clear()
         self._state = self._blank_state()
+        queue = self._build_queue(plan_ids)   # 동기 — 큐를 즉시 노출(start 직후 status/응답에 보임)
+        self._set(queue=list(queue), active=True, phase="시작")
         self._task = asyncio.create_task(
-            self._loop(plan_ids, respect_slots), name="night-runner")
+            self._loop(queue, respect_slots), name="night-runner")
 
     async def request_stop(self) -> None:
         if not self.running():
@@ -207,14 +209,12 @@ class NightRunner:
 
     # ---------- 실행 루프 ----------
 
-    async def _loop(self, plan_ids: list[int] | None, respect_slots: bool) -> None:
-        """큐를 순서대로: (respect_slots면) 슬롯 대기 → 안전 게이트 → 실행 → 분류.
-        한 계획 실패/스킵은 흡수해 밤을 멈추지 않는다. _stop이면 잔여 중단."""
-        self._set(active=True, phase="큐 구성")
+    async def _loop(self, queue: list[dict], respect_slots: bool) -> None:
+        """큐(start에서 동기 구성)를 순서대로: (respect_slots면) 슬롯 대기 → 안전 게이트 →
+        실행 → 분류. 한 계획 실패/스킵은 흡수해 밤을 멈추지 않는다. _stop이면 잔여 중단."""
         done, failed, skipped = [], [], []
         try:
-            queue = self._build_queue(plan_ids)
-            self._set(queue=list(queue), skipped=skipped, done=done, failed=failed)
+            self._set(skipped=skipped, done=done, failed=failed)
             self.events.log("night_runner", f"야간 운영 큐 {len(queue)}개")
             for idx, item in enumerate(queue):
                 if self._stop.is_set():

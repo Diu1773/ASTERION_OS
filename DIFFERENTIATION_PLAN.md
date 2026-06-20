@@ -27,8 +27,10 @@
 - **A4 풀리뷰 + 회귀**.
 
 ## 3. 체크리스트
-- [ ] **A1 — 대화 제어 도구**: ToolKit night_runner 주입 + run_night/stop_night/night_status 도구·핸들러.
-  검증: FakeNR/실ToolKit로 도구 호출→start/stop/status 위임, 교차배제 사유 반환, create_app 회귀.
+- [x] **A1 — 대화 제어 도구**: ToolKit에 night_runner 주입(app.py) + 도구 run_night(now)/stop_night/
+  night_status + 핸들러. NightRunner.start가 큐를 동기 구성하게 개선(직후 status/응답에 큐 보임).
+  ✅검증: run_night→큐즉시(2)·완료 done2, 교차배제·stop·미연결 사유, NightRunner S3/S5 회귀 무손상,
+  create_app 97라우트, 에이전트 16도구.
 - [ ] **A2 — 피드백 학습**: feedback.target_feedback(불량률·SNR→추천) + Feedback 적재 + 도구 + dossier 노출.
   검증: 시드(불량 많은/적은 대상)→추천 분기, Feedback row 적재.
 - [ ] **A3 — 학습 반영**: plan_night이 대상별 feedback 권장노출 반영(있으면). 검증: 추천 있는 대상 계획에 반영.
@@ -44,4 +46,7 @@
    **실행 도구는 ActionBus/사전조건 그대로 — AI가 안전게이트 우회 금지(추천·제어만, 안전은 NightRunner/Orchestrator가).**
 
 ## 6. 결정 로그
--
+- `2026-06-20 A1 — ToolKit(night_runner) 주입 + run_night/stop_night/night_status. NightRunner.start가
+  _build_queue를 동기 호출해 큐를 즉시 _state에 노출(기존엔 async 태스크가 만들어 start 직후 비어 보임 —
+  /api/nightrunner/start 응답도 개선). _loop는 prebuilt queue 인자 받음. 안전은 그대로 NightRunner의
+  _safety_hold가 책임(AI는 시작/정지만, 게이트 우회 없음). 검증: 도구 위임·교차배제·회귀 S3/S5.`

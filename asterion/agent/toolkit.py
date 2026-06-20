@@ -28,7 +28,8 @@ _KO = {"수성": "mercury", "금성": "venus", "화성": "mars", "목성": "jupi
 
 class ToolKit:
     def __init__(self, *, cfg, snapshot_fn: Callable[[], dict], meridian,
-                 orchestrator, bus, drivers, db=None, sentinel=None):
+                 orchestrator, bus, drivers, db=None, sentinel=None,
+                 night_runner=None):
         self.cfg = cfg
         self.snapshot = snapshot_fn
         self.meridian = meridian
@@ -37,6 +38,7 @@ class ToolKit:
         self.drivers = drivers
         self.db = db
         self.sentinel = sentinel
+        self.night_runner = night_runner
         self.lat = float(cfg.get("site.latitude", 36.64))
         self.lon = float(cfg.get("site.longitude", 127.49))
 
@@ -102,6 +104,16 @@ class ToolKit:
                 "set": {"type": "string", "description": "campaign 대상군: messier/all/galaxies/nebulae(선택)"},
                 "filters": {"type": "array", "items": {"type": "string"}},
                 "exposure_s": {"type": "number"}, "count_per_filter": {"type": "integer"}}),
+            fn("run_night",
+               "승인된 오늘 밤 시간표를 무인 자동 운영 시작(Night Runner) — 슬롯 순서로 안전 게이트를 "
+               "거쳐 차례로 실행하고, 실패해도 다음으로 잇는다. now=true면 슬롯 시각을 무시하고 지금 바로 "
+               "연달아. 이미 운영 중이거나 단일 관측 중이면 거부. 예: '오늘 밤 자동으로 돌려', '계획대로 시작'.",
+               {"now": {"type": "boolean",
+                        "description": "true면 슬롯 대기 없이 즉시 연달아(기본 false=슬롯 시각 준수)"}}),
+            fn("stop_night",
+               "진행 중인 무인 야간 운영을 정지(현재 계획 종료 후 멈춤). 예: '야간 운영 멈춰', '그만 돌려'."),
+            fn("night_status",
+               "무인 야간 운영 현황 — 활성·현재 대상·대기 큐 길이·완료/실패/스킵 수. 예: '지금 어디까지 돌았어'."),
         ]
 
     # ---------- 디스패치 ----------
@@ -461,6 +473,45 @@ class ToolKit:
         self.meridian.set_goal(gt, params)
         return {"ok": True, "goal_type": gt, "params": params,
                 "note": "목표 저장됨 — 이제 '계획 짜줘' 하면 이 목표대로 시간표를 짭니다."}
+
+    # ---------- 대화 제어: 무인 야간 운영(Night Runner) ----------
+
+    async def _t_run_night(self, a: dict) -> dict:
+        if self.night_runner is None:
+            return {"error": "야간 운영기(Night Runner) 미연결"}
+        respect = not bool(a.get("now"))
+        try:
+            await self.night_runner.start(respect_slots=respect)
+        except Exception as e:   # ActionError(이미 운영중/관측중) 등 → 사유 그대로
+            return {"error": str(e)}
+        st = self.night_runner.status_dict()
+        q = st.get("queue", [])
+        return {"started": True, "respect_slots": respect, "queue_len": len(q),
+                "queue": [{"plan_id": i.get("plan_id"), "target": i.get("target"),
+                           "slot": i.get("slot_start")} for i in q[:8]],
+                "note": ("슬롯 시각에 맞춰 차례로 실행" if respect else "지금 바로 연달아 실행")
+                + " — 진행은 night_status로 확인, 멈추려면 stop_night"}
+
+    async def _t_stop_night(self, a: dict) -> dict:
+        if self.night_runner is None:
+            return {"error": "야간 운영기 미연결"}
+        try:
+            await self.night_runner.request_stop()
+        except Exception as e:
+            return {"error": str(e)}
+        return {"stopping": True, "note": "현재 계획 종료 후 멈춥니다"}
+
+    async def _t_night_status(self, a: dict) -> dict:
+        if self.night_runner is None:
+            return {"error": "야간 운영기 미연결"}
+        st = self.night_runner.status_dict()
+        cur = st.get("current") or {}
+        return {"active": st.get("active"), "phase": st.get("phase"),
+                "held": st.get("held"), "reason": st.get("reason"),
+                "current": (cur.get("target") if cur else None),
+                "queue_len": len(st.get("queue", [])),
+                "done": len(st.get("done", [])), "failed": len(st.get("failed", [])),
+                "skipped": len(st.get("skipped", []))}
 
     async def _t_plan_night(self, a: dict) -> dict:
         if self.meridian is None:

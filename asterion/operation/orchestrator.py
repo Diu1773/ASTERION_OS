@@ -192,7 +192,7 @@ class ObservationOrchestrator:
         count = int(strat.get("count_per_filter", 1))
         dither = float(strat.get("dither_arcsec", 0.0))
 
-        session = self.db.add(ObservationSession(kind="science"))
+        session = self.db.add(ObservationSession(kind="science", plan_id=pid))
         self.meridian.set_status(pid, M.RUNNING)
         self._set(running=True, phase="시작", plan_id=pid, session_id=session.id,
                   target=name, filters=filters, filter=None, frame=0,

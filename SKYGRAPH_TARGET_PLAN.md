@@ -30,8 +30,9 @@
 - **T4 풀리뷰**: review-full 또는 /code-review로 변경분 검토 + 전체 회귀(create_app·기존 키 보존·SIM).
 
 ## 3. 체크리스트 (각 단계 = 1커밋, 검증 후 다음)
-- [ ] **T1 — Skygraph 엣지**: ontology ObservationSession.plan_id 추가 + orchestrator가 세션에 기록.
-  검증(SIM): 마이그레이션 자동적용(_sync_columns), 세션 생성 시 plan_id 저장, 기존 회귀 그린.
+- [x] **T1 — Skygraph 엣지**: ontology `ObservationSession.plan_id`(FK nullable) + orchestrator가
+  `ObservationSession(kind="science", plan_id=pid)`로 기록. ✅검증: 기존 DB에 _sync_columns가 plan_id
+  컬럼 자동 ALTER ADD, 저장/조회(4242) OK, create_app 94라우트 회귀 그린.
 - [ ] **T2 — dossier 백엔드**: `core/skygraph.py` target_dossier + `/api/targets`·`/api/targets/{name}`.
   검증: 시드(target+plan+session+frame+QM)→API가 관측요청/프레임/품질/가시성/추천 집계 반환.
 - [ ] **T3 — Target Page UI**: dossier를 보여주는 패널(개요·가시성·프레임이력·품질·추천). 패널 등록.
@@ -53,4 +54,7 @@
 7. 범위 = Ph9(T1~T4). 새 스코프로 새지 말 것.
 
 ## 6. 결정 로그 (루프가 추가)
--
+- `2026-06-20 T1 — ObservationSession.plan_id(FK observation_plan, nullable) 추가. orchestrator
+  세션 생성에 plan_id=pid 기록 → Target→Plan→Session→Frame 1급 조인(문자열 summary 매칭 탈피).
+  _sync_columns가 기존 DB에 자동 ALTER ADD COLUMN(검증됨). 기존 세션은 plan_id=NULL(하위호환).
+  autoflat 등 다른 세션은 plan_id 없이 생성 — science 세션만 채움. create_app 회귀 그린.`

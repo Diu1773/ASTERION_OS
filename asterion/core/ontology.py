@@ -78,6 +78,9 @@ class ObservationSession(Base):
     __tablename__ = "observation_session"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(String(64))  # autoflat / science / focus ...
+    # Skygraph 1급 엣지: 이 세션이 실행한 계획 → Target→Plan→Session→Frame 조인(Ph9).
+    plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("observation_plan.id"), nullable=True)
     started_utc: Mapped[str] = mapped_column(String(40), default=utc_iso)
     ended_utc: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="running")

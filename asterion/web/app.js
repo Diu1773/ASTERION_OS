@@ -1681,6 +1681,83 @@ function wireNightRunner() {
   }
 }
 
+// ---------- 멀티나잇 캠페인 — 계획 탭 최상위 ----------
+// /api/campaigns list·create·plan-night·status(PATCH). 진행률(완료/잔여/퍼센트/예상밤) +
+// plan-night→잔여만 시간표로 배분(스케줄 패널 동시 갱신). 백엔드 무수정 — 기존 REST만.
+const _CMP_ST = { active: ["진행중", "st-ok"], paused: ["일시정지", "st-draft"], done: ["완료", "st-done"] };
+function renderCampaigns(list) {
+  list = list || [];
+  const empty = $("cmp-empty"); if (empty) empty.hidden = list.length > 0;
+  const wrap = $("cmp-list"); if (!wrap) return;
+  wrap.innerHTML = list.map((c) => {
+    const st = _CMP_ST[c.status] || [c.status || "—", "st-draft"];
+    const pct = Math.max(0, Math.min(100, Number(c.percent) || 0));
+    const nights = c.est_nights ? `${c.est_nights}밤` : "—";
+    return `<div class="cmp-row">
+      <div class="cmp-main">
+        <div class="cmp-top"><b>${_schEsc(c.name)}</b> <span class="sch-dim">· ${_schEsc(c.target_set)}</span>
+          <span class="sch-badge ${st[1]} cmp-st" data-cmp-st="${c.id}" data-status="${_schEsc(c.status)}" title="클릭: 진행 ↔ 일시정지">${st[0]}</span></div>
+        <div class="cmp-bar"><div class="cmp-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="cmp-stat"><span>${c.done}/${c.total} <b>${pct}%</b></span><span class="sch-dim">잔여 ${c.remaining} · ${nights}</span></div>
+      <button class="btn btn-sm go" data-cmp-plan="${c.id}" title="오늘 밤 잔여 대상을 비겹침 시간표로 배분">▶ plan-night</button>
+    </div>`;
+  }).join("");
+}
+async function loadCampaigns() {
+  try {
+    const r = await fetch("/api/campaigns");
+    if (!r.ok) return;
+    const d = await r.json();
+    renderCampaigns(d.campaigns || []);
+  } catch (e) { /* noop */ }
+}
+function wireCampaigns() {
+  const nb = $("cmp-new"), form = $("cmp-form");
+  if (nb && !nb.dataset.w) {
+    nb.dataset.w = "1";
+    nb.onclick = () => { if (form) form.hidden = !form.hidden; };
+  }
+  const cr = $("cmp-create");
+  if (cr && !cr.dataset.w) {
+    cr.dataset.w = "1";
+    cr.onclick = async () => {
+      const nameEl = $("cmp-name"), name = (nameEl.value || "").trim();
+      if (!name) { nameEl.focus(); return; }
+      try {
+        await post("/api/campaigns", { name, target_set: $("cmp-set").value, per_night: Number($("cmp-pernight").value) || 6 });
+        nameEl.value = ""; if (form) form.hidden = true;
+        loadCampaigns();
+      } catch (e) { /* noop (post가 로그) */ }
+    };
+  }
+  const list = $("cmp-list");
+  if (list && !list.dataset.w) {
+    list.dataset.w = "1";
+    list.onclick = async (e) => {
+      const pb = e.target.closest("[data-cmp-plan]");
+      if (pb) {
+        pb.disabled = true;
+        try {
+          const r = await post(`/api/campaigns/${pb.dataset.cmpPlan}/plan-night`, {});
+          loadCampaigns();
+          if (typeof loadSchedule === "function") loadSchedule();   // 새 draft가 스케줄에 즉시 보이게
+          logLine({ ts: nowts(), source: "ui", level: "info", msg: `캠페인 plan-night — ${r && r.count != null ? r.count : "?"}개 슬롯 배분` });
+        } catch (err) { /* noop */ } finally { pb.disabled = false; }
+        return;
+      }
+      const sb = e.target.closest("[data-cmp-st]");
+      if (sb) {
+        const next = sb.dataset.status === "active" ? "paused" : "active";
+        try {
+          await fetch(`/api/campaigns/${sb.dataset.cmpSt}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: next }) });
+          loadCampaigns();
+        } catch (err) { /* noop */ }
+      }
+    };
+  }
+}
+
 // ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
 // 이벤트별 짧은 소리를 등록제로. 새 소리는 SOUNDS에 [freq, 시작offset(s), 길이(s)] 시퀀스만 추가.
 // 촬영음(프레임 저장)·알림음(경고/위험)·성공/오류·연결/해제. 음소거는 localStorage에 영속.
@@ -1899,7 +1976,7 @@ const PROTO_GS_H = {
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
   forge: 8, pixview: 12, connections: 7, "log-sys": 7, sysinfo: 5,
-  nightrunner: 14,
+  nightrunner: 14, campaign: 12,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -1917,12 +1994,13 @@ const PROTO_GS_LAYOUT = {
   weather:      { x: 0, y: 8, w: 4, h: 10 },
   "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
   "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
-  // 계획(plan)
-  schedule: { x: 0, y: 0,  w: 12, h: 14 },
-  timeline: { x: 0, y: 14, w: 12, h: 9 },
-  fov:      { x: 0, y: 23, w: 12, h: 13 },
-  tonight:  { x: 0, y: 36, w: 12, h: 17 },
-  target:   { x: 0, y: 53, w: 12, h: 16 },
+  // 계획(plan) — 캠페인(여러밤)이 최상위, 그 아래 스케줄(오늘밤)→타임라인→FOV→추천→대상
+  campaign: { x: 0, y: 0,  w: 12, h: 12 },
+  schedule: { x: 0, y: 12, w: 12, h: 14 },
+  timeline: { x: 0, y: 26, w: 12, h: 9 },
+  fov:      { x: 0, y: 35, w: 12, h: 13 },
+  tonight:  { x: 0, y: 48, w: 12, h: 17 },
+  target:   { x: 0, y: 65, w: 12, h: 16 },
   // 운영(ops)
   nightrunner: { x: 0, y: 0, w: 12, h: 14 },
   // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
@@ -1954,6 +2032,7 @@ const PANEL_DEF = {
   schedule:     { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 11, defW: 12, defH: 14, maxW: 12 },
   timeline:     { klass: "viz",     fills: true,     ar: [12, 3], minW: 8, minH: 5,  defW: 12, defH: 6,  maxW: 12 },
   nightrunner:  { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 14, maxW: 12 },
+  campaign:     { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 8,  defW: 12, defH: 12, maxW: 12 },
   fov:          { klass: "viz",     fills: false,    ar: null,    minW: 8, minH: 10, defW: 12, defH: 13, maxW: 12 },
   tonight:      { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 12, defW: 12, defH: 17, maxW: 12 },
   target:       { klass: "control", fills: "scroll", ar: null,    minW: 8, minH: 10, defW: 12, defH: 16, maxW: 12 },
@@ -2470,7 +2549,7 @@ function showTab(tab) {
   if (PROTO_TABS.has(tab) && typeof GridStack !== "undefined") ensureGridStack(tab);
   else ensureGrid(tab);            // 표시된 뒤에야 폭을 측정할 수 있다
   if (tab === "system") refreshDevices();
-  if (tab === "plan") loadSchedule();   // AI 야간 계획 — 표시될 때 최신 plan 불러오기(캔버스 폭 확보 후)
+  if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
   if (tab === "analysis") { wirePixview(); pvLoadFrames(); }   // 프레임 뷰어 — 최신 프레임 목록
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
@@ -3519,6 +3598,7 @@ async function init() {
   wireTarget();                         // 대상 페이지(Skygraph dossier) 검색 바인딩
   wireAlerts();                         // 위험 알림 종/배지 + 초기 미확인 로드
   wireNightRunner();                    // 무인 운영 시작/중지 버튼(운영 탭)
+  wireCampaigns();                      // 멀티나잇 캠페인 생성/plan-night(계획 탭)
   initSound();                          // 사운드 기반(촬영음·알림음) + 음소거 토글
 }
 

@@ -112,7 +112,7 @@ def build_analysis_router(sentinel: Any, framedata: Any = None,
 
     @router.get("/api/telemetry/persisted")
     async def telemetry_persisted(channel: str = "", hours: float = 24.0,
-                                  limit: int = 5000):
+                                  limit: int = 5000, max_points: int = 0):
         """영속 다운샘플 텔레메트리(1분 버킷 min/mean/max, 보존기간 내)의 과거 시계열.
 
         라이브 1h 인메모리 링(/api/telemetry/history)과 달리 며칠~보존기간(기본 30일)까지
@@ -133,11 +133,33 @@ def build_analysis_router(sentinel: Any, framedata: Any = None,
         h = max(0.1, min(float(hours), 24.0 * 400))      # 보존기간 상한 가드
         since = (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat()
         rows = db.telemetry_persisted(channel=channel, since_utc=since,
-                                      limit=max(1, min(int(limit), 20000)))
+                                      limit=max(1, min(int(limit), 50000)))
         rows.sort(key=lambda r: r.get("utc") or "")      # 관측시각 오름차순(out-of-order 안전)
-        return {"channel": channel, "hours": h,
-                "points": [{"t": r["utc"], "min": r["vmin"], "mean": r["vmean"],
-                            "max": r["vmax"], "n": r["n"]} for r in rows]}
+        points = [{"t": r["utc"], "min": r["vmin"], "mean": r["vmean"],
+                   "max": r["vmax"], "n": r["n"]} for r in rows]
+        # 자동 다운샘플(Grafana식 'max data points') — 점이 목표보다 많으면 균등 버킷으로 묶어
+        # min/max 밴드는 보존(min=min, max=max) + n-가중 평균. 패널 폭에 맞춰 과밀·과대전송 방지.
+        raw_n = len(points)
+        mp = int(max_points or 0)
+        if mp > 0 and raw_n > mp:
+            import math
+            g = math.ceil(raw_n / mp)
+            agg = []
+            for i in range(0, raw_n, g):
+                chunk = points[i:i + g]
+                mins = [p["min"] for p in chunk if p["min"] is not None]
+                maxs = [p["max"] for p in chunk if p["max"] is not None]
+                num = sum((p["mean"] or 0.0) * (p["n"] or 1)
+                          for p in chunk if p["mean"] is not None)
+                den = sum((p["n"] or 1) for p in chunk if p["mean"] is not None)
+                agg.append({"t": chunk[len(chunk) // 2]["t"],
+                            "min": min(mins) if mins else None,
+                            "max": max(maxs) if maxs else None,
+                            "mean": (num / den) if den else None,
+                            "n": sum(p["n"] or 0 for p in chunk)})
+            points = agg
+        return {"channel": channel, "hours": h, "raw_points": raw_n,
+                "downsampled": len(points) != raw_n, "points": points}
 
     # ---------- Calibration Library (§10.5) ----------
 

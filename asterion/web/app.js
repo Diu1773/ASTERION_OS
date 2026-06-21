@@ -98,6 +98,14 @@ function wireLogin() {
   };
 }
 
+// 원격 세션 데드맨 하트비트(Phase C) — 인증된 세션이 30초마다 생존 신호. 데드맨이 꺼져
+// 있으면 서버가 기록만 하고 무동작(무해). 끊기면 서버가 세이프-스테이트로 전환한다.
+function startHeartbeat() {
+  const beat = () => { fetch("/api/session/heartbeat", { method: "POST" }).catch(() => {}); };
+  beat();
+  setInterval(beat, 30000);
+}
+
 // HiDPI 캔버스
 function hidpi(cv) {
   const dpr = window.devicePixelRatio || 1;
@@ -1604,6 +1612,154 @@ function qvWire() {
   }
 }
 
+// ---------- 텔레메트리 히스토리 (영속 다운샘플 시계열 — 내장 'Grafana' 패널) ----------
+// /api/telemetry/persisted: 채널 선택 + 시간범위 + 자동 다운샘플(max_points=캔버스 폭,
+// Grafana의 max-data-points식). min/max 밴드 + 평균선 + 축/그리드 + 호버 툴팁.
+let telehistHours = 24;          // 현재 범위(h): 1/6/24/168/720
+let telehistLast = null;         // 마지막 응답 캐시(리사이즈 재그리기용 — 재요청 안 함)
+let telehistTimer = null;        // 자동갱신 인터벌
+
+function _thFmtVal(v) {
+  const a = Math.abs(v);
+  if (a >= 1000) return v.toFixed(0);
+  if (a >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+function _thFmtTime(ms, spanMs) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  if (spanMs > 3 * 86400e3) return `${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+  if (spanMs > 86400e3) return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}h`;
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function drawTeleHistOn(cv, data) {
+  if (!cv) return;
+  const { ctx, w, h } = hidpi(cv);
+  ctx.clearRect(0, 0, w, h);
+  const pts = ((data && data.points) || []).filter((p) => p && p.mean != null);
+  cv._th = null;
+  if (pts.length < 2) {
+    ctx.fillStyle = "#667"; ctx.font = "12px ui-monospace,monospace";
+    ctx.fillText("데이터 없음", 10, h / 2);
+    return;
+  }
+  const xs = pts.map((p) => Date.parse(p.t));
+  const t0 = xs[0], t1 = xs[xs.length - 1];
+  let lo = Infinity, hi = -Infinity;
+  pts.forEach((p) => {
+    if (p.min != null) lo = Math.min(lo, p.min);
+    if (p.max != null) hi = Math.max(hi, p.max);
+    lo = Math.min(lo, p.mean); hi = Math.max(hi, p.mean);
+  });
+  if (!isFinite(lo) || !isFinite(hi)) return;
+  const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  const padL = 46, padR = 12, padT = 10, padB = 22;
+  const X = (t) => padL + (t - t0) / Math.max(1, t1 - t0) * (w - padL - padR);
+  const Y = (v) => padT + (1 - (v - lo) / Math.max(1e-9, hi - lo)) * (h - padT - padB);
+  ctx.font = "10px ui-monospace,monospace"; ctx.textAlign = "left";
+  // y 그리드 + 라벨 (5단)
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, y = Y(v);
+    ctx.strokeStyle = "rgba(120,140,180,.12)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = "#7a8699"; ctx.fillText(_thFmtVal(v), 4, y + 3);
+  }
+  // x 시각 라벨 (시작/중간/끝)
+  const span = t1 - t0;
+  [[t0, "left"], [(t0 + t1) / 2, "center"], [t1, "right"]].forEach(([t, al]) => {
+    ctx.fillStyle = "#7a8699"; ctx.textAlign = al;
+    ctx.fillText(_thFmtTime(t, span), X(t), h - 7);
+  });
+  ctx.textAlign = "left";
+  // min/max 밴드
+  ctx.beginPath();
+  pts.forEach((p, i) => { const x = X(xs[i]), y = Y(p.max != null ? p.max : p.mean); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  for (let i = pts.length - 1; i >= 0; i--) { const x = X(xs[i]), y = Y(pts[i].min != null ? pts[i].min : pts[i].mean); ctx.lineTo(x, y); }
+  ctx.closePath(); ctx.fillStyle = "rgba(76,201,240,.13)"; ctx.fill();
+  // 평균선
+  ctx.beginPath();
+  pts.forEach((p, i) => { const x = X(xs[i]), y = Y(p.mean); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1.5; ctx.stroke();
+  cv._th = { pts, xs, X, Y, t0, t1, lo, hi, padL, padR, padT, padB, w, h };  // 툴팁용 기하
+}
+function telehistRedraw() {
+  const cv = $("th-canvas");
+  if (cv && telehistLast) drawTeleHistOn(cv, telehistLast);
+}
+async function telehistLoad() {
+  const sel = $("th-channel"); const cv = $("th-canvas");
+  if (!sel || !cv) return;
+  if (!sel.dataset.filled) {                       // 채널 목록 1회 채움(촬영/적재된 것만)
+    try {
+      const d = await (await fetch("/api/telemetry/persisted")).json();
+      const chans = d.channels || [];
+      sel.innerHTML = chans.length
+        ? chans.map((c) => `<option value="${_schEsc(c)}">${_schEsc(c)}</option>`).join("")
+        : '<option value="">채널 없음</option>';
+      sel.dataset.filled = "1";
+      const pref = chans.find((c) => /temp/i.test(c)) || chans.find((c) => /alt/i.test(c)) || chans[0];
+      if (pref) sel.value = pref;
+    } catch (e) { /* noop */ }
+  }
+  const ch = sel.value;
+  if (!ch) { telehistLast = { points: [] }; drawTeleHistOn(cv, telehistLast); return; }
+  const mp = Math.max(80, Math.round(cv.clientWidth || 600));   // 자동 해상도 = 패널 폭(점/px)
+  try {
+    telehistLast = await (await fetch(
+      `/api/telemetry/persisted?channel=${encodeURIComponent(ch)}&hours=${telehistHours}&max_points=${mp}`)).json();
+  } catch (e) { telehistLast = { points: [] }; }
+  const n = (telehistLast.points || []).length;
+  const emp = $("th-empty"); if (emp) emp.hidden = n > 0;
+  const note = $("th-note");
+  if (note) note.textContent = n
+    ? `${n}점${telehistLast.downsampled ? ` · ${telehistLast.raw_points}분버킷→다운샘플` : ""}`
+    : "보존된 데이터 없음";
+  drawTeleHistOn(cv, telehistLast);
+}
+function telehistWire() {
+  const seg = $("th-range");
+  if (seg && !seg.dataset.w) {
+    seg.dataset.w = "1";
+    seg.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => {
+        seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on"); telehistHours = Number(b.dataset.h) || 24; telehistLoad();
+      };
+    });
+  }
+  const sel = $("th-channel"); if (sel && !sel.dataset.wc) { sel.dataset.wc = "1"; sel.onchange = telehistLoad; }
+  const rl = $("th-reload"); if (rl && !rl.dataset.w) { rl.dataset.w = "1"; rl.onclick = telehistLoad; }
+  const ar = $("th-autorefresh");
+  if (ar && !ar.dataset.w) {
+    ar.dataset.w = "1";
+    ar.onchange = () => {
+      if (telehistTimer) { clearInterval(telehistTimer); telehistTimer = null; }
+      if (ar.checked) telehistTimer = setInterval(() => { if (currentTab() === "analysis") telehistLoad(); }, 30000);
+    };
+  }
+  const cv = $("th-canvas");
+  if (cv && !cv.dataset.wt) {
+    cv.dataset.wt = "1";
+    let tip = $("th-tip");
+    if (!tip) { tip = document.createElement("div"); tip.id = "th-tip"; tip.className = "th-tip"; document.body.appendChild(tip); }
+    cv.onmousemove = (ev) => {
+      const g = cv._th; if (!g) { tip.style.display = "none"; return; }
+      const r = cv.getBoundingClientRect();
+      const px = (ev.clientX - r.left) / r.width * g.w;     // CSS→캔버스 좌표
+      let best = 0, bd = Infinity;
+      g.xs.forEach((t, i) => { const d = Math.abs(g.X(t) - px); if (d < bd) { bd = d; best = i; } });
+      const p = g.pts[best];
+      tip.innerHTML = `<b>${new Date(g.xs[best]).toLocaleString()}</b>`
+        + `<span>평균 ${_thFmtVal(p.mean)}</span>`
+        + (p.min != null && p.max != null ? `<span>범위 ${_thFmtVal(p.min)}~${_thFmtVal(p.max)}</span>` : "");
+      tip.style.display = "block";
+      tip.style.left = (ev.clientX + 12) + "px";
+      tip.style.top = (ev.clientY + 12) + "px";
+    };
+    cv.onmouseleave = () => { const t = $("th-tip"); if (t) t.style.display = "none"; };
+  }
+}
+
 // ---------- 위험 알림 (무인 운영 안전 루프) ----------
 // WS type:"alert"를 받아 토스트 + CRITICAL 경보음(WebAudio) + 미확인 배지. 종(bell) 클릭 시 전체 확인.
 let alertUnacked = 0;
@@ -2053,7 +2209,7 @@ function drawChart(chart) {
   chart.el.querySelector(".ct-legend").innerHTML = legend.map(([k, v, ki]) =>
     `<span><i style="background:${PALETTE[ki % PALETTE.length]}"></i>${k}: ${v}</span>`).join("");
 }
-function drawAllCharts() { charts.forEach(drawChart); }
+function drawAllCharts() { charts.forEach(drawChart); telehistRedraw(); }
 
 // ---------- 워크스페이스 탭 + Muuri 패널 매니저 (갭 없는 팩킹) ----------
 
@@ -2087,7 +2243,7 @@ const PROTO_GS_H = {
   safety: 5, weather: 7, "embed-sat": 8, "embed-cctv": 8,
   schedule: 14, timeline: 6, target: 16, plots: 9, frames: 7, actions: 7,
   forge: 8, pixview: 12, connections: 7, "log-sys": 7, sysinfo: 5,
-  nightrunner: 14, campaign: 12, forecast: 7,
+  nightrunner: 14, campaign: 12, forecast: 7, telehist: 11,
 };
 // devices 탭 기본 배치 — 비대칭 미션컨트롤: 큰 Sky 모니터(좌측 세로) + 우측 계기
 // 클러스터(오토플랫·마운트·카메라) + 하단 와이드(포커서·프레임 뷰어). 12열 무빈칸 타일.
@@ -2121,6 +2277,7 @@ const PROTO_GS_LAYOUT = {
   actions: { x: 6, y: 10, w: 6,  h: 8  },
   forge:   { x: 0, y: 18, w: 12, h: 8  },
   pixview: { x: 0, y: 26, w: 12, h: 12 },
+  telehist:{ x: 0, y: 38, w: 12, h: 11 },
   // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
   connections: { x: 0, y: 0,  w: 8,  h: 20 },
   "log-sys":   { x: 8, y: 0,  w: 4,  h: 20 },
@@ -2154,6 +2311,7 @@ const PANEL_DEF = {
   actions:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
   forge:        { klass: "control", fills: false,    ar: null,    minW: 6, minH: 5,  defW: 12, defH: 8,  maxW: 12 },
   pixview:      { klass: "control", fills: false,    ar: null,    minW: 8, minH: 8,  defW: 12, defH: 12, maxW: 12 },
+  telehist:     { klass: "viz",     fills: true,     ar: [12, 5], minW: 8, minH: 7,  defW: 12, defH: 11, maxW: 12 },
   connections:  { klass: "control", fills: false,    ar: null,    minW: 5, minH: 8,  defW: 8,  defH: 20, maxW: 12 },
   "log-sys":    { klass: "control", fills: "scroll", ar: null,    minW: 3, minH: 8,  defW: 4,  defH: 20, maxW: 12 },
   sysinfo:      { klass: "control", fills: false,    ar: null,    minW: 6, minH: 4,  defW: 12, defH: 11, maxW: 12, maxH: 13 },
@@ -2665,7 +2823,7 @@ function showTab(tab) {
   if (tab === "env") { loadForecast(); loadWeatherSources(); }   // 기상예보 + 분산 소스 — 표시 시 최신
   if (tab === "plan") { wireCampaigns(); loadCampaigns(); loadSchedule(); }   // 캠페인 + AI 야간 계획
   if (tab === "ops") { wireNightRunner(); loadNightRunner(); nrStartPoll(); } else { nrStopPoll(); }   // 무인 운영 — 활성 동안만 폴링
-  if (tab === "analysis") { qvWire(); qvLoad(); }   // 품질 추이 — PP 시계열(드롭다운은 qvLoad가 facets로)
+  if (tab === "analysis") { qvWire(); qvLoad(); telehistWire(); telehistLoad(); }   // 품질 추이 + 텔레메트리 히스토리
   if (typeof updateLogDock === "function") updateLogDock();   // 시스템 탭이면 독 숨김
   relayoutAfter(tab);
 }
@@ -3676,6 +3834,7 @@ async function init() {
   await checkSession();
   if (!SESSION.authenticated) { showLogin(true); return; }   // 미인증 → 게이트만, 부팅 보류
   applySessionChrome();
+  startHeartbeat();                                           // 원격 세션 데드맨 하트비트(Phase C)
   initWorkspace();
   try {
     const [status, logs, frames, actions] = await Promise.all([

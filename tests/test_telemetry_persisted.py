@@ -62,6 +62,27 @@ class TestTelemetryPersisted(unittest.TestCase):
         r = self.c.get("/api/telemetry/persisted", params={"channel": "nope", "hours": 24})
         self.assertEqual(r.json()["points"], [])
 
+    def test_max_points_downsamples_preserving_band(self):
+        # 60개 분버킷(1시간) → max_points=10이면 ≤10 버킷으로 다운샘플, min/max 밴드는 전역 보존.
+        now = datetime.now(timezone.utc)
+        for i in range(60):
+            v = float(i)   # mean 0..59, 버킷별 min=max=v
+            self.db.add(TelemetrySample(channel="dense",
+                                        utc=_iso(now - timedelta(minutes=60 - i)),
+                                        vmin=v, vmean=v, vmax=v, n=60))
+        r = self.c.get("/api/telemetry/persisted",
+                       params={"channel": "dense", "hours": 2, "max_points": 10})
+        j = r.json()
+        self.assertTrue(j["downsampled"])
+        self.assertEqual(j["raw_points"], 60)
+        self.assertLessEqual(len(j["points"]), 10)
+        # 다운샘플돼도 전역 min(0)·max(59)는 어느 버킷에 보존돼야(밴드 안 잃음)
+        self.assertAlmostEqual(min(p["min"] for p in j["points"]), 0.0)
+        self.assertAlmostEqual(max(p["max"] for p in j["points"]), 59.0)
+        # 시간 오름차순 유지
+        ts = [p["t"] for p in j["points"]]
+        self.assertEqual(ts, sorted(ts))
+
 
 if __name__ == "__main__":
     unittest.main()

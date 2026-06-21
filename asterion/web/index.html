@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=154">
+<link rel="stylesheet" href="/static/style.css?v=155">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -725,6 +725,24 @@
       </section>
       </div>
 
+      <!-- 텔레메트리 히스토리 (영속 다운샘플 시계열 · 내장 Grafana 패널) -->
+      <div class="muuri-item w12" data-panel="telehist">
+      <section class="muuri-item-content card">
+        <div class="card-head"><span class="card-title">텔레메트리 히스토리</span><span class="card-tag">TELEMETRY HISTORY · 보존기간</span></div>
+        <div class="th-bar">
+          <select id="th-channel" class="tn-sort"><option value="">채널…</option></select>
+          <span class="tn-seg" id="th-range"><button data-h="1">1h</button><button data-h="6">6h</button><button class="on" data-h="24">24h</button><button data-h="168">7d</button><button data-h="720">30d</button></span>
+          <label class="th-auto"><input type="checkbox" id="th-autorefresh"> 자동갱신</label>
+          <span class="spacer"></span>
+          <span class="th-note" id="th-note"></span>
+          <button class="btn btn-sm" id="th-reload">↻</button>
+        </div>
+        <div class="th-plot"><canvas id="th-canvas" class="js-c-th"></canvas></div>
+        <div class="th-empty" id="th-empty" hidden>보존된 텔레메트리가 없습니다. 수집이 1분 이상 쌓이면 채널별 추세(min/mean/max)가 보존기간(기본 90일)까지 그려집니다.</div>
+        <div class="hint">시간범위를 고르면 해상도(점 개수)는 패널 폭에 맞춰 <b>자동 조정</b>됩니다(Grafana식 다운샘플). 라이브 최근 1시간은 위 ‘시계열 플롯’.</div>
+      </section>
+      </div>
+
     </div>
   </section>
 
@@ -868,7 +886,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=185"></script>
+<script src="/static/app.js?v=187"></script>
 <script src="/static/agent_chat.js?v=5" defer></script>
 </body>
 </html>

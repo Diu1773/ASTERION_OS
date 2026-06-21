@@ -259,18 +259,21 @@ def create_app() -> FastAPI:
     orch = ObservationOrchestrator(
         cfg, drivers, bus, db, events, meridian, cfg.data_dir / "frames",
         preview_cb=publish_preview,
-        safety_fn=lambda: sampler.snapshot.get("safety"),
-        platesolve_fn=sim_platesolve, autofocus_fn=sim_autofocus)
+        safety_fn=lambda: sampler.current_safety(),
+        platesolve_fn=sim_platesolve, autofocus_fn=sim_autofocus,
+        occupancy_fn=lambda: ("수동 캡처 실행 중 — 관측 시작 거부" if capture.active()
+                              else "오토플랫 실행 중 — 관측 시작 거부" if runner.running()
+                              else None))
     sampler.orchestrator_status = orch.status_dict
     # Night Runner — 무인 야간 운영기(NIGHT_RUNNER_PLAN.md). 승인된 시간표를 슬롯 순서대로
     # Orchestrator 위에서 시퀀싱한다(장비 직접조작 X). 안전 스냅샷을 슬롯 진입 전 소비.
     night_runner = NightRunner(meridian, orch, events, cfg=cfg,
-                               safety_fn=lambda: sampler.snapshot.get("safety"))
+                               safety_fn=lambda: sampler.current_safety())
     sampler.night_runner_status = night_runner.status_dict
     # Sentinel — 프레임 품질 평가(Ph8, 로드맵 §10.4). 적재된 QualityMetric/Frame 지표로 판정.
     sentinel = Sentinel(cfg, db)
     # FrameData — 이미지/픽셀 뷰어 백엔드(저장 FITS→히스토그램/라인프로파일/통계 JSON).
-    framedata = FrameData(db)
+    framedata = FrameData(db, float(cfg.get("camera.saturation_adu", 65535)))
     # Calibration Library — bias/dark/flat 마스터 등록·매칭(Ph8, 로드맵 §10.5).
     calibration = CalibrationLibrary(db)
     # Forge — 실시간 단일 프레임 보정(퀵룩). 캡처된 LIGHT에 마스터 즉시 적용(numpy, 경량).
@@ -471,7 +474,8 @@ def create_app() -> FastAPI:
         (persist=False) — 단순 페이지 조회가 Decision을 무한 적재하지 않게. 학습 기록은 에이전트
         도구(target_feedback)가 의도적으로 호출할 때만."""
         from .analysis.feedback import target_feedback
-        return target_feedback(db, name, persist=False)
+        return target_feedback(db, name, persist=False,
+                               sat_adu=float(cfg.get("camera.saturation_adu", 65535)))
 
     @app.get("/api/sysinfo")
     async def api_sysinfo():

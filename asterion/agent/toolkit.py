@@ -17,6 +17,7 @@ from ..core.ontology import (
     ActionLog, CalibrationProduct, Decision, Frame, FocusRun,
     ObservationSession, TelemetrySample, WeatherRecord,
 )
+from ..operation.orchestrator import SAFE_TO_OBSERVE
 
 MIN_ALT_DEG = 5.0
 _BODIES = {"mercury", "venus", "mars", "jupiter", "saturn", "uranus",
@@ -172,19 +173,34 @@ class ToolKit:
                 out.append({"body": key, "alt_deg": r["alt_deg"], "az_deg": r["az_deg"]})
         return {"observable": out, "count": len(out)}
 
+    def _safety_gate_preconds(self, what: str) -> list[tuple[str, bool, str]]:
+        """현재 안전 스냅샷을 ActionBus 사전조건으로 변환 — AI 실행계도 운영(Orchestrator)과
+        똑같은 fail-closed 안전게이트(SAFE_TO_OBSERVE)를 통과한다. 스냅샷이 비었거나 상태가
+        없으면(state=None) SAFE_TO_OBSERVE에 없으므로 거부된다(fail-closed)."""
+        saf = (self.snapshot() or {}).get("safety") or {}
+        state = saf.get("state")
+        return [("safety_ok", state in SAFE_TO_OBSERVE,
+                 f"안전 상태 불가({state}) — {what} 거부")]
+
     async def _t_goto_planet(self, a: dict) -> dict:
         pos = await asyncio.to_thread(self._planet_altaz, a.get("name", ""))
         if "error" in pos:
             return pos
+        if pos.get("body") == "sun":
+            return {"ok": False,
+                    "reason": "태양으로는 슬루하지 않습니다 (센서/광학 손상 위험)"}
         if not pos["observable"]:
             return {"ok": False, "reason": pos["note"], "alt_deg": pos["alt_deg"]}
         mount = self.drivers["mount"]
         ra, dec = pos["ra_hours"], pos["dec_degs"]
         try:
+            # 안전게이트 통과 — 주간/악천후/기상 stale 등 SAFE_TO_OBSERVE 밖이면 슬루 거부.
             await self.bus.run("mount_goto_radec", actor="agent",
                                params={"ra_hours": ra, "dec_degs": dec,
                                        "target": pos["body"]},
-                               func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec))
+                               func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec),
+                               preconditions=self._safety_gate_preconds(
+                                   f"{pos['body']} 슬루"))
         except Exception as exc:
             return {"ok": False, "reason": f"goto 거부/실패: {exc}", "target": pos["body"]}
         return {"ok": True, "target": pos["body"], "alt_deg": pos["alt_deg"],
@@ -213,14 +229,18 @@ class ToolKit:
         st = await asyncio.to_thread(dome.status)
         if not st.can_command_shutter:
             return {"ok": False, "reason": "수동 셔터 — SW로 개폐 불가"}
-        fn = dome.open_shutter if a.get("open") else dome.close_shutter
+        opening = bool(a.get("open"))
+        fn = dome.open_shutter if opening else dome.close_shutter
+        # 개방만 안전게이트로 막는다 — 닫기는 안전 방향이라 무조건 허용(fail-closed).
+        preconds = self._safety_gate_preconds("돔 개방") if opening else None
         try:
             await self.bus.run("dome_shutter", actor="agent",
-                               params={"open": bool(a.get("open"))},
-                               func=lambda: asyncio.to_thread(fn))
+                               params={"open": opening},
+                               func=lambda: asyncio.to_thread(fn),
+                               preconditions=preconds)
         except Exception as exc:
             return {"ok": False, "reason": f"{exc}"}
-        return {"ok": True, "open": bool(a.get("open"))}
+        return {"ok": True, "open": opening}
 
     # ---------- 5단: 리포트·진단 (읽기 전용 — ActionBus 불필요) ----------
 
@@ -644,7 +664,9 @@ class ToolKit:
         if not name:
             return {"error": "대상 이름 필요"}
         from ..analysis.feedback import target_feedback
-        return await asyncio.to_thread(target_feedback, self.db, name)
+        sat_adu = float(self.cfg.get("camera.saturation_adu", 65535))
+        return await asyncio.to_thread(target_feedback, self.db, name,
+                                       sat_adu=sat_adu)
 
     async def _t_plan_night(self, a: dict) -> dict:
         if self.meridian is None:

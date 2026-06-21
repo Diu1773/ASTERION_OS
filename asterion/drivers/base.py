@@ -148,6 +148,10 @@ class WeatherStatus:
     rain: bool = False
     detail: str = ""
     device_name: str = ""
+    # 센서값이 마지막으로 *갱신*된 뒤 경과 초(드라이버가 알면). connected=True인데 센서
+    # 스테이션이 내부적으로 멈춰 고착값을 돌려주는 경우를 잡는 신선도 신호(ASCOM
+    # TimeSinceLastUpdate). None이면 '신선도 미보고' → status가 수신시각을 신선으로 본다.
+    reading_age_s: float | None = None
 
     def snapshot(self) -> dict:
         return {
@@ -155,7 +159,7 @@ class WeatherStatus:
             "temp": self.temp_c, "humidity": self.humidity,
             "dew_point": self.dew_point_c, "wind": self.wind_ms,
             "wind_dir": self.wind_dir_deg, "cloud": self.cloud_score,
-            "rain": self.rain,
+            "rain": self.rain, "reading_age_s": self.reading_age_s,
         }
 
     def telemetry(self) -> dict:

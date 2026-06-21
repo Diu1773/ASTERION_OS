@@ -87,11 +87,16 @@ def evaluate(*, missing_required: list[str] | None = None,
             reasons.append(f"구름 점수 {cloud:.2f} > 0.8")
         return _result(WEATHER_HOLD, reasons)
 
+    # 주간(태양 > -0.5°)은 세션 실행 중이어도 SAFE_CLOSED로 닫는다. 박명에 정당히
+    # 시작된 세션이 일출까지 이어질 때, session_running 분기가 먼저 평가되면 sun_alt와
+    # 무관하게 OBSERVING으로 자기마스킹되어 주간 슬루/노출 방지 게이트가 무력화된다.
+    # 주간 보호는 fail-safe 기본값이므로 세션 상태가 덮을 수 없다 (주간 검사를 앞으로).
+    if sun_alt > -0.5:
+        return _result(SAFE_CLOSED, [f"태양 고도 {sun_alt:+.1f}° (주간)"])
+
     if session_running:
         return _result(OBSERVING, ["자동 세션 실행 중"])
 
-    if sun_alt > -0.5:
-        return _result(SAFE_CLOSED, [f"태양 고도 {sun_alt:+.1f}° (주간)"])
     if sun_alt > -6.0:
         return _result(READY_CHECK,
                        [f"태양 고도 {sun_alt:+.1f}° (박명 — 점검/플랫 시간)"])

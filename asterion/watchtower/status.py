@@ -70,6 +70,12 @@ class StatusSampler:
                                         safety.WEATHER_WARN_AGE_S))
         self._wx_unsafe_s = float(cfg.get("safety.weather_unsafe_seconds",
                                           safety.WEATHER_UNSAFE_AGE_S))
+        # 상태 스냅샷 신선도 한계(메타 fail-closed). 샘플러 루프가 멈춰 스냅샷이 굳으면
+        # 소비자(Orchestrator/NightRunner)가 마지막 SAFE 값을 영구 신뢰하는 메타 fail-open이
+        # 생긴다. current_safety가 이 시간 이상 갱신 없는 스냅샷을 FAULT로 떨어뜨려 막는다.
+        # 첫 대량 스톨(장비별 status timeout 누적, 최대 ~Σtimeout)을 오탐하지 않게 넉넉히.
+        self._snapshot_max_age_s = float(
+            cfg.get("safety.snapshot_max_age_seconds", 30.0))
         self._lat = float(cfg.get("site.latitude", 36.6))
         self._lon = float(cfg.get("site.longitude", 127.5))
         # Sky Panel용 달·행성 (astropy, 느림) — 30초 캐시. 천체는 분당 ~0.13°만 움직임.
@@ -92,6 +98,26 @@ class StatusSampler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+    def current_safety(self) -> dict:
+        """안전 스냅샷을 신선도 게이트와 함께 반환(소비자용 단일 진입점).
+
+        샘플러 루프가 예외/교착으로 멈추면 self.snapshot이 마지막 값으로 굳는데, 그 값이
+        OPEN_ALLOWED/OBSERVING이면 Orchestrator·NightRunner의 안전게이트가 굳은 SAFE를
+        영원히 신뢰하는 메타 fail-open이 된다(판정기가 죽어도 '데이터 없음=unsafe'가 적용
+        안 됨). 스냅샷 자체가 _snapshot_max_age_s보다 오래되면 FAULT로 떨어뜨려 fail-closed.
+        """
+        snap = self.snapshot or {}
+        saf = snap.get("safety") or {}
+        ts = snap.get("ts_mono")
+        if ts is None:
+            return saf   # 첫 스냅샷 전 — 소비자는 state=None을 SAFE_TO_OBSERVE 밖=unsafe로 처리
+        age = time.monotonic() - ts
+        if age > self._snapshot_max_age_s:
+            return {"state": safety.FAULT, "stale_snapshot": True,
+                    "reasons": [f"상태 스냅샷 {age:.0f}s 갱신 없음 — "
+                                "샘플러 정지 의심 (fail-closed)"]}
+        return saf
 
     # ---------- 텔레메트리 ----------
 
@@ -132,7 +158,10 @@ class StatusSampler:
                     except Exception:
                         self.events.log("status", "쿨러 램프 틱 오류:\n"
                                         f"{traceback.format_exc()}", "error")
-                now = time.time()
+                # 적재/플러시 주기 게이트는 monotonic(경과시간) — wall clock은 NTP 역행/수동
+                # 보정 시 now가 과거로 점프해 게이트가 한동안 닫혀 이력 적재가 멈춘다.
+                # WeatherRecord/TelemetrySample의 시각 컬럼은 모델 default(UTC)로 별도 생성.
+                now = time.monotonic()
                 if now - self._last_weather_db >= 30.0:
                     self._last_weather_db = now
                     w = snap["weather"]
@@ -223,7 +252,7 @@ class StatusSampler:
         statuses: dict[str, Any] = {}
         device_snaps: dict[str, dict] = {}
         flat_telemetry: dict[str, Any] = {}
-        now_mono = time.time()
+        now_mono = time.monotonic()   # 회복 probe 백오프(_recover_next) 경과판정 — monotonic 필수
         for key, spec in REGISTRY.items():
             drv = self.drivers[key]
             stuck = self._stuck.get(key)
@@ -304,13 +333,22 @@ class StatusSampler:
                                     weather.dew_point_c)))
         weather_data = None
         if local_ok:
-            self._last_weather_ok = time.monotonic()
+            # 드라이버가 센서 갱신 경과(reading_age_s)를 보고하면 그 신선도를 반영한다.
+            # 'connected+값있음'만으로 매 틱 0으로 리셋하면, 센서가 내부적으로 멈춰
+            # Connected=True+고착값을 돌려줄 때 stale 게이트가 영영 발화하지 않는다(fail-closed
+            # 우회). 미보고(None)면 종전대로 수신시각을 신선으로 본다. age는 [0,..)로 클램프.
+            age = weather.reading_age_s
+            self._last_weather_ok = (
+                time.monotonic() if age is None
+                else time.monotonic() - max(0.0, float(age)))
             weather_data = {"rain": weather.rain, "wind": weather.wind_ms,
                             "humidity": weather.humidity, "cloud": weather.cloud_score}
         elif self.weather_ingest_fn is not None:   # 원격 PC 수신값으로 폴백(분산)
             rem = self.weather_ingest_fn()          # 신선하면 dict(+age_s), 아니면 None
             if rem is not None:
-                self._last_weather_ok = time.monotonic() - float(rem.get("age_s", 0))
+                # age_s를 [0,..)로 클램프 — 음수(원격 시계 앞섬)가 '미래 신선도'로 stale을
+                # 우회하지 못하게(fail-closed).
+                self._last_weather_ok = time.monotonic() - max(0.0, float(rem.get("age_s", 0)))
                 weather_data = {"rain": rem.get("rain"), "wind": rem.get("wind_ms"),
                                 "humidity": rem.get("humidity"), "cloud": rem.get("cloud_score")}
             # rem이 None이면 weather_data=None → _last_weather_ok 미갱신 → stale=unsafe(fail-closed)
@@ -340,6 +378,8 @@ class StatusSampler:
 
         snapshot = {
             "mode": self.drivers.get("mode", "sim"),
+            # 스냅샷 생성 시각(monotonic) — current_safety가 신선도 게이트로 쓴다(메타 fail-closed).
+            "ts_mono": time.monotonic(),
             "site": str(self.cfg.get("site.name", "")),
             "geo": {"lat": self._lat, "lon": self._lon},
             "time": {

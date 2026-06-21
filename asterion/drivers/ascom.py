@@ -826,6 +826,13 @@ class AscomWeather(WeatherDriver):
                     return None  # PropertyNotImplemented 등 → 없는 값
             cloud = g("CloudCover")          # 0~100 %
             rain_rate = g("RainRate")        # mm/hr
+            # 센서 갱신 경과 — ObservingConditions 표준. 스테이션이 멈춰 Connected=True+고착값을
+            # 돌려줄 때 이 값이 커져 status의 fail-closed stale 게이트를 발화시킨다. ""=전체 중 최신.
+            try:
+                age = float(d.TimeSinceLastUpdate(""))
+                reading_age = age if age >= 0 else None
+            except Exception:
+                reading_age = None
             return WeatherStatus(
                 connected=bool(d.Connected),
                 temp_c=g("Temperature"),
@@ -835,6 +842,7 @@ class AscomWeather(WeatherDriver):
                 wind_dir_deg=g("WindDirection"),
                 cloud_score=None if cloud is None else max(0.0, min(1.0, cloud / 100.0)),
                 rain=bool(rain_rate and rain_rate > 0),
+                reading_age_s=reading_age,
                 detail="", device_name=self._name)
         try:
             return self._call(_do)

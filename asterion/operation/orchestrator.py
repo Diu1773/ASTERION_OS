@@ -52,7 +52,8 @@ class ObservationOrchestrator:
                  max_pause_s: float | None = None,
                  platesolve_fn: Callable[[float, float], dict | None] | None = None,
                  autofocus_fn: Callable[[], dict | None] | None = None,
-                 measure_fn: Callable[[Any, dict], tuple] | None = None):
+                 measure_fn: Callable[[Any, dict], tuple] | None = None,
+                 occupancy_fn: Callable[[], str | None] | None = None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -72,10 +73,15 @@ class ObservationOrchestrator:
         # safety_fn: 현재 안전 스냅샷 dict({"state","reasons",...})를 돌려주는 콜러블.
         # None이면 안전 게이트 비활성(드라이버 직접 테스트용). 운영에선 sampler가 주입.
         self.safety_fn = safety_fn
+        # occupancy_fn: 같은 물리 카메라를 쓰는 다른 작업(수동 캡처/오토플랫)이 점유 중이면
+        # 사유 문자열, 아니면 None. 카메라 단일점유 대칭(capture/autoflat이 orch를 막듯 orch도
+        # 그들을 막는다 — 동시 노출 방지). 주입 안 하면 자기 자신만 막는다.
+        self.occupancy_fn = occupancy_fn
         self.max_pause_s = float(
             max_pause_s if max_pause_s is not None
             else self.cfg.get("safety.observe_max_pause_seconds", 300.0))
         self._task: asyncio.Task | None = None
+        self._launching = False   # start_plan 임계영역 가드(running()과 _task 생성 사이 경합 방지)
         self._stop = asyncio.Event()
         self._state: dict[str, Any] = {"running": False, "phase": "idle",
                                        "plan_id": None, "paused": False}
@@ -131,37 +137,48 @@ class ObservationOrchestrator:
     async def start_plan(self, plan_id: int,
                          extra_preconditions: list[tuple[str, bool, str]] | None = None
                          ) -> None:
-        if self.running():
+        # running() 검사와 _task 생성 사이에 await 양보(to_thread status 등)가 있어, 동시 두
+        # 호출(/run 더블클릭, NightRunner+수동 동시)이 둘 다 running()==False를 보고 통과해
+        # 이중 세션을 띄울 수 있다. _launching을 await 없이 검사·설정해 그 창을 닫는다(임계영역).
+        if self.running() or self._launching:
             raise ActionError("이미 다른 관측이 실행 중입니다")
-        plan = self.meridian.get_plan(plan_id)
-        cam_st = await asyncio.to_thread(self.drivers["camera"].status)
-        mount_st = await asyncio.to_thread(self.drivers["mount"].status)
-        target = (plan or {}).get("target") or {}
-        has_coords = (target.get("ra_hours") is not None
-                      and target.get("dec_degs") is not None)
-        approved = bool(plan) and plan["approval_status"] in (M.APPROVED, M.QUEUED)
-        saf = self._safety_now()
-        safe_now = self.safety_fn is None or saf.get("state") in SAFE_TO_OBSERVE
+        self._launching = True
+        try:
+            plan = self.meridian.get_plan(plan_id)
+            cam_st = await asyncio.to_thread(self.drivers["camera"].status)
+            mount_st = await asyncio.to_thread(self.drivers["mount"].status)
+            target = (plan or {}).get("target") or {}
+            has_coords = (target.get("ra_hours") is not None
+                          and target.get("dec_degs") is not None)
+            approved = bool(plan) and plan["approval_status"] in (M.APPROVED, M.QUEUED)
+            saf = self._safety_now()
+            safe_now = self.safety_fn is None or saf.get("state") in SAFE_TO_OBSERVE
+            # 카메라 단일점유 대칭 — 수동 캡처/오토플랫이 같은 카메라를 점유 중이면 거부.
+            busy_reason = self.occupancy_fn() if self.occupancy_fn else None
 
-        async def _launch():
-            self._stop.clear()
-            self._task = asyncio.create_task(self._run_plan(plan),
-                                             name=f"observation-{plan_id}")
+            async def _launch():
+                self._stop.clear()
+                self._task = asyncio.create_task(self._run_plan(plan),
+                                                 name=f"observation-{plan_id}")
 
-        await self.bus.run(
-            "observation_start", actor="operator",
-            params={"plan_id": plan_id, "target": target.get("name")},
-            func=_launch,
-            preconditions=[
-                ("plan_exists", plan is not None, f"계획 #{plan_id} 없음"),
-                ("plan_approved", approved, "승인된(approved) 계획만 실행 가능"),
-                ("target_has_coords", has_coords, "대상에 RA/Dec 좌표 필요"),
-                ("camera_connected", cam_st.connected, "카메라 연결 필요"),
-                ("mount_connected", mount_st.connected, "마운트 연결 필요"),
-                ("safety_ok", safe_now,
-                 f"안전 상태 불가({saf.get('state')}) — 관측 시작 거부"),
-            ] + list(extra_preconditions or []),
-        )
+            await self.bus.run(
+                "observation_start", actor="operator",
+                params={"plan_id": plan_id, "target": target.get("name")},
+                func=_launch,
+                preconditions=[
+                    ("plan_exists", plan is not None, f"계획 #{plan_id} 없음"),
+                    ("plan_approved", approved, "승인된(approved) 계획만 실행 가능"),
+                    ("target_has_coords", has_coords, "대상에 RA/Dec 좌표 필요"),
+                    ("camera_connected", cam_st.connected, "카메라 연결 필요"),
+                    ("mount_connected", mount_st.connected, "마운트 연결 필요"),
+                    ("camera_free", busy_reason is None,
+                     busy_reason or "카메라 점유 중 — 관측 시작 거부"),
+                    ("safety_ok", safe_now,
+                     f"안전 상태 불가({saf.get('state')}) — 관측 시작 거부"),
+                ] + list(extra_preconditions or []),
+            )
+        finally:
+            self._launching = False
 
     async def request_stop(self) -> None:
         if not self.running():

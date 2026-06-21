@@ -17,8 +17,12 @@ from ..core.ontology import Db, Frame
 
 
 class FrameData:
-    def __init__(self, db: Db):
+    def __init__(self, db: Db, sat_adu: float = 65535.0):
         self.db = db
+        # 포화 판정 임계 — 센서 full-well/bit-depth(camera.saturation_adu)의 90%.
+        # 60000 하드코딩은 12/14bit(max 4095/16383)·다른 게인에서 포화를 영영 못 잡는다.
+        # sentinel(median_high=0.9*sat_adu)과 같은 기준점으로 통일.
+        self._sat_thresh = 0.9 * float(sat_adu)
 
     def _load(self, frame_id: int):
         """(data|None, frame_dict|None, status). status: ok/no_frame/no_file/
@@ -123,7 +127,7 @@ class FrameData:
             "flux": round(flux, 2), "bg": round(bg, 2), "peak": round(peak, 1),
             "ap_pixels": ap_pix, "snr": round(float(snr), 2),
             "mag": (round(float(mag), 3) if mag is not None else None),
-            "saturated": peak >= 60000,
+            "saturated": peak >= self._sat_thresh,
             "filter": frame.get("filter_name") if frame else None,
             "date_obs_utc": frame.get("date_obs_utc") if frame else None,
         }

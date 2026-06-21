@@ -59,8 +59,10 @@ def _exposure_hint(mean_snr: float | None, n_sat: int, floor: float) -> str:
 
 
 def target_feedback(db: Db, name: str, snr_floor: float = 15.0,
-                    bad_warn: float = 0.3, persist: bool = True) -> dict[str, Any]:
-    """대상의 결과 → 추천. signals(불량률·평균SNR·포화·필터분포) + recommendations + 노출힌트."""
+                    bad_warn: float = 0.3, persist: bool = True,
+                    sat_adu: float = 65535.0) -> dict[str, Any]:
+    """대상의 결과 → 추천. signals(불량률·평균SNR·포화·필터분포) + recommendations + 노출힌트.
+    sat_adu: 센서 포화 ADU(camera.saturation_adu) — 측광 포화판정 임계의 기준(비-16bit 정확)."""
     name = (name or "").strip()
     dossier = skygraph.target_dossier(db, name)
     st = dossier.get("stats", {})
@@ -71,7 +73,7 @@ def target_feedback(db: Db, name: str, snr_floor: float = 15.0,
     bad_ratio = round(bad / n_lights, 2) if n_lights else 0.0
 
     # 경량 측광으로 평균 SNR·포화(점광원 가정)
-    lc = FrameData(db).light_curve(skygraph.target_light_frames(db, name))
+    lc = FrameData(db, sat_adu).light_curve(skygraph.target_light_frames(db, name))
     snrs = [p["snr"] for p in lc if p.get("status") == "ok" and p.get("snr") is not None]
     mean_snr = round(sum(snrs) / len(snrs), 1) if snrs else None
     n_sat = sum(1 for p in lc if p.get("saturated"))

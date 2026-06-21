@@ -1601,8 +1601,12 @@ function _nrRow(it, label, cls) {
   return `<tr><td>#${it.plan_id}</td><td class="sch-dim">${_schEsc(_nrSlot(it) || "—")}</td>`
     + `<td>${_schEsc(it.target || "")}</td><td><span class="sch-badge ${cls}">${label}</span></td></tr>`;
 }
+let _nrWasActive = false;   // 야간 운영 완료음(chimes)을 자연 완료 전이에만 1회
 function renderNightRunner(s) {
   s = s || {};
+  // 운영중 → 비활성 + 큐 0(보류 아님) = 시퀀스 자연 완료 → 성공음(chimes). 수동 정지/보류는 제외.
+  if (_nrWasActive && !s.active && !s.held && (s.queue || []).length === 0) playSound("success");
+  _nrWasActive = !!s.active;
   const badge = s.held ? ["보류", "st-run"] : (s.active ? ["운영중", "st-ok"] : ["대기", "st-draft"]);
   const stEl = $("nr-state"); if (stEl) { stEl.textContent = badge[0]; stEl.className = "sch-badge " + badge[1]; }
   const ph = $("nr-phase"); if (ph) ph.textContent = s.held ? (s.reason || "안전 보류") : (s.active ? (s.phase || "—") : "—");
@@ -1785,47 +1789,23 @@ async function loadWeatherSources() {
   } catch (e) { renderWeatherSources([]); }
 }
 
-// ---------- 사운드 기반 (WebAudio 합성 — 오프라인 OK, mp3 불필요) ----------
-// 미션컨트롤 톤: 맨 오실레이터(8비트 비프)가 아니라 저역통과 필터·부드러운 엔벨로프·
-// 짧은 합성 리버브를 거친 '정돈된 UI 사운드'. 모든 소리가 한 음계(NOTE)를 공유해
-// 한 가족처럼 들리게 설계. 신호경로: 보이스 → 마스터버스(리버브 send) → 리미터 → 출력.
-//
-// 새 소리 추가는 SOUNDS에 한 줄:
-//   tones: [음높이Hz, 시작offset(s), 길이(s)] 시퀀스
-//   음색 토큰 — type:파형  vol:최대게인  cut:저역통과컷오프(Hz·거친 배음 제거)
-//             detune:보강 2번째 오실레이터 디튠(cents·두께)  sub:옥타브 아래 레이어 게인(무게)
-//             rev:리버브 send(0~1)  atk·rel:어택·릴리스(s)
-
-// 공유 음계(펜타토닉 계열) — 모든 소리가 같은 음에서 출발해 통일감을 준다.
-const NOTE = {
-  C4: 261.63, E4: 329.63, G4: 392.00, A4: 440.00,
-  C5: 523.25, D5: 587.33, E5: 659.25, G5: 783.99, A5: 880.00,
-  C6: 1046.50, D6: 1174.66, E6: 1318.51,
-};
+// ---------- UI 사운드 (실제 wav 재생) ----------
+// 합성 비프가 게임처럼 들려서, MaxIm DL 등 천문 SW가 쓰는 실제 Windows 시스템 사운드를
+// 다듬어(트림·페이드·피크정규화: tools/process_sounds.py) /static/sounds/ui/ 에 굽고 그대로 쓴다.
+// WebAudio로 한 번 디코드해 캐시 → 저지연 재생 + 이벤트별 음량(vol). 디코드 실패 시 <audio> 폴백.
+// 음소거는 localStorage 영속. 새 이벤트는 SOUNDS에 {file, vol} 한 줄만 추가.
+const SOUND_BASE = "/static/sounds/ui/";
 const SOUNDS = {
-  // 텔레메트리(프레임 저장) — 자주 울리므로 아주 작고 짧은 '데이터 틱'
-  capture:        { type: "sine",     vol: 0.05, cut: 3200, rev: 0.10, atk: 0.004, rel: 0.05,
-                    tones: [[NOTE.E6, 0.0, 0.05]] },
-  // 확정/성공 — 상승 3음(시그니처)
-  success:        { type: "sine",     vol: 0.09, cut: 4200, detune: 4, rev: 0.22, atk: 0.006, rel: 0.18,
-                    tones: [[NOTE.C5, 0.0, 0.12], [NOTE.E5, 0.07, 0.12], [NOTE.G5, 0.15, 0.26]] },
-  // 오류 — 어둡고 부드러운 하강(거슬리지 않게 저역통과 강하게)
-  error:          { type: "triangle", vol: 0.11, cut: 1100, rev: 0.18, atk: 0.006, rel: 0.24,
-                    tones: [[NOTE.A4, 0.0, 0.16], [NOTE.E4, 0.12, 0.30]] },
-  // 연결/해제 — 짧은 상승/하강 블립
-  connect:        { type: "sine",     vol: 0.07, cut: 3600, rev: 0.14, atk: 0.004, rel: 0.10,
-                    tones: [[NOTE.A4, 0.0, 0.07], [NOTE.E5, 0.06, 0.12]] },
-  disconnect:     { type: "sine",     vol: 0.07, cut: 2600, rev: 0.14, atk: 0.004, rel: 0.12,
-                    tones: [[NOTE.E5, 0.0, 0.07], [NOTE.A4, 0.06, 0.14]] },
-  // 경고 — 차분하지만 주의 끄는 2펄스(약간의 두께 + 무게)
-  alert_warn:     { type: "sine",     vol: 0.12, cut: 2400, detune: 6, sub: 0.25, rev: 0.30, atk: 0.008, rel: 0.20,
-                    tones: [[NOTE.D5, 0.0, 0.22], [NOTE.D5, 0.30, 0.26]] },
-  // 위험 — 무게 있는 3음 2회 반복(미션컨트롤 경보; 단3도로 긴박감)
-  alert_critical: { type: "sine",     vol: 0.14, cut: 2200, detune: 7, sub: 0.40, rev: 0.34, atk: 0.008, rel: 0.18,
-                    tones: [[NOTE.A5, 0.0, 0.15], [NOTE.C6, 0.13, 0.15], [NOTE.A5, 0.30, 0.15],
-                            [NOTE.A5, 0.54, 0.15], [NOTE.C6, 0.67, 0.15], [NOTE.A5, 0.84, 0.22]] },
+  capture:        { file: "capture.wav",    vol: 0.30 },  // 프레임 저장(매 프레임 — 작게)
+  success:        { file: "success.wav",    vol: 0.85 },  // 시퀀스/저장 완료 (chimes)
+  error:          { file: "error.wav",      vol: 0.85 },  // 정지/오류 (chord)
+  connect:        { file: "connect.wav",    vol: 0.70 },  // 연결됨 (hardware insert)
+  disconnect:     { file: "disconnect.wav", vol: 0.70 },  // 연결 해제 (notify)
+  alert_warn:     { file: "warn.wav",       vol: 1.00 },  // 경고 (exclamation '띵')
+  alert_critical: { file: "critical.wav",   vol: 1.00 },  // 위험 (critical stop)
 };
-let _audioCtx = null, _soundMuted = false, _soundVol = 0.8, _bus = null;
+let _audioCtx = null, _soundMuted = false, _soundVol = 0.8;
+const _buf = {};   // file -> AudioBuffer (디코드 캐시; null=로딩중)
 function _ctx() {
   if (!_audioCtx) {
     const C = window.AudioContext || window.webkitAudioContext;
@@ -1834,70 +1814,37 @@ function _ctx() {
   if (_audioCtx && _audioCtx.state === "suspended") { try { _audioCtx.resume(); } catch (e) { /**/ } }
   return _audioCtx;
 }
-// 합성 임펄스로 짧은 리버브(공간감) — 외부 파일 없이 '싸구려 비프' 탈피.
-function _reverbIR(ctx, seconds, decay) {
-  const rate = ctx.sampleRate, len = Math.max(1, Math.floor(rate * seconds));
-  const ir = ctx.createBuffer(2, len, rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = ir.getChannelData(ch);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-  }
-  return ir;
-}
-// 마스터 버스: 보이스 합 → 리미터(피크 보호·일정 음량) → 출력, 그리고 리버브 send 갈래.
-function _ensureBus(ctx) {
-  if (_bus && _bus.ctx === ctx) return _bus;
-  const master = ctx.createGain(); master.gain.value = 1;
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -14; comp.knee.value = 24; comp.ratio.value = 6;
-  comp.attack.value = 0.003; comp.release.value = 0.18;
-  master.connect(comp); comp.connect(ctx.destination);
-  let reverbSend = null;
-  try {
-    const conv = ctx.createConvolver(); conv.buffer = _reverbIR(ctx, 0.9, 3.2);
-    const wet = ctx.createGain(); wet.gain.value = 0.5;
-    reverbSend = ctx.createGain(); reverbSend.gain.value = 1;
-    reverbSend.connect(conv); conv.connect(wet); wet.connect(master);
-  } catch (e) { reverbSend = null; }
-  _bus = { ctx, master, reverbSend };
-  return _bus;
-}
-// 한 음(tone) 합성: 필터·엔벨로프·디튠/서브 레이어를 갖춘 보이스.
-function _voice(ctx, bus, spec, tone) {
-  const t0 = ctx.currentTime + tone[1], dur = tone[2];
-  const atk = spec.atk ?? 0.006, rel = spec.rel ?? 0.12;
-  const peak = Math.max((spec.vol ?? 0.1) * _soundVol, 0.0002);
-  const lp = ctx.createBiquadFilter();
-  lp.type = "lowpass"; lp.frequency.value = spec.cut ?? 4000; lp.Q.value = 0.7;
-  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0);
-  lp.connect(g); g.connect(bus.master);
-  if (bus.reverbSend && (spec.rev ?? 0) > 0) {
-    const send = ctx.createGain(); send.gain.value = spec.rev;
-    g.connect(send); send.connect(bus.reverbSend);
-  }
-  const mkOsc = (freq, detune, gainMul) => {
-    const o = ctx.createOscillator();
-    o.type = spec.type || "sine"; o.frequency.value = freq;
-    if (detune) o.detune.value = detune;
-    if (gainMul != null && gainMul !== 1) {
-      const og = ctx.createGain(); og.gain.value = gainMul; o.connect(og); og.connect(lp);
-    } else { o.connect(lp); }
-    o.start(t0); o.stop(t0 + dur + rel + 0.05);
-  };
-  mkOsc(tone[0], 0, 1);                              // 기본음
-  if (spec.detune) mkOsc(tone[0], spec.detune, 0.6); // 디튠 보강 레이어(두께)
-  if (spec.sub) mkOsc(tone[0] / 2, 0, spec.sub);     // 옥타브 아래(무게)
-  // 엔벨로프: 부드러운 어택 + 매끈한 지수 릴리스(클릭/팝 제거)
-  g.gain.exponentialRampToValueAtTime(peak, t0 + atk);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + rel);
+// 모든 wav를 미리 받아 디코드(저지연 재생). 실패해도 재생 시 <audio>로 폴백하므로 안전.
+function _preloadSounds() {
+  const ctx = _ctx(); if (!ctx) return;
+  const files = [...new Set(Object.values(SOUNDS).map((s) => s.file))];
+  files.forEach((f) => {
+    if (f in _buf) return;
+    _buf[f] = null;  // 로딩중 표시
+    fetch(SOUND_BASE + f)
+      .then((r) => r.arrayBuffer())
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((b) => { _buf[f] = b; })
+      .catch(() => { delete _buf[f]; });  // 비워 폴백 경로 사용
+  });
 }
 function playSound(name) {
   if (_soundMuted) return;
   const spec = SOUNDS[name]; if (!spec) return;
-  const ctx = _ctx(); if (!ctx) return;
-  try {
-    const bus = _ensureBus(ctx);
-    spec.tones.forEach((tn) => _voice(ctx, bus, spec, tn));
+  const vol = Math.min((spec.vol ?? 1) * _soundVol, 1);
+  const ctx = _ctx();
+  const b = ctx && _buf[spec.file];
+  if (ctx && b) {                                  // 저지연 경로(디코드 캐시)
+    try {
+      const src = ctx.createBufferSource(); src.buffer = b;
+      const g = ctx.createGain(); g.gain.value = vol;
+      src.connect(g); g.connect(ctx.destination);
+      src.start();
+      return;
+    } catch (e) { /* 폴백으로 */ }
+  }
+  try {                                            // 폴백: HTMLAudio
+    const a = new Audio(SOUND_BASE + spec.file); a.volume = vol; a.play().catch(() => {});
   } catch (e) { /* 자동재생 차단 등 — 무시(시각 피드백은 남음) */ }
 }
 function updateSoundBtn() {
@@ -1908,15 +1855,16 @@ function toggleSound() {
   _soundMuted = !_soundMuted;
   try { localStorage.setItem("asterion.sound.muted", _soundMuted ? "1" : "0"); } catch (e) { /**/ }
   updateSoundBtn();
-  if (!_soundMuted) playSound("success");   // 켤 때 확인음
+  if (!_soundMuted) playSound("connect");   // 켤 때 확인음(짧은 양성 큐)
 }
 function initSound() {
   try { _soundMuted = localStorage.getItem("asterion.sound.muted") === "1"; } catch (e) { /**/ }
   updateSoundBtn();
   const b = $("snd-btn");
   if (b && !b.dataset.w) { b.dataset.w = "1"; b.onclick = toggleSound; }
-  // 자동재생 정책: 첫 사용자 제스처에 오디오 컨텍스트 활성화
-  const unlock = () => { _ctx(); document.removeEventListener("pointerdown", unlock); };
+  _preloadSounds();   // wav 미리 디코드(차단되면 폴백)
+  // 자동재생 정책: 첫 사용자 제스처에 오디오 컨텍스트 활성화 + (필요시) 재프리로드
+  const unlock = () => { _ctx(); _preloadSounds(); document.removeEventListener("pointerdown", unlock); };
   document.addEventListener("pointerdown", unlock, { once: true });
 }
 
@@ -3608,11 +3556,18 @@ function handleWSData(data) {
   else if (data.type === "alert") onAlert(data.alert);
 }
 
+let _wsOpen = false, _wsEver = false;   // 연결/해제 소리는 '진짜 전이'에만(최초 로드·재시도 침묵)
 function connectWS() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => $("ws-dot").classList.add("on");
+  ws.onopen = () => {
+    $("ws-dot").classList.add("on");
+    if (_wsEver) playSound("connect");   // 재연결만 알림(최초 로드는 침묵)
+    _wsOpen = true; _wsEver = true;
+  };
   ws.onclose = () => {
     $("ws-dot").classList.remove("on");
+    if (_wsOpen) playSound("disconnect");   // 열려있던 게 끊긴 경우만(재시도 반복 침묵)
+    _wsOpen = false;
     setTimeout(connectWS, 2000);
   };
   ws.onmessage = (ev) => handleWSData(JSON.parse(ev.data));

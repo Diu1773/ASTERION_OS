@@ -14,30 +14,30 @@
   #ast-chat-fab svg{width:28px;height:28px;stroke:#fff;fill:none;stroke-width:1.8;
     stroke-linecap:round;stroke-linejoin:round}
   #ast-chat-panel{position:fixed;right:20px;bottom:88px;width:370px;max-width:calc(100vw - 40px);
-    height:540px;max-height:calc(100vh - 120px);background:#11151c;border:1px solid #2a3340;
-    border-radius:14px;display:none;flex-direction:column;z-index:99999;overflow:hidden;
-    box-shadow:0 8px 32px rgba(0,0,0,.5);font:14px/1.5 Pretendard,system-ui,sans-serif;color:#e6edf3}
+    height:540px;max-height:calc(100vh - 120px);background:#1d1e22;border:1px solid rgba(255,255,255,.10);
+    border-radius:11px;display:none;flex-direction:column;z-index:99999;overflow:hidden;
+    box-shadow:0 8px 28px rgba(0,0,0,.55);font:14px/1.5 "IBM Plex Sans KR",Pretendard,system-ui,sans-serif;color:#ECEEF1}
   #ast-chat-panel.open{display:flex}
-  .ast-h{padding:12px 14px;background:#161c25;border-bottom:1px solid #2a3340;display:flex;
+  .ast-h{padding:12px 14px;background:#26262a;border-bottom:1px solid rgba(255,255,255,.08);display:flex;
     align-items:center;justify-content:space-between}
-  .ast-h b{font-size:14px} .ast-h .ast-sub{font-size:11px;color:#8b98a8}
-  .ast-x{background:none;border:none;color:#8b98a8;font-size:18px;cursor:pointer}
-  .ast-modelbar{display:flex;flex-direction:column;gap:6px;padding:7px 14px;background:#10151d;
-    border-bottom:1px solid #2a3340;font-size:11px;color:#8b98a8}
+  .ast-h b{font-size:14px} .ast-h .ast-sub{font-size:11px;color:#868c96}
+  .ast-x{background:none;border:none;color:#868c96;font-size:18px;cursor:pointer}
+  .ast-modelbar{display:flex;flex-direction:column;gap:6px;padding:7px 14px;background:#1a1b1f;
+    border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:#868c96}
   .ast-mrow{display:flex;align-items:center;gap:8px}
-  .ast-mrow label{width:42px;flex:none;color:#8b98a8}
-  .ast-modelbar select{flex:1;min-width:0;background:#0d1117;color:#e6edf3;border:1px solid #2a3340;
-    border-radius:7px;padding:4px 7px;font:12px/1.3 inherit;cursor:pointer}
+  .ast-mrow label{width:42px;flex:none;color:#868c96}
+  .ast-modelbar select{flex:1;min-width:0;background:#16171a;color:#ECEEF1;border:1px solid rgba(255,255,255,.10);
+    border-radius:6px;padding:4px 7px;font:12px/1.3 inherit;cursor:pointer}
   .ast-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
-  .ast-m{max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
+  .ast-m{max-width:85%;padding:8px 11px;border-radius:11px;white-space:pre-wrap;word-break:break-word}
   .ast-u{align-self:flex-end;background:#2585cc;color:#fff;border-bottom-right-radius:4px}
-  .ast-a{align-self:flex-start;background:#1e2630;border-bottom-left-radius:4px}
+  .ast-a{align-self:flex-start;background:#2a2b31;border-bottom-left-radius:4px}
   .ast-e{align-self:flex-start;background:#3a1d22;color:#ffd7d7;border:1px solid #6b2b34;
     border-bottom-left-radius:4px}
-  .ast-t{align-self:flex-start;font-size:11px;color:#7c8794;background:transparent;padding:0 4px}
-  .ast-in{display:flex;gap:6px;padding:10px;border-top:1px solid #2a3340;background:#161c25}
-  .ast-in textarea{flex:1;resize:none;height:38px;max-height:120px;background:#0d1117;color:#e6edf3;
-    border:1px solid #2a3340;border-radius:8px;padding:8px;font:14px/1.4 inherit}
+  .ast-t{align-self:flex-start;font-size:11px;color:#868c96;background:transparent;padding:0 4px}
+  .ast-in{display:flex;gap:6px;padding:10px;border-top:1px solid rgba(255,255,255,.08);background:#26262a}
+  .ast-in textarea{flex:1;resize:none;height:38px;max-height:120px;background:#16171a;color:#ECEEF1;
+    border:1px solid rgba(255,255,255,.10);border-radius:8px;padding:8px;font:14px/1.4 inherit}
   .ast-in button{background:#2585cc;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer}
   .ast-in button:disabled{opacity:.5;cursor:default}
   `;

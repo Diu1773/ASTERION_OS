@@ -109,6 +109,10 @@ class AccessPolicy:
         self.ttl_s = int(cfg.get("server.auth.session_ttl_hours", 12)) * 3600
         self.users = dict(cfg.get("server.auth.users", {}) or {})
         self.tokens = dict(cfg.get("server.auth.tokens", {}) or {})
+        # Tailscale serve 뒤(Phase B): serve가 주입하는 신원 헤더로 비번 없이 로그인.
+        # ⚠ serve/신뢰 프록시 뒤에서만 켤 것 — 직접 노출 시 헤더 위조 가능(fail-safe: 기본 off).
+        self.trust_ts = bool(cfg.get("server.auth.trust_tailscale_identity", False))
+        self.ts_users = dict(cfg.get("server.auth.tailscale_users", {}) or {})
         self.secret = self._ensure_secret()
 
     def _ensure_secret(self) -> str:
@@ -140,6 +144,12 @@ class AccessPolicy:
             p = self._token_principal(authz[7:].strip())
             if p:
                 return p
+        # Tailscale serve 신원(켜진 경우만) — serve가 검증해 주입한 헤더. 매핑된 사용자만.
+        if self.trust_ts:
+            login = (headers.get("tailscale-user-login", "") or "").strip()
+            if login and login in self.ts_users:
+                return Principal(name=login,
+                                 role=str(self.ts_users[login]), kind="user")
         raw = _cookie_value(headers.get("cookie", "") or "", self.cookie_name)
         if raw:
             got = read_session(self.secret, raw)

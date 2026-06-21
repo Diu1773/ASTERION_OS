@@ -192,6 +192,46 @@ class TestSessionSigning(unittest.TestCase):
         self.assertIsNone(read_session("s3cr3t", tok))
 
 
+def _ts_cfg(trust: bool) -> DictCfg:
+    return DictCfg({"server": {"auth": {
+        "enabled": True,
+        "session_secret": "test-secret-ts",
+        "trust_tailscale_identity": trust,
+        "tailscale_users": {"alice@github": "admin", "bob@gmail.com": "operator"},
+        "users": {}, "tokens": {},
+    }}})
+
+
+class TestTailscaleIdentity(unittest.TestCase):
+    """Phase B — serve 신원헤더로 비번 없이 로그인(켜졌을 때만, 매핑된 사용자만)."""
+
+    def _app(self, trust: bool):
+        return _make_app(AccessPolicy(_ts_cfg(trust)))
+
+    def test_mapped_identity_authorized(self):
+        c = TestClient(self._app(True))
+        h = {"Tailscale-User-Login": "alice@github"}   # admin 매핑
+        self.assertEqual(c.get("/api/status", headers=h).status_code, 200)
+        self.assertEqual(c.post("/api/system/connect", headers=h).status_code, 200)
+
+    def test_operator_identity_not_admin(self):
+        c = TestClient(self._app(True))
+        h = {"Tailscale-User-Login": "bob@gmail.com"}   # operator 매핑
+        self.assertEqual(c.post("/api/actions/mount/stop", headers=h).status_code, 200)
+        self.assertEqual(c.post("/api/system/connect", headers=h).status_code, 403)
+
+    def test_unmapped_identity_denied(self):
+        c = TestClient(self._app(True))
+        h = {"Tailscale-User-Login": "evil@nope"}
+        self.assertEqual(c.get("/api/status", headers=h).status_code, 401)
+
+    def test_header_ignored_when_trust_off(self):
+        # 플래그 off면 헤더를 절대 신뢰하지 않음(직접 노출 시 위조 차단)
+        c = TestClient(self._app(False))
+        h = {"Tailscale-User-Login": "alice@github"}
+        self.assertEqual(c.get("/api/status", headers=h).status_code, 401)
+
+
 class TestAuditLabel(unittest.TestCase):
     def test_label_with_principal(self):
         t = set_principal(Principal(name="alice", role="operator", kind="user"))

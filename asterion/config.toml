@@ -22,6 +22,9 @@ horizon_mask = []
 [server]
 host = "127.0.0.1"
 port = 8520
+# 리버스 프록시/Tailscale serve 뒤 운영 시(REMOTE_ACCESS_PLAN Phase B):
+forwarded_allow_ips = "127.0.0.1"   # X-Forwarded-* 신뢰 업스트림 IP. serve는 localhost에서 프록시.
+# allowed_hosts = ["asterion.<tailnet>.ts.net", "127.0.0.1", "localhost"]  # Host 헤더 핀(설정 시 활성)
 
 [server.auth]
 # 원격 접속 인증/인가 게이트 (REMOTE_ACCESS_PLAN Phase A). 기본 꺼짐 → 로컬 SIM 개발 무변경.
@@ -35,6 +38,10 @@ port = 8520
 enabled = false
 cookie_secure = false        # HTTPS(예: tailscale serve) 뒤에서 운영하면 true 권장
 # session_ttl_hours = 12     # 로그인 유지 시간
+# Tailscale serve 뒤라면 비번 없이 tailnet 신원으로 로그인(serve가 Tailscale-User-Login 주입).
+# ⚠ serve/신뢰 프록시 뒤에서만 true — 직접 노출 시 클라이언트가 헤더를 위조할 수 있다.
+# trust_tailscale_identity = false
+#   config.local.json: "server":{"auth":{"tailscale_users":{"alice@github":"admin","bob@gmail.com":"operator"}}}
 #
 #   config.local.json 예시:
 #   {

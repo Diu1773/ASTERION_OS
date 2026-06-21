@@ -425,6 +425,13 @@ def create_app() -> FastAPI:
     # 감사로그 actor에 사람별 신원이 박힌다. 라우트 본문은 무수정(경로/메서드 기반 정책).
     access_policy = AccessPolicy(cfg)
     app.add_middleware(AccessMiddleware, policy=access_policy)
+    # Host 헤더 핀(Phase B) — 설정 시 Tailscale .ts.net 이름/로컬만 허용(호스트 헤더 위조 차단).
+    # 미설정(기본)이면 추가 안 함 → 로컬 개발 무영향. TrustedHost를 뒤에 add해 최외곽(먼저 실행).
+    _allowed = cfg.get("server.allowed_hosts", None)
+    if isinstance(_allowed, list) and _allowed:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        app.add_middleware(TrustedHostMiddleware,
+                           allowed_hosts=[str(h) for h in _allowed])
 
     @app.exception_handler(ActionError)
     async def _action_error(_, exc: ActionError):

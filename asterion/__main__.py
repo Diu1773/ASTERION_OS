@@ -31,9 +31,14 @@ def main() -> None:
     env_port = os.environ.get("PORT")
     port = args.port or (int(env_port) if env_port else int(cfg.get("server.port", 8520)))
 
+    # 리버스 프록시/Tailscale serve 뒤(REMOTE_ACCESS_PLAN Phase B): X-Forwarded-* 를 신뢰해
+    # 실제 클라이언트 IP를 복원한다(감사/레이트리밋용). serve는 localhost에서 프록시하므로 기본
+    # 127.0.0.1만 신뢰. 직접 노출(프록시 없음)이면 이 헤더는 오지 않아 무해.
+    fwd = str(cfg.get("server.forwarded_allow_ips", "127.0.0.1"))
     print(f"Asterion — http://{host}:{port}  (Ctrl+C로 종료)")
     uvicorn.run("asterion.app:create_app", factory=True,
-                host=host, port=port, log_level="warning")
+                host=host, port=port, log_level="warning",
+                proxy_headers=True, forwarded_allow_ips=fwd)
 
 
 if __name__ == "__main__":

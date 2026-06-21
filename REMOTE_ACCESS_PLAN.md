@@ -1,11 +1,12 @@
 # Access / 사이버 보안 — 원격 운영 PLAN (자율 빌드 계약서)
 
-> **상태: 🟡 Phase A 백엔드 구현 완료(2026-06-21), UI·Phase B~D 남음.** 외부 원격에서 천문대를
-> 굴리기 위한 접속·인증·인가·원격전용 안전·하드닝 구상. 전부 **추가형(additive)** — 기존
-> 안전계층(fail-closed·ActionBus 사전조건·SolarWatchdog·DomeGuard)은 **0줄 수정**. 인증은 기본
-> `enabled=false`라 로컬 SIM 개발 워크플로([[asterion-dev-workflow]])는 무변경. Phase A는 `asterion/
-> access/` + 미들웨어 게이트로 구현(81 테스트 그린, 회귀 0). 남은 A2 UI(로그인 화면)와 경계(B)·
-> 원격안전(C)·하드닝(D)은 후속.
+> **상태: 🟢 Phase A 완료(백엔드+UI) · Phase B 앱하드닝+문서 완료(2026-06-22). C·D 남음.** 외부
+> 원격에서 천문대를 굴리기 위한 접속·인증·인가·원격전용 안전·하드닝. 전부 **추가형(additive)** —
+> 기존 안전계층(fail-closed·ActionBus 사전조건·SolarWatchdog·DomeGuard)은 **0줄 수정**. 인증은 기본
+> `enabled=false`라 로컬 SIM 개발 워크플로([[asterion-dev-workflow]])는 무변경. Phase A=`asterion/
+> access/`+ASGI 미들웨어 게이트+웹 로그인 UI. Phase B=앱 하드닝(proxy-headers·TrustedHost·Tailscale
+> 신원헤더 옵션)+[tools/tailscale/](tools/tailscale/README.md) serve 셋업 문서(tailnet 가입·serve는
+> 운영자 환경 작업). 검증: 접근게이트 20 + 전체 스위트 그린. 남은 C(원격 데드맨)·D(탐지/운영).
 
 > 맥락: 지금 플랫폼은 `127.0.0.1` 바인딩·무인증이라 "로컬에서만 안전"하다. 외부 원격 운영을
 > 하려면 명령자의 *자격(인증·인가)*과 *원격 단절 시 안전*을 별도 계층으로 세워야 한다.
@@ -167,14 +168,15 @@ Tunnel 택1. 외부 IdP는 Caddy `forward_auth`로 끼울 여지.
 - [x] **A1 — access 패키지**: `access/audit.py`(Principal·contextvar·actor_label)·`roles.py`
   (secure-by-default 경로정책)·`auth.py`(pbkdf2 비번·sha256 토큰·hmac 서명세션·AccessPolicy)·
   `__main__.py`(hash/token/secret CLI). `[server.auth]` config(enabled/cookie_secure + 형식주석).
-- [~] **A2 — 라우트 게이트**: ✅ `access/middleware.py`(ASGI 게이트, `Depends` 대신 단일 미들웨어로
-  라우트 본문 0줄 수정) + `/login`·`/logout`·`/api/session/me`. enabled=false면 통과(하위호환).
-  ⬜ **웹 UI 로그인 화면(프론트, 남음)**.
+- [x] **A2 — 라우트 게이트 + UI**: `access/middleware.py`(ASGI 게이트, `Depends` 대신 단일 미들웨어로
+  라우트 본문 0줄 수정) + `/login`·`/logout`·`/api/session/me` + **웹 로그인 오버레이**(index.html·
+  style.css·app.js: 미인증 시 게이트, 401 재노출, 사용자배지/로그아웃, auth off면 무표시). 프리뷰 검증.
 - [x] **A3 — 신원 감사**: `core/actions.py._record`가 `actor_label`로 actor 보강(단일 추가 라인).
-  ingest는 token:ingest scope 의무화(enabled 시).
-- [ ] **B1 — Tailscale 경계**: tailnet 가입(천문대+운영자) + MagicDNS + `tailscale serve`(비공개
-  HTTPS, Funnel 금지) + ACL 제한. 앱 proxy-headers·secure cookie·TrustedHost(.ts.net). localhost
-  바인딩 불변식 문서화.
+  ingest는 token:ingest scope 의무화(enabled 시). `/metrics`는 token:metrics 또는 로그인 사용자.
+- [~] **B1 — Tailscale 경계**: ✅ 앱 측 — proxy-headers(`__main__`)·`TrustedHostMiddleware`(.ts.net
+  핀, 설정 시)·`cookie_secure`·Tailscale 신원헤더 옵션(`trust_tailscale_identity`+`tailscale_users`,
+  serve 뒤에서만). ✅ [tools/tailscale/](tools/tailscale/README.md) serve/ACL/Funnel금지/하드닝 가이드.
+  ⬜ **tailnet 가입·`tailscale serve` 실행은 운영자 환경 작업**(문서대로).
 - [ ] **C1 — 세션 데드맨**: heartbeat 엔드포인트 + 워치독(수동 원격만) → 세이프-스테이트.
 - [ ] **C2 — 위험명령 확인 + 보안 Alert**: 2단계 확인 + 로그인실패/오버라이드 경보.
 - [ ] **D1 — 하드닝**: 레이트리밋·시크릿 권한·호스트/네트워크 가이드·백업.
@@ -210,6 +212,13 @@ Tunnel 택1. 외부 IdP는 Caddy `forward_auth`로 끼울 여지.
 
 - `2026-06-21 설계확정 — 경계 후보 비교(메시VPN vs 리버스프록시+도메인). 주체=나+운영자 몇 명 →
   viewer/operator/admin 역할 + 사람별 신원감사. 전부 추가형, 안전계층 0줄, auth 기본 off.`
+- `2026-06-22 A2 UI + Phase B 하드닝 — 웹 로그인 오버레이(index/style/app.js: 미인증 게이트·401
+  재노출·사용자배지/로그아웃, auth off면 /api/session/me=authenticated라 무표시; 프리뷰로 기본부팅
+  무영향 확인). Phase B 앱측: __main__ proxy_headers+forwarded_allow_ips, TrustedHostMiddleware
+  (server.allowed_hosts 설정 시), AccessPolicy에 Tailscale 신원헤더(trust_tailscale_identity+
+  tailscale_users, serve 뒤에서만; 직접노출 위조 방지로 기본 off). tools/tailscale/README(serve 비공개
+  HTTPS·ACL·Funnel금지·하드닝). 테스트: 접근게이트 20(신원 4 포함) 그린. tailnet 가입/serve 실행은
+  운영자 환경.`
 - `2026-06-21 Phase A 구현(백엔드) — 신규 asterion/access/(audit·roles·auth·middleware·__main__).
   설계상 Depends(require_role) 대신 단일 ASGI 미들웨어 + 경로/메서드 secure-by-default 정책 채택:
   라우트 50여 개 본문을 0줄도 안 고치고, 새 엔드포인트가 생겨도 자동 보호(기본 거부형). 의존성

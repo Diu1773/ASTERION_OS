@@ -1,0 +1,25 @@
+# Prometheus 스크레이프 설정 — ASTERION /metrics 수집 예시.
+# Prometheus 설치 후 이 job을 prometheus.yml의 scrape_configs에 추가하고 재시작.
+# (Grafana는 이 Prometheus를 데이터소스로 붙여 asterion-dashboard.json을 임포트.)
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: asterion
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8520"]   # ASTERION 서버 (server.host:server.port)
+
+    # 원격 접속 인증(REMOTE_ACCESS_PLAN)을 켰다면, scope=metrics 토큰을 Bearer로 전달:
+    #   python -m asterion.access token   →  token 을 클라이언트(여기), hash 를 config.local.json
+    #   config.local.json: server.auth.tokens.prometheus = { "scopes": ["metrics"], "hash": "<sha256>" }
+    # authorization:
+    #   type: Bearer
+    #   credentials: "<발급한 토큰>"
+
+    # Tailscale serve 뒤(HTTPS)로 스크레이프하면 scheme/대상만 바꾼다:
+    # scheme: https
+    # static_configs:
+    #   - targets: ["asterion.<tailnet>.ts.net"]

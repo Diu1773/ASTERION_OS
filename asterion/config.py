@@ -81,4 +81,12 @@ class Config:
     @property
     def data_dir(self) -> Path:
         raw = Path(str(self.get("paths.data_dir", "data")))
-        return raw if raw.is_absolute() else PACKAGE_DIR / raw
+        base = raw if raw.is_absolute() else PACKAGE_DIR / raw
+        # 시뮬레이터 데이터 격리 — sim 모드면 별도 하위 저장소(data/sim/)로 분기해
+        # 실측 데이터(DB·FITS)와 절대 섞이지 않게 한다. 이 sim 저장소는 보존기간
+        # (sim.retention_days, 기본 90일)으로 자동 정리된다(Retention). 실측 모드는 base 그대로.
+        if str(self.get("drivers.mode", "sim")).lower() == "sim":
+            sub = str(self.get("paths.sim_subdir", "sim") or "").strip()
+            if sub:
+                return base / sub
+        return base

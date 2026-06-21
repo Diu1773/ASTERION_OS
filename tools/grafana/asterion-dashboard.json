@@ -1,0 +1,99 @@
+{
+  "title": "ASTERION Observatory",
+  "uid": "asterion-obs",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Up",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [ { "refId": "A", "expr": "asterion_up" } ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Capture active",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [ { "refId": "A", "expr": "asterion_capture_active" } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Uptime (s)",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [ { "refId": "A", "expr": "asterion_uptime_seconds" } ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Disk free (bytes)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [ { "refId": "A", "expr": "asterion_disk_free_bytes" } ]
+    },
+    {
+      "id": 5,
+      "type": "state-timeline",
+      "title": "Safety state",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "asterion_safety_state", "legendFormat": "{{state}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Mount Alt / Az (deg)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "degree" }, "overrides": [] },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "asterion_mount_alt", "legendFormat": "alt" },
+        { "refId": "B", "expr": "asterion_mount_az", "legendFormat": "az" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Sun altitude (deg)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "degree" }, "overrides": [] },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [ { "refId": "A", "expr": "asterion_sun_alt", "legendFormat": "sun.alt" } ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "All telemetry channels",
+      "description": "asterion_* 게이지 전체 — 실제 채널 이름은 /metrics 응답에서 확인해 패널을 늘려가세요.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "{__name__=~\"asterion_.+\"}", "legendFormat": "{{__name__}}" }
+      ]
+    }
+  ]
+}

@@ -22,6 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
+from .access.auth import AccessPolicy, build_auth_router
+from .access.middleware import AccessMiddleware
 from .camera.capture import CaptureService
 from .camera.cooler import CoolerController
 from .config import Config
@@ -54,6 +56,7 @@ from .operation.night_runner import NightRunner
 from .satellite import SatelliteProxy
 from .skyflat.autoflat import AutoFlatParams, AutoFlatRunner
 from .watchtower.dome_guard import DomeGuard
+from .watchtower.metrics import render_metrics
 from .watchtower.recovery import ConnectionWatchdog
 from .watchtower.status import StatusSampler
 
@@ -190,6 +193,15 @@ def create_app() -> FastAPI:
     drivers = conn.drivers
     db = Db(cfg.data_dir / "asterion.db")
     archive = ArchiveRecovery(db, cfg.data_dir / "frames")   # 파일↔DB 정합성(§9.3)
+    # 시뮬레이터 보존 정리 — sim 모드 + 활성화일 때만(실측 데이터 미적용). cfg.data_dir이
+    # sim이면 data/sim/로 분기돼 있으므로 정리는 그 격리 저장소에만 닿는다. 기동 시 1회 +
+    # 주기 스윕으로 cutoff(기본 90일=한 3달)보다 오래된 프레임 파일+DB행을 지운다.
+    from .core.retention import Retention
+    retention = None
+    if drivers.get("mode") == "sim" and bool(cfg.get("sim_retention.enabled", True)):
+        retention = Retention(db, cfg.data_dir / "frames",
+                              days=float(cfg.get("sim_retention.days", 90.0)),
+                              events=events)
     sampler = StatusSampler(cfg, drivers, twilight, events, db)
     # 분산 §7: 로컬 기상 장치 없을 때 원격 ingestion 값으로 폴백(fail-closed 유지). config로 끔.
     if bool(cfg.get("weather.ingest_fallback", True)):
@@ -370,6 +382,19 @@ def create_app() -> FastAPI:
              "관측 실행 중에는 연결 변경 불가"),
         ]
 
+    async def _retention_loop():
+        """기동 시 1회 + sweep_interval_hours마다 sim 저장소 보존 정리(추가형)."""
+        interval_s = max(300.0, float(
+            cfg.get("sim_retention.sweep_interval_hours", 6.0)) * 3600.0)
+        while True:
+            try:
+                await asyncio.to_thread(retention.prune)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                events.log("retention", f"보존 정리 오류: {exc}", "error")
+            await asyncio.sleep(interval_s)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         events.attach_loop(asyncio.get_running_loop())
@@ -378,14 +403,28 @@ def create_app() -> FastAPI:
         app.state.connect_task = asyncio.create_task(conn.connect_all())
         sampler.start()
         watchdog.start()
+        app.state.retention_task = (asyncio.create_task(_retention_loop())
+                                    if retention is not None else None)
         events.log("system",
                    f"Asterion v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
         yield
+        if app.state.retention_task is not None:
+            app.state.retention_task.cancel()
+            try:
+                await app.state.retention_task
+            except asyncio.CancelledError:
+                pass
         await watchdog.stop()
         await sampler.stop()
         await conn.close_all()
 
     app = FastAPI(title="Asterion", version=__version__, lifespan=lifespan)
+
+    # 원격 접속 인증/인가 게이트 (REMOTE_ACCESS_PLAN Phase A) — 추가형, 기본 꺼짐(하위호환).
+    # 켜면(config server.auth.enabled=true) 모든 /api·/ws가 세션/토큰+역할을 요구하고,
+    # 감사로그 actor에 사람별 신원이 박힌다. 라우트 본문은 무수정(경로/메서드 기반 정책).
+    access_policy = AccessPolicy(cfg)
+    app.add_middleware(AccessMiddleware, policy=access_policy)
 
     @app.exception_handler(ActionError)
     async def _action_error(_, exc: ActionError):
@@ -431,6 +470,20 @@ def create_app() -> FastAPI:
     @app.get("/api/status")
     async def api_status():
         return sampler.snapshot or {"mode": "starting"}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        """Prometheus 노출 — Grafana가 스크레이프할 현재 텔레메트리/상태 게이지.
+        인증 켜짐: scope=metrics 토큰(Prometheus Bearer) 또는 로그인 사용자."""
+        import shutil
+        extra = {"asterion_uptime_seconds": round(_time.monotonic() - app_start)}
+        try:
+            extra["asterion_disk_free_bytes"] = shutil.disk_usage(
+                str(cfg.data_dir)).free
+        except Exception:
+            pass
+        text = render_metrics(sampler.snapshot or {}, extra)
+        return Response(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # Skygraph(Ph9) — 대상 중심 dossier. 한 대상의 관측요청·프레임·품질·가시성·추천 집계.
     _site_lat = float(cfg.get("site.latitude", 36.64))
@@ -1088,6 +1141,23 @@ def create_app() -> FastAPI:
                       preconditions=conn_preconditions())
         return conn.describe()
 
+    @app.get("/api/sim/retention")
+    async def sim_retention_status():
+        """시뮬레이터 보존 정리 상태 — 활성 여부·보존일수·격리 저장소·마지막 스윕 결과."""
+        if retention is None:
+            return {"enabled": False,
+                    "reason": "sim 모드가 아니거나 sim_retention.enabled=false"}
+        return {"enabled": True, "days": retention.days,
+                "frames_dir": str(retention.frames_dir),
+                "last_result": retention.last_result}
+
+    @app.post("/api/sim/retention/sweep")
+    async def sim_retention_sweep():
+        """지금 즉시 보존 정리 1회 실행 — 결과(삭제 행/파일 수) 반환."""
+        if retention is None:
+            raise HTTPException(409, "보존 정리 비활성 (sim 모드가 아님)")
+        return await asyncio.to_thread(retention.prune)
+
     @app.post("/api/sim/twilight")
     async def sim_twilight(req: TwilightReq):
         if not getattr(drivers["camera"], "is_sim", False):
@@ -1118,5 +1188,7 @@ def create_app() -> FastAPI:
     app.include_router(build_analysis_router(sentinel, framedata, calibration, forge))
     # AI 에이전트 라우트 (/api/agent/chat·status·models·model) — 대시보드 채팅 위젯이 호출.
     app.include_router(build_agent_router(agent, cfg))
+    # 인증 라우트 (/login·/logout·/api/session/me) — 원격 접속 게이트(Phase A).
+    app.include_router(build_auth_router(access_policy))
 
     return app

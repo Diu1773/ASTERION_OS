@@ -12,6 +12,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from ..core import ephemeris
 from ..core.dso_catalog import DSO, TYPE_KO, match_type
 from ..core.ontology import (
     ActionLog, CalibrationProduct, Decision, Frame, FocusRun,
@@ -182,6 +183,15 @@ class ToolKit:
         return [("safety_ok", state in SAFE_TO_OBSERVE,
                  f"안전 상태 불가({state}) — {what} 거부")]
 
+    def _sun_sep_preconds(self, ra_hours: float, dec_deg: float) -> list[tuple[str, bool, str]]:
+        """태양 이격 사전조건 — 대상이 태양/근방(소이각)을 향하면 거부. AI엔 force가 없어
+        오직 책임자 config(allow_solar_slew)만 우회 가능 → AI는 태양 사실상 항상 차단."""
+        ok, _sep, msg = ephemeris.solar_exclusion_check(
+            exclusion_deg=float(self.cfg.get("safety.sun_avoidance_deg", 15.0)),
+            ra_hours=ra_hours, dec_deg=dec_deg)
+        allow = bool(self.cfg.get("safety.allow_solar_slew", False))
+        return [("sun_sep_ok", ok or allow, msg)]
+
     async def _t_goto_planet(self, a: dict) -> dict:
         pos = await asyncio.to_thread(self._planet_altaz, a.get("name", ""))
         if "error" in pos:
@@ -194,13 +204,13 @@ class ToolKit:
         mount = self.drivers["mount"]
         ra, dec = pos["ra_hours"], pos["dec_degs"]
         try:
-            # 안전게이트 통과 — 주간/악천후/기상 stale 등 SAFE_TO_OBSERVE 밖이면 슬루 거부.
+            # 안전게이트(SAFE_TO_OBSERVE) + 태양 이격(소이각 행성 포함) 둘 다 통과해야 슬루.
             await self.bus.run("mount_goto_radec", actor="agent",
                                params={"ra_hours": ra, "dec_degs": dec,
                                        "target": pos["body"]},
                                func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec),
-                               preconditions=self._safety_gate_preconds(
-                                   f"{pos['body']} 슬루"))
+                               preconditions=(self._safety_gate_preconds(f"{pos['body']} 슬루")
+                                              + self._sun_sep_preconds(ra, dec)))
         except Exception as exc:
             return {"ok": False, "reason": f"goto 거부/실패: {exc}", "target": pos["body"]}
         return {"ok": True, "target": pos["body"], "alt_deg": pos["alt_deg"],

@@ -131,6 +131,15 @@ dome_shutter_auto = true
 weather_warn_seconds = 30      # 이 이상 지연 → 경고 표시 (운영 계속)
 weather_unsafe_seconds = 120   # 이 이상 지연(또는 데이터 없음) → WEATHER_HOLD
 
+# 태양 회피(solar exclusion) — OTA가 태양/근방을 향하는 슬루를 막는다(센서/광학 일소 손상 방지).
+# 모든 슬루 경로(수동 goto/jog/move_axis, AI, Orchestrator, 오토플랫)에 적용. 야간엔 태양이
+# 지평 아래라 정상 대상은 이격이 커서 영향 없음.
+sun_avoidance_deg = 15         # 태양 중심에서 이 각(°) 이내로는 슬루 거부 (최소 10° 권장)
+# 태양 근접 슬루 override — ⚠ 센서/광학 손상 위험. *운영 책임자만* config.local.json에서 true로.
+# true면 태양 회피 가드가 해제된다(태양 관측 등 의도적 작업용). AI 에이전트는 이 값과 무관하게
+# 항상 차단되도록 설계됐다(AI는 우회 불가). ActionLog에 우회 사실이 감사 기록된다.
+allow_solar_slew = false
+
 [sentinel]
 # 프레임 품질 판정 임계 (로드맵 §10.4). 기본 지표(중앙값 ADU·과포화 비율)로
 # accepted/warning/rejected를 정한다. FWHM·star count는 추후 분석 플러그인이 채움.

@@ -79,6 +79,60 @@ def sun_altaz(dt_utc: datetime, lat_deg: float, lon_deg: float) -> tuple[float, 
     return radec_to_altaz(ra_h, dec, lat_deg, lst_hours(dt_utc, lon_deg))
 
 
+# ── 태양 회피(solar exclusion) — OTA가 태양/근방을 향하는 슬루를 막기 위한 각이격 ──────
+# 야간엔 태양이 지평 아래라 정상 대상과의 이격이 항상 크므로(보통 90°+) 오탐 0.
+
+def angular_separation_radec(ra1_h: float, dec1_deg: float,
+                             ra2_h: float, dec2_deg: float) -> float:
+    """두 적도좌표 점의 각이격(deg). 프레임 무관 — 태양도 천체이므로 이게 곧 실제 이각."""
+    d1, d2 = dec1_deg * D2R, dec2_deg * D2R
+    dra = (ra1_h - ra2_h) * 15.0 * D2R
+    cosd = math.sin(d1) * math.sin(d2) + math.cos(d1) * math.cos(d2) * math.cos(dra)
+    return math.acos(max(-1.0, min(1.0, cosd))) * R2D
+
+
+def angular_separation_altaz(alt1: float, az1: float,
+                             alt2: float, az2: float) -> float:
+    """두 지평좌표 점의 각이격(deg). 구면 코사인법칙."""
+    a1, a2 = alt1 * D2R, alt2 * D2R
+    cosd = (math.sin(a1) * math.sin(a2)
+            + math.cos(a1) * math.cos(a2) * math.cos((az1 - az2) * D2R))
+    return math.acos(max(-1.0, min(1.0, cosd))) * R2D
+
+
+def sun_separation_radec(ra_hours: float, dec_deg: float, dt_utc: datetime) -> float:
+    sra, sdec = sun_radec(dt_utc)
+    return angular_separation_radec(ra_hours, dec_deg, sra, sdec)
+
+
+def sun_separation_altaz(alt_deg: float, az_deg: float, dt_utc: datetime,
+                         lat_deg: float, lon_deg: float) -> float:
+    sa, sz = sun_altaz(dt_utc, lat_deg, lon_deg)
+    return angular_separation_altaz(alt_deg, az_deg, sa, sz)
+
+
+def solar_exclusion_check(*, exclusion_deg: float,
+                          ra_hours: float | None = None, dec_deg: float | None = None,
+                          alt_deg: float | None = None, az_deg: float | None = None,
+                          lat_deg: float | None = None, lon_deg: float | None = None,
+                          dt_utc: datetime | None = None) -> tuple[bool, float, str]:
+    """슬루 목표가 태양에서 exclusion_deg 이상 떨어졌는지. (ok, 이격deg, 사유).
+    ra/dec를 주면 적도좌표 이격(lat/lon 불요), alt/az를 주면 태양 alt/az와의 이격(lat/lon 필요).
+    좌표가 부족하면 fail-closed로 거부. 호출부가 이 ok를 ActionBus 사전조건으로 건다."""
+    dt = dt_utc or now_utc()
+    if ra_hours is not None and dec_deg is not None:
+        sep = sun_separation_radec(ra_hours, dec_deg, dt)
+    elif (alt_deg is not None and az_deg is not None
+          and lat_deg is not None and lon_deg is not None):
+        sep = sun_separation_altaz(alt_deg, az_deg, dt, lat_deg, lon_deg)
+    else:
+        return False, 0.0, "태양 이격 계산 불가 (좌표 부족) — 거부 (fail-closed)"
+    ok = sep >= exclusion_deg
+    msg = "ok" if ok else (f"태양 이격 {sep:.1f}° < 제외각 {exclusion_deg:.0f}° "
+                           "— 태양 근접 슬루 거부")
+    return ok, sep, msg
+
+
 # Sky Panel용 — 달·밝은 행성의 (alt,az) + 달 위상. astropy(번들 ephemeris, 오프라인)로
 # 계산하며 느리므로(수백 ms) 호출부(StatusSampler)가 30초 캐시한다. 천체는 분당 ~0.13°만
 # 움직여 차트 표시엔 충분. 실패하면 빈 리스트(차트는 태양/마운트만 그림).

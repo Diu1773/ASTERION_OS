@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 
 from ..config import Config
-from ..core import fitsio
+from ..core import ephemeris, fitsio
 from ..core.actions import ActionBus, ActionError
 from ..core.events import EventHub
 from ..core.ontology import (
@@ -203,7 +203,15 @@ class AutoFlatRunner:
         if st.alt_degs is not None and st.alt_degs >= p.min_alt_deg:
             return
         snap_sun_az = (self.bus._snapshot_fn() or {}).get("sun", {}).get("antisolar_az")
-        target_az = float(snap_sun_az) if snap_sun_az is not None else 0.0
+        if snap_sun_az is not None:
+            target_az = float(snap_sun_az)
+        else:
+            # 스냅샷에 반태양 방위가 없으면(초기 등) ephemeris로 직접 계산한다. 정북(0°) 폴백은
+            # 계절·시각에 따라 저고도 태양과 충돌할 수 있어 금지 — 플랫은 항상 반태양(태양 회피).
+            lat = float(self.cfg.get("site.latitude", 36.6))
+            lon = float(self.cfg.get("site.longitude", 127.5))
+            _sa, _sun_az = ephemeris.sun_altaz(ephemeris.now_utc(), lat, lon)
+            target_az = (_sun_az + 180.0) % 360.0
         self._set(phase="플랫 위치로 슬루")
         self.events.log("autoflat",
                         f"고도 {st.alt_degs:.1f}° < {p.min_alt_deg}° — "

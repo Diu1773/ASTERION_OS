@@ -26,7 +26,7 @@ from typing import Any, Awaitable, Callable
 import numpy as np
 
 from ..config import Config
-from ..core import fitsio
+from ..core import ephemeris, fitsio
 from ..core.actions import ActionBus, ActionError
 from ..core.events import EventHub
 from ..core.focus_offset import apply_filter_focus_offset
@@ -155,6 +155,14 @@ class ObservationOrchestrator:
             safe_now = self.safety_fn is None or saf.get("state") in SAFE_TO_OBSERVE
             # 카메라 단일점유 대칭 — 수동 캡처/오토플랫이 같은 카메라를 점유 중이면 거부.
             busy_reason = self.occupancy_fn() if self.occupancy_fn else None
+            # 태양 회피 — 대상이 태양 근접(주간/소이각)이면 거부. allow_solar_slew(책임자 config)면 통과.
+            allow_solar = bool(self.cfg.get("safety.allow_solar_slew", False))
+            if has_coords:
+                sun_ok, _sun_sep, sun_msg = ephemeris.solar_exclusion_check(
+                    exclusion_deg=float(self.cfg.get("safety.sun_avoidance_deg", 15.0)),
+                    ra_hours=float(target["ra_hours"]), dec_deg=float(target["dec_degs"]))
+            else:
+                sun_ok, sun_msg = True, "ok"   # 좌표 없으면 target_has_coords가 먼저 막음
 
             async def _launch():
                 self._stop.clear()
@@ -175,6 +183,7 @@ class ObservationOrchestrator:
                      busy_reason or "카메라 점유 중 — 관측 시작 거부"),
                     ("safety_ok", safe_now,
                      f"안전 상태 불가({saf.get('state')}) — 관측 시작 거부"),
+                    ("sun_sep_ok", sun_ok or allow_solar, sun_msg),
                 ] + list(extra_preconditions or []),
             )
         finally:

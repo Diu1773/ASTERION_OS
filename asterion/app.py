@@ -314,6 +314,42 @@ def create_app() -> FastAPI:
     from .core.campaign import CampaignManager
     campaign_mgr = CampaignManager(db, meridian)
 
+    # 태양 회피 사전조건 — 운영자 슬루도 태양/근방을 향하면 거부. allow_solar_slew(책임자 config)면
+    # 통과(ActionLog에 감사 기록). ra/dec 또는 alt/az 중 하나를 준다.
+    def _solar_precond(*, ra_hours=None, dec_degs=None, alt=None, az=None
+                       ) -> tuple[str, bool, str]:
+        ok, _sep, msg = ephemeris.solar_exclusion_check(
+            exclusion_deg=float(cfg.get("safety.sun_avoidance_deg", 15.0)),
+            ra_hours=ra_hours, dec_deg=dec_degs, alt_deg=alt, az_deg=az,
+            lat_deg=lat, lon_deg=lon)
+        allow = bool(cfg.get("safety.allow_solar_slew", False))
+        return ("sun_sep_ok", ok or allow, msg)
+
+    # 상대 이동(jog/move_axis) 태양 가드 — 최대한 안전. 결과 지향을 단정하긴 어려우므로:
+    #   현재 지향을 읽을 수 있으면 그 위치가 (제외각+여유) 안인지 정밀 검사(태양 근접이면 거부 →
+    #   근처에서 살살 미는 것도 차단), 못 읽으면 주간일 때 보수적으로 거부(fail-closed).
+    # allow_solar_slew(책임자 config)면 통과. AI엔 이 경로(상대이동) 자체가 노출되지 않는다.
+    def _relative_slew_solar_block() -> tuple[str, bool, str]:
+        if bool(cfg.get("safety.allow_solar_slew", False)):
+            return ("sun_rel_ok", True, "")
+        margin = float(cfg.get("safety.sun_avoidance_deg", 15.0)) + 5.0  # 이동 여유 마진
+        m = (sampler.snapshot or {}).get("mount") or {}
+        if m.get("connected"):
+            if m.get("alt") is not None and m.get("az") is not None:
+                ok, sep, _ = ephemeris.solar_exclusion_check(
+                    exclusion_deg=margin, alt_deg=m["alt"], az_deg=m["az"],
+                    lat_deg=lat, lon_deg=lon)
+                return ("sun_rel_ok", ok,
+                        f"현재 지향이 태양 {sep:.0f}° 이내 — 상대 슬루 거부 (태양 근접, 책임자만 우회)")
+            if m.get("ra_hours") is not None and m.get("dec_degs") is not None:
+                ok, sep, _ = ephemeris.solar_exclusion_check(
+                    exclusion_deg=margin, ra_hours=m["ra_hours"], dec_deg=m["dec_degs"])
+                return ("sun_rel_ok", ok,
+                        f"현재 지향이 태양 {sep:.0f}° 이내 — 상대 슬루 거부 (태양 근접, 책임자만 우회)")
+        # 지향 미상(미연결/좌표 없음) → 주간이면 거부(fail-closed)
+        return ("sun_rel_ok", sun_alt_now() <= -0.5,
+                "현재 지향 불명 + 주간 — 상대 슬루 거부 (태양 회피, 책임자만 우회)")
+
     # 장비 연결 변경(연결/해제/모드전환)을 막는 공용 사전조건 — 세션 중엔 금지.
     def conn_preconditions() -> list[tuple[str, bool, str]]:
         return [
@@ -586,7 +622,8 @@ def create_app() -> FastAPI:
         await bus.run("mount_goto_altaz", actor="operator",
                       params={"alt": req.alt, "az": req.az},
                       func=lambda: asyncio.to_thread(mount.goto_altaz,
-                                                     req.alt, req.az % 360.0))
+                                                     req.alt, req.az % 360.0),
+                      preconditions=[_solar_precond(alt=req.alt, az=req.az % 360.0)])
         return {"ok": True}
 
     @app.post("/api/actions/mount/goto_radec")
@@ -601,7 +638,8 @@ def create_app() -> FastAPI:
                       params={"ra_hours": round(ra, 5),
                               "dec_degs": round(dec, 5),
                               "input": [req.ra, req.dec]},
-                      func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec))
+                      func=lambda: asyncio.to_thread(mount.goto_radec, ra, dec),
+                      preconditions=[_solar_precond(ra_hours=ra, dec_degs=dec)])
         return {"ok": True, "ra_hours": ra, "dec_degs": dec}
 
     @app.post("/api/actions/mount/jog")
@@ -616,7 +654,8 @@ def create_app() -> FastAPI:
         await bus.run("mount_jog", actor="operator",
                       params={"direction": d, "arcsec": arc},
                       func=lambda: asyncio.to_thread(mount.offset_arcsec,
-                                                     dra, ddec))
+                                                     dra, ddec),
+                      preconditions=[_relative_slew_solar_block()])
         return {"ok": True}
 
     # 연속 조그(PWI4식 MoveAxis) — 버튼 유지 동안 축을 속도 슬루. 방향→축+부호는
@@ -642,7 +681,8 @@ def create_app() -> FastAPI:
         await bus.run("mount_move_axis", actor="operator",
                       params={"direction": d, "rate": req.rate,
                               "deg_s": round(rate_deg_s, 4), "axis": axis},
-                      func=lambda: asyncio.to_thread(mount.move_axis, axis, rate_deg_s))
+                      func=lambda: asyncio.to_thread(mount.move_axis, axis, rate_deg_s),
+                      preconditions=[_relative_slew_solar_block()])
         return {"ok": True, "axis": axis, "deg_s": round(rate_deg_s, 4)}
 
     @app.post("/api/actions/mount/jog_keepalive")

@@ -31,12 +31,71 @@ async function post(url, body) {
     body: JSON.stringify(body || {}),
   });
   if (!res.ok) {
+    if (res.status === 401) showLogin(true);   // 세션 만료 → 로그인 게이트 재노출
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (e) { /* noop */ }
     logLine({ ts: nowts(), source: "ui", level: "error", msg: `요청 거부: ${detail}` });
     throw new Error(detail);
   }
   return res.json().catch(() => ({}));
+}
+
+// ---------- 원격 접속 인증 게이트 (REMOTE_ACCESS_PLAN A2) ----------
+// auth 꺼짐(기본): /api/session/me 가 authenticated=true(auth:"disabled") → 게이트 안 뜸(무변경).
+// auth 켜짐 + 미인증: 로그인 오버레이 표시, 대시보드 부팅 보류. 로그인 성공 시 reload.
+let SESSION = { authenticated: true, auth: "disabled", role: "admin" };
+
+async function checkSession() {
+  try {
+    SESSION = await (await fetch("/api/session/me")).json();
+  } catch (e) {
+    SESSION = { authenticated: false };
+  }
+  return SESSION;
+}
+
+function showLogin(show) {
+  const ov = $("login-overlay");
+  if (!ov) return;
+  ov.hidden = !show;
+  if (show) { const u = $("login-user"); if (u) setTimeout(() => u.focus(), 50); }
+}
+
+function applySessionChrome() {
+  // 실제 로그인 사용자일 때만 사용자 배지·로그아웃 노출(인증 꺼짐/익명은 숨김).
+  const real = SESSION.authenticated && SESSION.kind === "user";
+  const badge = $("user-badge"), lo = $("logout-btn");
+  if (badge) { badge.hidden = !real; if (real) badge.textContent = `${SESSION.user} · ${SESSION.role}`; }
+  if (lo) lo.hidden = !real;
+}
+
+function wireLogin() {
+  const form = $("login-form");
+  if (form) form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = $("login-error"); if (err) err.hidden = true;
+    const btn = $("login-submit"); if (btn) btn.disabled = true;
+    try {
+      const res = await fetch("/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("login-user").value, password: $("login-pass").value }),
+      });
+      if (!res.ok) {
+        let d = "로그인 실패";
+        try { d = (await res.json()).detail || d; } catch (e2) { /* noop */ }
+        throw new Error(d);
+      }
+      location.reload();   // 성공 → 재부팅(이벤트 중복 바인딩 회피, 권한별 UI 일괄 반영)
+    } catch (e2) {
+      if (err) { err.textContent = e2.message; err.hidden = false; }
+      if (btn) btn.disabled = false;
+    }
+  });
+  const lo = $("logout-btn");
+  if (lo) lo.onclick = async () => {
+    try { await fetch("/logout", { method: "POST" }); } catch (e) { /* noop */ }
+    location.reload();
+  };
 }
 
 // HiDPI 캔버스
@@ -3613,6 +3672,10 @@ function kickSky() { if (!skyRaf) skyRaf = requestAnimationFrame(skyLoop); }
 // ---------- 초기 로드 ----------
 
 async function init() {
+  wireLogin();
+  await checkSession();
+  if (!SESSION.authenticated) { showLogin(true); return; }   // 미인증 → 게이트만, 부팅 보류
+  applySessionChrome();
   initWorkspace();
   try {
     const [status, logs, frames, actions] = await Promise.all([

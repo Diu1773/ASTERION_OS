@@ -1134,3 +1134,20 @@ body:not(.devmode) .devmode-only { display: none; }
 .toast-d { display:block; font-size:11px; color:#8a94a2; margin-top:3px; }
 .toast.out { opacity:0; transform:translateX(20px); transition:all .4s ease; }
 @keyframes toast-in { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:none; } }
+
+/* ===== 원격 접속 로그인 게이트 (REMOTE_ACCESS_PLAN A2) ===== */
+.login-overlay { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center;
+  background:rgba(10,12,16,.82); backdrop-filter:blur(6px); }
+.login-overlay[hidden] { display:none; }
+.login-card { width:min(340px,90vw); display:flex; flex-direction:column; gap:11px;
+  background:var(--panel); border:1px solid var(--edge-strong); border-radius:var(--radius);
+  padding:26px 24px; box-shadow:var(--shadow-overlay); }
+.login-brand { font-family:var(--mono); font-weight:600; letter-spacing:.18em; font-size:18px; color:var(--text); text-align:center; }
+.login-sub { font-size:12px; color:var(--faint); text-align:center; margin-bottom:6px; }
+.login-card input { background:var(--panel-2); border:1px solid var(--edge-strong); border-radius:var(--radius-sm);
+  color:var(--text); font-family:var(--sans); font-size:14px; padding:10px 12px; outline:none; }
+.login-card input:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.login-card #login-submit { margin-top:4px; padding:10px; font-weight:600; }
+.login-error { color:var(--err); font-size:12px; text-align:center; min-height:1em; }
+.login-error[hidden] { display:none; }
+.user-badge { font-family:var(--mono); color:var(--dim); border-color:var(--edge-strong); }

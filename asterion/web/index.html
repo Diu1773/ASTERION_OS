@@ -10,11 +10,24 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=153">
+<link rel="stylesheet" href="/static/style.css?v=154">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
 <body>
+
+<!-- 원격 접속 로그인 게이트 (REMOTE_ACCESS_PLAN A2). 인증이 켜졌고 미인증일 때만 표시.
+     auth 꺼짐(기본)이면 /api/session/me가 authenticated=true라 절대 안 뜬다(무변경). -->
+<div id="login-overlay" class="login-overlay" hidden>
+  <form class="login-card" id="login-form">
+    <div class="login-brand">ASTERION</div>
+    <div class="login-sub">원격 접속 인증</div>
+    <input id="login-user" type="text" placeholder="사용자명" autocomplete="username" required>
+    <input id="login-pass" type="password" placeholder="비밀번호" autocomplete="current-password" required>
+    <button type="submit" id="login-submit" class="btn">로그인</button>
+    <div class="login-error" id="login-error" hidden></div>
+  </form>
+</div>
 
 <header class="topbar">
   <div class="brand">
@@ -39,6 +52,8 @@
     <span class="ws-dot" id="ws-dot" title="WebSocket 연결"></span>
     <button class="alert-bell" id="alert-bell" title="미확인 위험 알림 — 클릭하면 모두 확인" hidden>🔔<span class="alert-badge" id="alert-badge">0</span></button>
     <button class="snd-btn" id="snd-btn" title="알림·촬영음 켜기/끄기">🔊</button>
+    <span class="badge user-badge" id="user-badge" title="로그인 사용자 · 역할" hidden></span>
+    <button class="dev-btn" id="logout-btn" title="로그아웃" hidden>로그아웃</button>
     <button class="dev-btn" id="dev-btn"><span class="gear">⚙</span> 설정</button>
   </div>
 </header>
@@ -853,7 +868,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=184"></script>
+<script src="/static/app.js?v=185"></script>
 <script src="/static/agent_chat.js?v=5" defer></script>
 </body>
 </html>

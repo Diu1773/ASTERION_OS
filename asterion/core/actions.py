@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable
 
+from ..access.audit import actor_label
 from .events import EventHub
 from .ontology import ActionLog, Db, row_to_dict
 
@@ -44,6 +45,9 @@ class ActionBus:
     def _record(self, action_type: str, actor: str, params: dict,
                 input_state: dict, output_state: dict,
                 success: bool, message: str) -> None:
+        # 감사 신원 — 인증이 켜진 원격 운영에선 'operator' → 'operator(alice)'.
+        # 꺼져 있으면(로컬) base 그대로(하위호환). 안전/사전조건 로직과 무관.
+        actor = actor_label(actor)
         row = self._db.add(ActionLog(
             action_type=action_type, actor=actor,
             params_json=_dumps(params),

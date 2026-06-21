@@ -110,6 +110,35 @@ def build_analysis_router(sentinel: Any, framedata: Any = None,
             filt=filter, show_raw=show_raw),
             "facets": skygraph.quality_facets(framedata.db)}   # 촬영된 대상·필터만
 
+    @router.get("/api/telemetry/persisted")
+    async def telemetry_persisted(channel: str = "", hours: float = 24.0,
+                                  limit: int = 5000):
+        """영속 다운샘플 텔레메트리(1분 버킷 min/mean/max, 보존기간 내)의 과거 시계열.
+
+        라이브 1h 인메모리 링(/api/telemetry/history)과 달리 며칠~보존기간(기본 30일)까지
+        과거를 조회한다 — '내장 대시보드의 과거 차트' 데이터 출구. 데이터는 이미 SQLite
+        (TelemetrySample)에 있으므로 외부 TSDB/Grafana 없이 그대로 그릴 수 있다.
+
+        channel 비우면 가용 채널 목록, 주면 해당 채널의 시간오름차순 포인트(min/mean/max/n).
+        """
+        if framedata is None:
+            raise HTTPException(503, "FrameData 미가용")
+        from datetime import datetime, timedelta, timezone
+        from ..core.ontology import TelemetrySample
+        db = framedata.db
+        if not channel:
+            chans = db.query(lambda s: sorted(
+                r[0] for r in s.query(TelemetrySample.channel).distinct().all()))
+            return {"channels": chans}
+        h = max(0.1, min(float(hours), 24.0 * 400))      # 보존기간 상한 가드
+        since = (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat()
+        rows = db.telemetry_persisted(channel=channel, since_utc=since,
+                                      limit=max(1, min(int(limit), 20000)))
+        rows.sort(key=lambda r: r.get("utc") or "")      # 관측시각 오름차순(out-of-order 안전)
+        return {"channel": channel, "hours": h,
+                "points": [{"t": r["utc"], "min": r["vmin"], "mean": r["vmean"],
+                            "max": r["vmax"], "n": r["n"]} for r in rows]}
+
     # ---------- Calibration Library (§10.5) ----------
 
     @router.get("/api/calibration/products")

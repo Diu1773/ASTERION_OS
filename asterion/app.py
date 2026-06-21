@@ -285,7 +285,7 @@ def create_app() -> FastAPI:
     orch.measure_fn = forge.measure_calibrated
     # 돔 가드 — 안전 '판정'(safety)과 분리된 '행동'(비상 자동닫힘 + 슬레이빙). 샘플러가
     # 매 스냅샷마다 호출. 장비 키 비의존 — 돔이 REGISTRY에 있으면 자동 동작.
-    sampler.safety_actuator = DomeGuard(
+    _dome_guard = DomeGuard(
         drivers, bus, events,
         dome_cfg={
             "dome_radius_m": float(cfg.get("dome.radius_m", 2.0)),
@@ -295,6 +295,15 @@ def create_app() -> FastAPI:
             "gem_dec_offset_m": float(cfg.get("dome.gem_dec_offset_m", 0.0)),
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)))
+    # 태양 폐루프 감시 — 슬루/추적 중 OTA가 태양 제외각 안으로 들어오면 긴급 정지(진입 가드를
+    # 뚫고 들어온 경우의 최후 방어선; 주간에만 동작해 야간 정상 슬루는 방해 안 함).
+    from .watchtower.solar_watchdog import SolarWatchdog
+    _solar_watchdog = SolarWatchdog(drivers, bus, events, cfg)
+
+    async def _safety_actuator(snap):
+        await _dome_guard(snap)
+        await _solar_watchdog(snap)
+    sampler.safety_actuator = _safety_actuator
 
     # 기상예보 — 스케줄러 게이팅·대시보드. config에 KMA 키 있으면 실예보, 없으면 Sim 폴백.
     from .watchtower.forecast import ForecastService

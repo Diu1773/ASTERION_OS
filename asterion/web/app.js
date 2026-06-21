@@ -2038,7 +2038,7 @@ const PROTO_GS_LAYOUT = {
   sky:     { x: 0, y: 0,  w: 6, h: 11 },
   skyflat: { x: 6, y: 0,  w: 6, h: 11 },
   mount:   { x: 0, y: 11, w: 4, h: 15 },
-  camera:  { x: 4, y: 11, w: 4, h: 15 },
+  camera:  { x: 4, y: 11, w: 4, h: 16 },
   focuser: { x: 8, y: 11, w: 4, h: 9  },
   image:   { x: 8, y: 20, w: 4, h: 8  },
   // 기상(env) — 좌측 안전·기상(바닥 y18), 우측 위성·CCTV 와이드(바닥 y18)

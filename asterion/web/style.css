@@ -276,7 +276,7 @@ body.solo .gt-newwin { display: none; }
 .kv > b { font-family: var(--mono); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
 .kv > b.accent { color: var(--text); }
 
-.pills { display: flex; gap: 7px; margin: 10px 0 2px; }
+.pills { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0 2px; }
 .pill {
   font-size: 10px; letter-spacing: .5px; padding: 4px 9px; border-radius: 999px;
   border: 1px solid var(--edge); color: var(--faint); text-transform: uppercase;
@@ -371,7 +371,8 @@ select { color-scheme: dark; }
   transition: background .15s, border-color .15s; white-space: nowrap;
 }
 .btn:hover { background: var(--panel-2); filter: brightness(1.12); }
-.btn:disabled { opacity: .4; cursor: default; }
+/* disabled = 흐린 컬러가 아니라 중성 회색으로(촬영중 촬영/연속 버튼이 '바랜 파랑'으로 더러워 보이던 것 정리) */
+.btn:disabled { opacity: .55; cursor: default; background: var(--panel-2); color: var(--faint); border-color: transparent; box-shadow: none; }
 /* 버튼 위계: fill 강도(solid→면→텍스트). hover=밝기만, 글로우·테두리하이라이트 금지 */
 .btn-danger { background: rgba(229,112,110,.13); border-color: transparent; color: #e98b89; }
 .btn-danger:hover { filter: brightness(1.13); }
@@ -407,7 +408,7 @@ select { color-scheme: dark; }
   display: none; position: absolute; z-index: 6; min-width: 124px; max-width: 168px;
   background: var(--panel-solid); border: 1px solid var(--edge-strong);
   border-radius: var(--radius-sm); padding: 7px 9px; box-shadow: var(--shadow);
-  font-size: 11px; backdrop-filter: blur(2px);
+  font-size: 11px;
 }
 .sky-menu .sm-line { font-family: var(--mono); color: var(--text); padding: 0.5px 0; line-height: 1.35; }
 .sky-menu .sm-sub { color: var(--dim); font-size: 10px; }
@@ -422,7 +423,6 @@ select { color-scheme: dark; }
   max-height: calc(100% - 50px); overflow-y: auto;
   background: var(--panel-solid); border: 1px solid var(--edge-strong);
   border-radius: 10px; padding: 12px 14px 14px; box-shadow: var(--shadow);
-  backdrop-filter: blur(3px);
 }
 .sky-custom[hidden] { display: none; }
 .sky-custom .sc-head {

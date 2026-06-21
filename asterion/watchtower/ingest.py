@@ -79,34 +79,43 @@ def ingest_records(db: Db, payload: Any) -> dict[str, Any]:
 
 
 def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
-    """가장 최신 원격 기상 record가 max_age_s 내로 신선하면 표준 dict(+age_s) 반환, 아니면
-    None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7). age는 record utc(ISO) 기준 —
-    오래됐거나 시각 파싱 실패면 None → fail-closed stale 판정으로 흘러감."""
+    """가장 *신선한*(최신 관측시각) 원격 기상 record가 max_age_s 내면 표준 dict(+age_s) 반환,
+    아니면 None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7). fail-closed stale 판정용.
+
+    최신을 *삽입 id*가 아니라 *utc(관측시각)*로 고른다: 엣지 store-and-forward 에이전트가
+    재접속 후 옛 버퍼를 backfill하면 옛 record가 더 큰 id로 들어와, id순으로 보면 옛 record가
+    '최신'으로 오판된다(직후 false-stale). 최근 N개를 파싱해 가장 늦은 관측시각을 고르면
+    out-of-order backfill·혼합 타임존 모두에 안전하다."""
     from datetime import datetime, timezone
 
     def _q(s):
-        row = (s.query(WeatherRecord).filter(WeatherRecord.source_id != "")
-               .order_by(WeatherRecord.id.desc()).first())
-        if row is None:
-            return None
-        return {"source_id": row.source_id, "utc": row.utc, "temp_c": row.temp_c,
-                "humidity": row.humidity, "wind_ms": row.wind_ms,
-                "cloud_score": row.cloud_score, "rain": row.rain,
-                "dew_point_c": row.dew_point_c}
-    rec = db.query(_q)
-    if rec is None:
+        rows = (s.query(WeatherRecord).filter(WeatherRecord.source_id != "")
+                .order_by(WeatherRecord.id.desc()).limit(64).all())
+        return [{"source_id": r.source_id, "utc": r.utc, "temp_c": r.temp_c,
+                 "humidity": r.humidity, "wind_ms": r.wind_ms,
+                 "cloud_score": r.cloud_score, "rain": r.rain,
+                 "dew_point_c": r.dew_point_c} for r in rows]
+    rows = db.query(_q)
+    if not rows:
         return None
-    try:
-        ts = datetime.fromisoformat(rec["utc"])
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - ts).total_seconds()
-    except (ValueError, TypeError):
+    best = None
+    best_ts = None
+    for rec in rows:
+        try:
+            ts = datetime.fromisoformat(rec["utc"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        if best_ts is None or ts > best_ts:
+            best_ts, best = ts, rec
+    if best is None:
         return None
+    age = (datetime.now(timezone.utc) - best_ts).total_seconds()
     if age < 0 or age > max_age_s:
         return None
-    rec["age_s"] = age
-    return rec
+    best["age_s"] = age
+    return best
 
 
 def latest_per_source(db: Db) -> list[dict[str, Any]]:

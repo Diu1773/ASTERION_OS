@@ -33,6 +33,12 @@ from ..core.ontology import (
     TelescopeState, row_to_dict,
 )
 from ..drivers.sim import TwilightSim
+from ..watchtower import safety as _safety
+
+# 오토플랫(박명 작업)을 시작/진행해도 되는 안전 상태. 이 밖이면(FAULT/EMERGENCY_CLOSE/
+# WEATHER_HOLD/SAFE_CLOSED=주간) 시작 거부, 진행 중이면 pause→(미회복 시)abort.
+# orchestrator.SAFE_TO_OBSERVE와 동일 집합 — 위험 액추에이션은 안전 스냅샷 신선도에 의존.
+SAFE_TO_OBSERVE = {_safety.OPEN_ALLOWED, _safety.OBSERVING, _safety.READY_CHECK}
 
 
 @dataclass
@@ -70,7 +76,8 @@ class AutoFlatParams:
 class AutoFlatRunner:
     def __init__(self, cfg: Config, drivers: dict[str, Any], bus: ActionBus,
                  db: Db, events: EventHub, twilight: TwilightSim,
-                 sun_alt_fn, frames_dir: Path, preview_cb=None):
+                 sun_alt_fn, frames_dir: Path, preview_cb=None,
+                 safety_fn=None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -80,6 +87,11 @@ class AutoFlatRunner:
         self.sun_alt_fn = sun_alt_fn
         self.frames_dir = frames_dir
         self.preview_cb = preview_cb
+        # safety_fn: 현재 안전 스냅샷 dict({"state","reasons",...})를 돌려주는 콜러블.
+        # 운영에선 sampler.current_safety 주입(ts_mono 신선도 게이트 포함) — orchestrator/
+        # night_runner와 동형. None이면 안전 게이트 비활성(드라이버 직접 테스트용).
+        self.safety_fn = safety_fn
+        self._max_pause_s = float(cfg.get("safety.observe_max_pause_seconds", 300.0))
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._state: dict[str, Any] = {"running": False, "phase": "idle"}
@@ -95,6 +107,42 @@ class AutoFlatRunner:
     def _set(self, **kw) -> None:
         self._state.update(kw)
 
+    # ---------- 안전 게이트 (orchestrator와 동형) ----------
+
+    def _safety_now(self) -> dict:
+        try:
+            return self.safety_fn() or {} if self.safety_fn else {}
+        except Exception:
+            return {"state": _safety.FAULT, "reasons": ["safety_fn 오류"]}
+
+    async def _safety_gate(self, what: str) -> None:
+        """위험 단계(슬루/디더/노출) 전 안전 확인. unsafe면 회복까지 pause하고,
+        _max_pause_s 내 미회복이면 ActionError로 세션 중단(fail-closed: 의심스러우면 멈춘다).
+        safety_fn 미주입(None)이면 게이트 비활성 — 드라이버 직접 테스트 거동 보존."""
+        if self.safety_fn is None:
+            return
+        saf = self._safety_now()
+        if saf.get("state") in SAFE_TO_OBSERVE:
+            return
+        self.events.log("autoflat",
+                        f"안전 보류({saf.get('state')}) — {what} 전 대기. "
+                        f"사유: {saf.get('reasons')}", "warn")
+        self._set(phase=f"안전 대기 ({saf.get('state')})", safety=saf)
+        poll = min(2.0, max(0.2, self._max_pause_s))
+        waited = 0.0
+        while not self._stop.is_set():
+            await asyncio.sleep(poll)
+            waited += poll
+            saf = self._safety_now()
+            if saf.get("state") in SAFE_TO_OBSERVE:
+                self.events.log("autoflat", f"안전 회복({saf.get('state')}) — 재개")
+                self._set(safety=saf)
+                return
+            if waited >= self._max_pause_s:
+                raise ActionError(
+                    f"안전 미회복({saf.get('state')}) {waited:.0f}s — 오토플랫 중단")
+        raise ActionError("정지 요청 — 안전 대기 취소")
+
     # ---------- 시작/정지 ----------
 
     async def start(self, params: AutoFlatParams,
@@ -108,6 +156,10 @@ class AutoFlatRunner:
         cam_st = await asyncio.to_thread(self.drivers["camera"].status)
         # 스카이플랫은 박명 창(일몰/일출 전후)에서만. 시뮬 황혼이 켜져 있으면 우회.
         sun_ok = params.in_twilight_window(sun_alt) or self.twilight.enabled
+        # 안전 게이트 — WEATHER_HOLD/EMERGENCY_CLOSE/FAULT/주간(SAFE_CLOSED) 중엔 시작 거부.
+        # safety_fn 미주입이면 통과(테스트). orchestrator.start_plan과 동형.
+        saf = self._safety_now()
+        safe_now = self.safety_fn is None or saf.get("state") in SAFE_TO_OBSERVE
 
         async def _launch():
             self._stop.clear()
@@ -122,6 +174,8 @@ class AutoFlatRunner:
             preconditions=[
                 ("camera_connected", cam_st.connected, "카메라 연결 필요"),
                 ("mount_connected", mount_st.connected, "마운트 연결 필요"),
+                ("safety_ok", safe_now,
+                 f"안전 상태 불가({saf.get('state')}) — 오토플랫 시작 거부"),
                 ("twilight_window", sun_ok,
                  f"태양 고도 {sun_alt:+.1f}°가 박명 창 "
                  f"({params.flat_sun_alt_high:.0f}°~{params.flat_sun_alt_low:.0f}°) 밖 — "
@@ -212,6 +266,7 @@ class AutoFlatRunner:
             lon = float(self.cfg.get("site.longitude", 127.5))
             _sa, _sun_az = ephemeris.sun_altaz(ephemeris.now_utc(), lat, lon)
             target_az = (_sun_az + 180.0) % 360.0
+        await self._safety_gate("플랫 위치 슬루")
         self._set(phase="플랫 위치로 슬루")
         self.events.log("autoflat",
                         f"고도 {st.alt_degs:.1f}° < {p.min_alt_deg}° — "
@@ -266,6 +321,7 @@ class AutoFlatRunner:
         for seq in range(1, p.frames_per_filter + 1):
             if self._stop.is_set():
                 break
+            await self._safety_gate(f"{filt} #{seq} 플랫 노출")
             # 1) 디더 (별이 같은 픽셀에 찍히지 않게)
             dra = random.uniform(-p.dither_arcsec, p.dither_arcsec)
             ddec = random.uniform(-p.dither_arcsec, p.dither_arcsec)
@@ -354,6 +410,7 @@ class AutoFlatRunner:
         adjusts = 0
         waits = 0
         while not self._stop.is_set():
+            await self._safety_gate(f"{filt} 노출 탐색")
             self._set(phase=f"{filt} 노출 탐색 ({exposure:.2f}s)",
                       exposure=round(exposure, 2))
             img = await self.bus.run(

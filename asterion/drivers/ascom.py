@@ -377,6 +377,11 @@ class AscomCamera(CameraDriver):
         self._dev = None
         self._state = "idle"
         self._name = ""
+        # 노출 중(단일 COM 워커가 StartExposure로 점유)에는 status가 COM을 건드리면 노출 시간만큼
+        # 블록된다 → 직전 폴의 온도/쿨러 값을 캐시해 노출 중 status가 즉시 반환하게 한다.
+        self._last_temp: float | None = None
+        self._last_cooler = False
+        self._last_power: float | None = None
 
     def _call(self, fn):
         return self._ex.submit(fn).result()
@@ -404,6 +409,14 @@ class AscomCamera(CameraDriver):
             return CameraStatus(connected=False,
                                 detail=_HINT if not self._progid else "미연결",
                                 device_name=self._name)
+        # 노출 중에는 단일 COM 워커가 StartExposure로 점유돼 status 제출이 노출 시간(60~300s)만큼
+        # 블록된다 → 샘플러 STATUS_TIMEOUT_S(3s)→_stuck→offline→missing_required FAULT 플랩(매
+        # 천문 노출마다). 노출 중엔 COM을 건드리지 않고 직전 폴 캐시 + state='exposing'으로 즉시
+        # 반환한다 — 노출은 '정상 점유'이지 미연결이 아니다(거짓 FAULT 차단).
+        if self._state == "exposing":
+            return CameraStatus(connected=True, ccd_temp_c=self._last_temp,
+                                cooler_on=self._last_cooler, cooler_power=self._last_power,
+                                state="exposing", detail="노출 중", device_name=self._name)
         def _do():
             d = self._dev
             temp = None
@@ -421,6 +434,8 @@ class AscomCamera(CameraDriver):
                 power = float(d.CoolerPower)
             except Exception:
                 pass
+            # 노출 중 캐시 반환에 쓸 직전 값 갱신(평시 폴마다).
+            self._last_temp, self._last_cooler, self._last_power = temp, cooler, power
             return CameraStatus(connected=bool(d.Connected), ccd_temp_c=temp,
                                 cooler_on=cooler, cooler_power=power,
                                 state=self._state, detail="", device_name=self._name)
@@ -434,7 +449,6 @@ class AscomCamera(CameraDriver):
                binning: int = 1) -> np.ndarray:
         def _do():
             d = self._dev
-            self._state = "exposing"
             try:
                 b = max(1, int(binning))
                 applied_b = 1                     # 실제 적용된 비닝(capture가 기록에 사용)
@@ -470,7 +484,14 @@ class AscomCamera(CameraDriver):
                 return np.clip(arr, 0, self._sat).astype(np.uint16)
             finally:
                 self._state = "idle"
-        return self._call(_do)
+        # COM 제출 *전에* exposing으로 — 워커가 점유되기 전에 set해야 동시 status()가 즉시 캐시
+        # 경로를 탄다(제출 후 set하면 그 사이 status가 COM 큐 뒤에 걸려 블록될 수 있음).
+        self._state = "exposing"
+        try:
+            return self._call(_do)
+        except Exception:
+            self._state = "idle"   # 제출/실행 실패 시 상태 복구(다음 status가 COM 폴로 정상화)
+            raise
 
     def set_cooler(self, on: bool, setpoint_c: float | None = None) -> None:
         def _do():

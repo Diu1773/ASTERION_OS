@@ -31,9 +31,13 @@ _KO = {"수성": "mercury", "금성": "venus", "화성": "mars", "목성": "jupi
 class ToolKit:
     def __init__(self, *, cfg, snapshot_fn: Callable[[], dict], meridian,
                  orchestrator, bus, drivers, db=None, sentinel=None,
-                 night_runner=None, forecast=None):
+                 night_runner=None, forecast=None,
+                 safety_fn: Callable[[], dict] | None = None):
         self.cfg = cfg
         self.snapshot = snapshot_fn
+        # safety_fn: 신선도 게이트된 안전 dict(sampler.current_safety) — 운영에서 주입.
+        # 미주입이면 raw 스냅샷의 safety로 폴백(하위호환). orchestrator/night_runner와 동일 진입점.
+        self.safety_fn = safety_fn
         self.meridian = meridian
         self.orch = orchestrator
         self.bus = bus
@@ -178,7 +182,10 @@ class ToolKit:
         """현재 안전 스냅샷을 ActionBus 사전조건으로 변환 — AI 실행계도 운영(Orchestrator)과
         똑같은 fail-closed 안전게이트(SAFE_TO_OBSERVE)를 통과한다. 스냅샷이 비었거나 상태가
         없으면(state=None) SAFE_TO_OBSERVE에 없으므로 거부된다(fail-closed)."""
-        saf = (self.snapshot() or {}).get("safety") or {}
+        # 신선도 게이트된 current_safety()를 우선(메타 fail-closed: 샘플러 스톨 시 ts_mono>30s→
+        # FAULT). 미주입이면 raw 스냅샷 safety로 폴백(하위호환). AI도 사람과 동일 게이트 통과.
+        saf = (self.safety_fn() if self.safety_fn
+               else (self.snapshot() or {}).get("safety")) or {}
         state = saf.get("state")
         return [("safety_ok", state in SAFE_TO_OBSERVE,
                  f"안전 상태 불가({state}) — {what} 거부")]

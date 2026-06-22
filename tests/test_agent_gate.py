@@ -94,5 +94,40 @@ class TestAgentSolarGate(unittest.TestCase):
         self.assertTrue(tk._sun_sep_preconds(far_ra, -self.sdec)[0][1])
 
 
+class TestAgentFreshnessGate(unittest.TestCase):
+    """rank3 — AI는 raw 스냅샷이 아니라 신선도 게이트된 current_safety()를 소비해야 한다.
+    샘플러 스톨로 스냅샷 safety가 OPEN_ALLOWED로 굳어도 current_safety가 FAULT면 AI도 거부."""
+
+    def _tk(self, snapshot, safety_fn, dome=None):
+        db = tmp_db()
+        return ToolKit(cfg=Cfg(), snapshot_fn=lambda: snapshot, meridian=None,
+                       orchestrator=None, bus=new_bus(db), db=db,
+                       drivers={"mount": FakeMount(), "dome": dome or FakeDome()},
+                       safety_fn=safety_fn)
+
+    def test_stale_snapshot_blocks_even_if_snapshot_safe(self):
+        dome = FakeDome()
+        tk = self._tk({"safety": {"state": "OPEN_ALLOWED"}},   # 굳은 스냅샷=SAFE
+                      safety_fn=lambda: {"state": "FAULT", "stale_snapshot": True},
+                      dome=dome)
+        r = run(tk._t_dome_shutter({"open": True}))
+        self.assertFalse(r["ok"])         # 신선도 게이트 FAULT → 개방 거부
+        self.assertFalse(dome.opened)
+
+    def test_safety_fn_takes_precedence_over_snapshot(self):
+        # safety_fn 주입 시 게이트가 그걸 평가(raw 스냅샷 무시) — 진입점 일원화.
+        tk = self._tk({"safety": {"state": "FAULT"}},
+                      safety_fn=lambda: {"state": "OPEN_ALLOWED"})
+        self.assertTrue(tk._safety_gate_preconds("x")[0][1])
+
+    def test_fallback_to_snapshot_without_safety_fn(self):
+        # safety_fn 미주입(하위호환)이면 스냅샷 safety로 폴백 — 기존 거동 유지.
+        db = tmp_db()
+        tk = ToolKit(cfg=Cfg(), snapshot_fn=lambda: {"safety": {"state": "WEATHER_HOLD"}},
+                     meridian=None, orchestrator=None, bus=new_bus(db), db=db,
+                     drivers={"mount": FakeMount(), "dome": FakeDome()})
+        self.assertFalse(tk._safety_gate_preconds("x")[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

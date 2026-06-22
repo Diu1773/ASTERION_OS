@@ -1615,8 +1615,8 @@ function qvWire() {
 // ---------- 텔레메트리 히스토리 (영속 다운샘플 시계열 — 내장 'Grafana' 패널) ----------
 // /api/telemetry/persisted: 채널 선택 + 시간범위 + 자동 다운샘플(max_points=캔버스 폭,
 // Grafana의 max-data-points식). min/max 밴드 + 평균선 + 축/그리드 + 호버 툴팁.
-let telehistHours = 24;          // 현재 범위(h): 1/6/24/168/720
-let telehistLast = null;         // 마지막 응답 캐시(리사이즈 재그리기용 — 재요청 안 함)
+let telehistHours = 1;           // 범위(h): 0.0833/0.25/1=라이브 1Hz 링, 6/24/168/720=영속 버킷
+let telehistLast = null;         // 영속 응답 캐시(리사이즈 재그리기용)
 let telehistTimer = null;        // 자동갱신 인터벌
 
 function _thFmtVal(v) {
@@ -1682,26 +1682,43 @@ function drawTeleHistOn(cv, data) {
   ctx.strokeStyle = "#4cc9f0"; ctx.lineWidth = 1.5; ctx.stroke();
   cv._th = { pts, xs, X, Y, t0, t1, lo, hi, padL, padR, padT, padB, w, h };  // 툴팁용 기하
 }
+// 라이브 1Hz 링에서 선택 채널의 포인트(min/max 없음 → 밴드 없이 선만). WS로 매 틱 갱신됨.
+function _teleLivePoints() {
+  const sel = $("th-channel"); const ch = sel ? sel.value : "";
+  if (!ch) return [];
+  const arr = tele.series[ch] || [];
+  const cutoff = Date.now() / 1000 - telehistHours * 3600;
+  const out = [];
+  tele.t.forEach((t, i) => {
+    if (t >= cutoff && arr[i] != null)
+      out.push({ t: new Date(t * 1000).toISOString(), mean: arr[i], min: null, max: null });
+  });
+  return out;
+}
 function telehistRedraw() {
-  const cv = $("th-canvas");
-  if (cv && telehistLast) drawTeleHistOn(cv, telehistLast);
+  const cv = $("th-canvas"); if (!cv) return;
+  if (telehistHours <= 1) drawTeleHistOn(cv, { points: _teleLivePoints() });  // 라이브 링(WS 자동갱신)
+  else if (telehistLast) drawTeleHistOn(cv, telehistLast);                    // 영속 캐시
 }
 async function telehistLoad() {
   const sel = $("th-channel"); const cv = $("th-canvas");
   if (!sel || !cv) return;
-  if (!sel.dataset.filled) {                       // 채널 목록 1회 채움(촬영/적재된 것만)
-    try {
-      const d = await (await fetch("/api/telemetry/persisted")).json();
-      const chans = d.channels || [];
-      sel.innerHTML = chans.length
-        ? chans.map((c) => `<option value="${_schEsc(c)}">${_schEsc(c)}</option>`).join("")
-        : '<option value="">채널 없음</option>';
-      sel.dataset.filled = "1";
-      const pref = chans.find((c) => /temp/i.test(c)) || chans.find((c) => /alt/i.test(c)) || chans[0];
-      if (pref) sel.value = pref;
-    } catch (e) { /* noop */ }
+  if (!sel.dataset.filled && (teleKeys || []).length) {   // 채널 목록 = 라이브 키(영속의 상위집합)
+    const keys = teleKeys.slice().sort();
+    sel.innerHTML = keys.map((c) => `<option value="${_schEsc(c)}">${_schEsc(c)}</option>`).join("");
+    sel.dataset.filled = "1";
+    const pref = keys.find((c) => /temp/i.test(c)) || keys.find((c) => /alt/i.test(c)) || keys[0];
+    if (pref) sel.value = pref;
   }
   const ch = sel.value;
+  const note = $("th-note"); const emp = $("th-empty");
+  if (telehistHours <= 1) {                               // 라이브: 페치 없이 인메모리 링에서 그림
+    const n = _teleLivePoints().length;
+    if (emp) emp.hidden = n > 0;
+    if (note) note.textContent = ch ? `라이브 1Hz · ${n}점` : "채널을 선택하세요";
+    telehistRedraw();
+    return;
+  }
   if (!ch) { telehistLast = { points: [] }; drawTeleHistOn(cv, telehistLast); return; }
   const mp = Math.max(80, Math.round(cv.clientWidth || 600));   // 자동 해상도 = 패널 폭(점/px)
   try {
@@ -1709,10 +1726,9 @@ async function telehistLoad() {
       `/api/telemetry/persisted?channel=${encodeURIComponent(ch)}&hours=${telehistHours}&max_points=${mp}`)).json();
   } catch (e) { telehistLast = { points: [] }; }
   const n = (telehistLast.points || []).length;
-  const emp = $("th-empty"); if (emp) emp.hidden = n > 0;
-  const note = $("th-note");
+  if (emp) emp.hidden = n > 0;
   if (note) note.textContent = n
-    ? `${n}점${telehistLast.downsampled ? ` · ${telehistLast.raw_points}분버킷→다운샘플` : ""}`
+    ? `영속 · ${n}점${telehistLast.downsampled ? ` (${telehistLast.raw_points}분버킷→다운샘플)` : ""}`
     : "보존된 데이터 없음";
   drawTeleHistOn(cv, telehistLast);
 }
@@ -1723,7 +1739,7 @@ function telehistWire() {
     seg.querySelectorAll("button").forEach((b) => {
       b.onclick = () => {
         seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
-        b.classList.add("on"); telehistHours = Number(b.dataset.h) || 24; telehistLoad();
+        b.classList.add("on"); telehistHours = Number(b.dataset.h) || 1; telehistLoad();
       };
     });
   }
@@ -1734,8 +1750,12 @@ function telehistWire() {
     ar.dataset.w = "1";
     ar.onchange = () => {
       if (telehistTimer) { clearInterval(telehistTimer); telehistTimer = null; }
-      if (ar.checked) telehistTimer = setInterval(() => { if (currentTab() === "analysis") telehistLoad(); }, 30000);
+      // 영속(>1h)만 폴링한다 — 라이브(≤1h)는 WS 텔레메트리로 drawAllCharts→telehistRedraw 자동 갱신.
+      if (ar.checked) telehistTimer = setInterval(() => {
+        if (currentTab() === "analysis" && telehistHours > 1) telehistLoad();
+      }, 30000);
     };
+    if (ar.checked) ar.onchange();
   }
   const cv = $("th-canvas");
   if (cv && !cv.dataset.wt) {
@@ -2118,8 +2138,7 @@ async function initTelemetry() {
     tele.t = hist.t || [];
     tele.series = {};
     teleKeys.forEach((k) => { tele.series[k] = hist.series[k] || []; });
-    renderPlotKeys();
-    loadCharts();
+    telehistLoad();   // 텔레메트리 패널: 라이브 키 도착 후 채널목록 채우고 그린다(통합 패널)
   } catch (e) { setTimeout(initTelemetry, 4000); }
 }
 
@@ -2252,16 +2271,16 @@ const PROTO_GS_LAYOUT = {
   // 좁은 3열(readout이 space-between으로 폭 채워 narrow가 딱 맞음), 하단 Imaging 풀폭.
   sky:     { x: 0, y: 0,  w: 6, h: 11 },
   skyflat: { x: 6, y: 0,  w: 6, h: 11 },
-  mount:   { x: 0, y: 11, w: 4, h: 15 },
-  camera:  { x: 4, y: 11, w: 4, h: 16 },
-  focuser: { x: 8, y: 11, w: 4, h: 9  },
-  image:   { x: 8, y: 20, w: 4, h: 8  },
-  // 기상(env) — 좌측 안전·기상(바닥 y18), 우측 위성·CCTV 와이드(바닥 y18)
-  safety:       { x: 0, y: 0, w: 4, h: 8  },
-  weather:      { x: 0, y: 8, w: 4, h: 10 },
-  "embed-sat":  { x: 4, y: 0, w: 8, h: 9  },
-  "embed-cctv": { x: 4, y: 9, w: 8, h: 9  },
-  forecast:     { x: 0, y: 18, w: 12, h: 7 },
+  mount:   { x: 0, y: 11, w: 6, h: 16 },
+  camera:  { x: 6, y: 11, w: 6, h: 16 },
+  focuser: { x: 0, y: 27, w: 6, h: 9  },
+  image:   { x: 6, y: 27, w: 6, h: 9  },
+  // 기상(env) — 상단 [위성|CCTV] 나란히(영상 한 줄), 그 아래 [안전|기상] 상태행, 예보 풀폭
+  "embed-sat":  { x: 0, y: 0,  w: 6, h: 9  },
+  "embed-cctv": { x: 6, y: 0,  w: 6, h: 9  },
+  safety:       { x: 0, y: 9,  w: 6, h: 10 },
+  weather:      { x: 6, y: 9,  w: 6, h: 10 },
+  forecast:     { x: 0, y: 19, w: 12, h: 7 },
   // 계획(plan) — 캠페인(여러밤)이 최상위, 그 아래 스케줄(오늘밤)→타임라인→FOV→추천→대상
   campaign: { x: 0, y: 0,  w: 12, h: 12 },
   schedule: { x: 0, y: 12, w: 12, h: 14 },
@@ -2271,13 +2290,12 @@ const PROTO_GS_LAYOUT = {
   target:   { x: 0, y: 65, w: 12, h: 16 },
   // 운영(ops)
   nightrunner: { x: 0, y: 0, w: 12, h: 14 },
-  // 분석(analysis) — 차트 풀폭 상단, 프레임·액션 하단 2열(바닥 맞춤)
-  plots:   { x: 0, y: 0,  w: 12, h: 10 },
-  frames:  { x: 0, y: 10, w: 6,  h: 8  },
-  actions: { x: 6, y: 10, w: 6,  h: 8  },
-  forge:   { x: 0, y: 18, w: 12, h: 8  },
-  pixview: { x: 0, y: 26, w: 12, h: 12 },
-  telehist:{ x: 0, y: 38, w: 12, h: 11 },
+  // 분석(analysis) — 통합 텔레메트리 차트 풀폭 상단, 프레임·액션 2열, 품질추이 하단
+  telehist:{ x: 0, y: 0,  w: 12, h: 11 },
+  frames:  { x: 0, y: 11, w: 6,  h: 8  },
+  actions: { x: 6, y: 11, w: 6,  h: 8  },
+  forge:   { x: 0, y: 19, w: 12, h: 8  },
+  pixview: { x: 0, y: 27, w: 12, h: 12 },
   // 시스템(system) — 연결 + 로그 상단(바닥 맞춤), 시스템정보 풀폭 하단
   connections: { x: 0, y: 0,  w: 8,  h: 20 },
   "log-sys":   { x: 8, y: 0,  w: 4,  h: 20 },
@@ -2294,7 +2312,7 @@ const PANEL_DEF = {
   camera:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 10, defW: 6,  defH: 15, maxW: 6, maxH: 17 },
   focuser:      { klass: "control", fills: false,    ar: null,    minW: 4, minH: 5,  defW: 6,  defH: 9,  maxW: 8, maxH: 10 },
   image:        { klass: "viz",     fills: true,     ar: [3, 2],  minW: 4, minH: 6,  defW: 6,  defH: 9,  maxW: 12 },
-  safety:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 5,  defH: 8,  maxW: 6, maxH: 8 },
+  safety:       { klass: "control", fills: false,    ar: null,    minW: 4, minH: 6,  defW: 5,  defH: 8,  maxW: 6, maxH: 11 },
   weather:      { klass: "mixed",   fills: false,    ar: null,    minW: 4, minH: 9,  defW: 5,  defH: 11, maxW: 7 },
   "embed-sat":  { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
   "embed-cctv": { klass: "viz",     fills: true,     ar: [16, 9], minW: 5, minH: 6,  defW: 7,  defH: 8,  maxW: 12 },
@@ -2698,7 +2716,7 @@ function ensureGrid(tab) {
 }
 
 // ── Gridstack 프로토타입 구현 ────────────────────────────────────────────
-function gsKey(tab) { return `asterion.gslayout.${tab}.v3`; }
+function gsKey(tab) { return `asterion.gslayout.${tab}.v4`; }   // v4: 기본 배치 개편(기상 위성/CCTV 가로·장비 2열 정렬) — 옛 저장 무효
 
 function saveGSLayout(tab, grid) {
   try {
@@ -2801,7 +2819,7 @@ function ensureGridStack(tab) {
     if (lastStatus) applyStatus(lastStatus); drawAllCharts();
   });
   grid.on("resize", () => { if (lastStatus) applyStatus(lastStatus); });
-  grid.on("resizestop", (ev, el) => aspectSnap(grid, el));   // viz 비율 유지 — 드롭 시에만(드래그 중 호출하면 gridstack 리사이즈 상태가 깨져 멈춤)
+  // grid.on("resizestop", (ev, el) => aspectSnap(grid, el));   // 비율 자동잠금 OFF — viz도 가로·세로 자유 리사이즈(사용자 요청). 되살리려면 주석 해제.
   injectProtoBanner(tab);
   relayoutAfter(tab);
   return grid;
@@ -4241,8 +4259,8 @@ const toggleTwilight = () =>
 $("btn-twilight").onclick = toggleTwilight;
 $("btn-twilight2").onclick = toggleTwilight;
 
-// 플롯 빌더
-$("btn-plot-add").onclick = () => {
+// 플롯 빌더(레거시 plots 패널) — 텔레메트리 통합 패널로 대체돼 마크업 제거됨. 가드.
+if ($("btn-plot-add")) $("btn-plot-add").onclick = () => {
   const keys = selectedKeys();
   if (!keys.length) {
     logLine({ ts: nowts(), source: "ui", level: "warn",
@@ -4334,7 +4352,9 @@ window.addEventListener("resize", () => {
     const frame = view.querySelector(".embed-frame");
     const empty = view.querySelector(".embed-empty");
     const meta = q(`.embed-meta[data-embed-meta="${id}"]`);
-    const cfg = loadCfg(id);
+    let cfg = loadCfg(id);
+    // 위성영상 기본값 = 천리안 GK-2A 프록시(설정 없을 때 바로 표시). ⚙로 덮어쓰기 가능.
+    if (!cfg.url && id === "sat") cfg = { url: "/api/satellite/latest.png", type: "image", interval: 120 };
 
     clearInterval(timers[id]);
     img.classList.remove("on"); frame.classList.remove("on");

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <!-- UI/계기 폰트: IBM Plex Sans KR(한글 UI) + IBM Plex Mono(숫자). 오프라인 운영 대비 로컬 vendoring 권장 -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=155">
+<link rel="stylesheet" href="/static/style.css?v=156">
 <!-- Gridstack (?proto= 프로토타입 전용 자유배치 그리드 엔진) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css">
 </head>
@@ -644,25 +644,6 @@
   <section class="tab-pane" data-pane="analysis">
     <div class="muuri" id="grid-analysis">
 
-      <!-- 시계열 플롯 빌더 -->
-      <div class="muuri-item w12" data-panel="plots">
-      <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">시계열 플롯</span><span class="card-tag">TELEMETRY PLOTS</span></div>
-        <div class="plot-builder">
-          <div class="plot-keys" id="plot-keys"></div>
-          <div class="ctrl-row">
-            <select id="plot-window" style="max-width:110px">
-              <option value="300">5분</option>
-              <option value="900" selected>15분</option>
-              <option value="3600">1시간</option>
-            </select>
-            <button id="btn-plot-add" class="btn btn-go">+ 차트 추가</button>
-          </div>
-        </div>
-        <div id="charts"></div>
-      </section>
-      </div>
-
       <!-- 최근 프레임 -->
       <div class="muuri-item w6" data-panel="frames">
       <section class="muuri-item-content card">
@@ -725,21 +706,21 @@
       </section>
       </div>
 
-      <!-- 텔레메트리 히스토리 (영속 다운샘플 시계열 · 내장 Grafana 패널) -->
+      <!-- 텔레메트리 (라이브 1Hz 링 ↔ 영속 다운샘플, 단일 Grafana식 패널) -->
       <div class="muuri-item w12" data-panel="telehist">
       <section class="muuri-item-content card">
-        <div class="card-head"><span class="card-title">텔레메트리 히스토리</span><span class="card-tag">TELEMETRY HISTORY · 보존기간</span></div>
+        <div class="card-head"><span class="card-title">텔레메트리</span><span class="card-tag">TELEMETRY · 라이브↔히스토리</span></div>
         <div class="th-bar">
           <select id="th-channel" class="tn-sort"><option value="">채널…</option></select>
-          <span class="tn-seg" id="th-range"><button data-h="1">1h</button><button data-h="6">6h</button><button class="on" data-h="24">24h</button><button data-h="168">7d</button><button data-h="720">30d</button></span>
-          <label class="th-auto"><input type="checkbox" id="th-autorefresh"> 자동갱신</label>
+          <span class="tn-seg" id="th-range"><button data-h="0.0833">5m</button><button data-h="0.25">15m</button><button class="on" data-h="1">1h</button><button data-h="6">6h</button><button data-h="24">24h</button><button data-h="168">7d</button><button data-h="720">30d</button></span>
+          <label class="th-auto"><input type="checkbox" id="th-autorefresh" checked> 자동갱신</label>
           <span class="spacer"></span>
           <span class="th-note" id="th-note"></span>
           <button class="btn btn-sm" id="th-reload">↻</button>
         </div>
         <div class="th-plot"><canvas id="th-canvas" class="js-c-th"></canvas></div>
-        <div class="th-empty" id="th-empty" hidden>보존된 텔레메트리가 없습니다. 수집이 1분 이상 쌓이면 채널별 추세(min/mean/max)가 보존기간(기본 90일)까지 그려집니다.</div>
-        <div class="hint">시간범위를 고르면 해상도(점 개수)는 패널 폭에 맞춰 <b>자동 조정</b>됩니다(Grafana식 다운샘플). 라이브 최근 1시간은 위 ‘시계열 플롯’.</div>
+        <div class="th-empty" id="th-empty" hidden>데이터가 없습니다. 라이브(≤1h)는 수집 즉시, 히스토리(>1h)는 1분 버킷이 쌓이면 보존기간(sim 90일)까지 보입니다.</div>
+        <div class="hint">시간범위를 고르면 소스가 자동 전환됩니다 — <b>≤1h = 라이브 1Hz</b>(WS 실시간), <b>&gt;1h = 영속 버킷</b>(min/max 밴드 + 패널 폭에 맞춘 자동 다운샘플, Grafana식).</div>
       </section>
       </div>
 
@@ -886,7 +867,7 @@
 <script src="/static/muuri.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
 <script src="/static/catalog.js?v=2"></script>
-<script src="/static/app.js?v=187"></script>
+<script src="/static/app.js?v=192"></script>
 <script src="/static/agent_chat.js?v=5" defer></script>
 </body>
 </html>

@@ -57,5 +57,63 @@ class TestCurrentWeatherFreshness(unittest.TestCase):
         self.assertIsNone(current_weather(self.db, max_age_s=120))
 
 
+class TestWorstCaseAggregate(unittest.TestCase):
+    """rank2 — 신선한 다중 소스의 worst-case 합성(fail-closed). 한 소스라도 위험이면 위험."""
+
+    def setUp(self):
+        self.db = Db(Path(tempfile.mkdtemp()) / "t.db")
+        self.now = datetime.now(timezone.utc)
+
+    def test_rain_any_source(self):
+        # pc1=맑음, pc2=강수 동시 신선 → 합성 rain=True(최신 utc가 pc1이어도 pc2 강수 묵살 X).
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(
+            source_id="pc2", utc=_iso(self.now - timedelta(seconds=10)), rain=True))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertIsNotNone(rec)
+        self.assertTrue(rec["rain"])
+        self.assertEqual(rec["sources"], ["pc1", "pc2"])
+
+    def test_wind_humidity_cloud_max(self):
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now),
+                                  wind_ms=5.0, humidity=50.0, cloud_score=0.1))
+        self.db.add(WeatherRecord(source_id="pc2", utc=_iso(self.now),
+                                  wind_ms=25.0, humidity=80.0, cloud_score=0.6))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertAlmostEqual(rec["wind_ms"], 25.0)
+        self.assertAlmostEqual(rec["humidity"], 80.0)
+        self.assertAlmostEqual(rec["cloud_score"], 0.6)
+
+    def test_stale_dangerous_source_excluded(self):
+        # pc2가 2시간 전 강수(stale=신뢰 불가)면 worst-case에서 제외 — 죽은 원격 에이전트가
+        # 영영 관측을 막지 않는다. 신선한 pc1=맑음만 반영(rain=False), sources=[pc1].
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(
+            source_id="pc2", utc=_iso(self.now - timedelta(hours=2)), rain=True))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertIsNotNone(rec)
+        self.assertFalse(rec["rain"])
+        self.assertEqual(rec["sources"], ["pc1"])
+
+    def test_age_is_freshest(self):
+        self.db.add(WeatherRecord(
+            source_id="pc1", utc=_iso(self.now - timedelta(seconds=90)), rain=False))
+        self.db.add(WeatherRecord(source_id="pc2", utc=_iso(self.now), rain=False))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertLess(rec["age_s"], 10)   # 가장 신선한(pc2) 기준
+
+    def test_multisource_backfill_not_false_stale(self):
+        # rank19 — pc1 신선 record 후, 옛 record들을 대량 backfill(더 큰 id). id 윈도가 아니라
+        # 소스별 max(utc)로 고르므로 신선 record가 윈도 밖으로 밀리지 않는다(false-stale X).
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        for i in range(200):   # 옛 record 대량 backfill(큰 id, 과거 utc)
+            self.db.add(WeatherRecord(
+                source_id="pc1",
+                utc=_iso(self.now - timedelta(hours=2, minutes=i)), rain=False))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertIsNotNone(rec)        # 신선한 now record가 살아있어야
+        self.assertLess(rec["age_s"], 10)
+
+
 if __name__ == "__main__":
     unittest.main()

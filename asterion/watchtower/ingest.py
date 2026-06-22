@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 
 from ..core.ontology import Db, WeatherRecord
 
@@ -79,18 +79,31 @@ def ingest_records(db: Db, payload: Any) -> dict[str, Any]:
 
 
 def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
-    """가장 *신선한*(최신 관측시각) 원격 기상 record가 max_age_s 내면 표준 dict(+age_s) 반환,
-    아니면 None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7). fail-closed stale 판정용.
+    """신선한(max_age_s 내) *모든* 원격 소스의 **worst-case 합성** 기상 dict(+age_s)를 반환,
+    신선한 소스가 하나도 없으면 None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7).
 
-    최신을 *삽입 id*가 아니라 *utc(관측시각)*로 고른다: 엣지 store-and-forward 에이전트가
-    재접속 후 옛 버퍼를 backfill하면 옛 record가 더 큰 id로 들어와, id순으로 보면 옛 record가
-    '최신'으로 오판된다(직후 false-stale). 최근 N개를 파싱해 가장 늦은 관측시각을 고르면
-    out-of-order backfill·혼합 타임존 모두에 안전하다."""
+    fail-closed 핵심(rank2): 단일 '최신 utc' record 하나만 안전판정에 넘기면, pc01=맑음/
+    pc02=강수가 동시에 와도 utc 최신 한쪽만 채택돼 다른 소스의 위험이 영영 사라진다 — '한
+    센서라도 위험이면 닫는다'가 '가장 신선한 1건이 맑으면 OBSERVING'으로 뒤집힌다. 그래서
+    신선한 소스들을 모아 worst-case로 합성한다: rain=any, wind/humidity/cloud=max. (온도/이슬점
+    /utc/age는 가장 신선한 소스 기준 — 표시·신선도용.)
+
+    신선도는 *소스별 최신 관측시각(utc)* 기준(rank19): 소스별 max(utc)를 SQL로 골라 id 윈도에
+    의존하지 않으므로, 엣지 store-and-forward 에이전트의 대량 backfill(옛 record가 더 큰 id로
+    유입)에도 진짜 신선한 record가 윈도 밖으로 밀려 false-stale 되지 않는다. age<0(원격 시계
+    앞섬)은 신선으로 인정하지 않는다(미래 신선도로 stale 우회 방지)."""
     from datetime import datetime, timezone
 
     def _q(s):
-        rows = (s.query(WeatherRecord).filter(WeatherRecord.source_id != "")
-                .order_by(WeatherRecord.id.desc()).limit(64).all())
+        # 소스별 최신 관측시각(utc) 1건 — id가 아닌 utc 기준, 전수(limit 없음)라 backfill 안전.
+        # 같은 소스의 utc는 (source_id,utc) 중복제거로 유일하므로 소스당 정확히 1행.
+        sub = (s.query(WeatherRecord.source_id,
+                       func.max(WeatherRecord.utc).label("mu"))
+               .filter(WeatherRecord.source_id != "")
+               .group_by(WeatherRecord.source_id).subquery())
+        rows = (s.query(WeatherRecord)
+                .join(sub, and_(WeatherRecord.source_id == sub.c.source_id,
+                                WeatherRecord.utc == sub.c.mu)).all())
         return [{"source_id": r.source_id, "utc": r.utc, "temp_c": r.temp_c,
                  "humidity": r.humidity, "wind_ms": r.wind_ms,
                  "cloud_score": r.cloud_score, "rain": r.rain,
@@ -98,24 +111,41 @@ def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
     rows = db.query(_q)
     if not rows:
         return None
-    best = None
-    best_ts = None
+
+    now = datetime.now(timezone.utc)
+    fresh: list[tuple[float, dict]] = []
     for rec in rows:
         try:
             ts = datetime.fromisoformat(rec["utc"])
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             continue
-        if best_ts is None or ts > best_ts:
-            best_ts, best = ts, rec
-    if best is None:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = (now - ts).total_seconds()
+        if 0 <= age <= max_age_s:        # 미래(age<0)·stale 제외
+            fresh.append((age, rec))
+    if not fresh:
         return None
-    age = (datetime.now(timezone.utc) - best_ts).total_seconds()
-    if age < 0 or age > max_age_s:
-        return None
-    best["age_s"] = age
-    return best
+
+    fresh.sort(key=lambda x: x[0])       # 신선한 순(작은 age 먼저)
+    freshest_age, freshest = fresh[0]
+
+    def _maxv(key: str) -> float | None:
+        vals = [r[key] for _, r in fresh if r.get(key) is not None]
+        return max(vals) if vals else None
+
+    return {
+        "source_id": freshest["source_id"],
+        "utc": freshest["utc"],
+        "temp_c": freshest.get("temp_c"),
+        "dew_point_c": freshest.get("dew_point_c"),
+        "rain": any(bool(r.get("rain")) for _, r in fresh),   # 한 소스라도 강수 → 강수
+        "wind_ms": _maxv("wind_ms"),                          # 최악(최대) 풍속
+        "humidity": _maxv("humidity"),                        # 최악(최대) 습도
+        "cloud_score": _maxv("cloud_score"),                  # 최악(최대) 운량
+        "age_s": freshest_age,
+        "sources": sorted({r["source_id"] for _, r in fresh}),
+    }
 
 
 def latest_per_source(db: Db) -> list[dict[str, Any]]:

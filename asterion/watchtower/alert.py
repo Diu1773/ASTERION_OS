@@ -79,6 +79,20 @@ class AlertManager:
                     .first() is not None)
         return self.db.query(_q)
 
+    def fire(self, rule_id: str, level: str, title: str, detail: str = "",
+             state: str = "", cooldown_s: float = 0.0) -> dict | None:
+        """룰 평가 밖에서 직접 Alert 발화(데드맨·보안 등). 쿨다운 통과 시 DB 적재 +
+        (events 있으면) 브로드캐스트하고 rec 반환, 쿨다운 중이면 None."""
+        if cooldown_s and self._in_cooldown(rule_id, cooldown_s):
+            return None
+        row = self.db.add(Alert(rule_id=rule_id, level=level, title=title,
+                                detail=detail, state=state))
+        rec = {"id": row.id, "rule_id": rule_id, "level": level,
+               "title": title, "detail": detail, "state": state}
+        if self.events is not None and hasattr(self.events, "alert"):
+            self.events.alert(rec)
+        return rec
+
     def evaluate(self, snap: dict) -> list[dict[str, Any]]:
         """스냅샷을 룰로 평가 → 발화분(쿨다운 통과)을 DB 적재 + (events 있으면) 브로드캐스트."""
         snap = snap or {}

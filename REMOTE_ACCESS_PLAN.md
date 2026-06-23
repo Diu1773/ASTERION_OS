@@ -1,12 +1,13 @@
 # Access / 사이버 보안 — 원격 운영 PLAN (자율 빌드 계약서)
 
-> **상태: 🟢 Phase A 완료(백엔드+UI) · Phase B 앱하드닝+문서 완료(2026-06-22). C·D 남음.** 외부
-> 원격에서 천문대를 굴리기 위한 접속·인증·인가·원격전용 안전·하드닝. 전부 **추가형(additive)** —
-> 기존 안전계층(fail-closed·ActionBus 사전조건·SolarWatchdog·DomeGuard)은 **0줄 수정**. 인증은 기본
-> `enabled=false`라 로컬 SIM 개발 워크플로([[asterion-dev-workflow]])는 무변경. Phase A=`asterion/
-> access/`+ASGI 미들웨어 게이트+웹 로그인 UI. Phase B=앱 하드닝(proxy-headers·TrustedHost·Tailscale
-> 신원헤더 옵션)+[tools/tailscale/](tools/tailscale/README.md) serve 셋업 문서(tailnet 가입·serve는
-> 운영자 환경 작업). 검증: 접근게이트 20 + 전체 스위트 그린. 남은 C(원격 데드맨)·D(탐지/운영).
+> **상태: 🟢 Phase A·B·C·D 완료(2026-06-22). 위험명령 2단계 확인만 선택 잔여.** 외부 원격에서
+> 천문대를 굴리기 위한 접속·인증·인가·원격전용 안전·하드닝. 전부 **추가형(additive)** — 기존
+> 안전계층(fail-closed·ActionBus 사전조건·SolarWatchdog·DomeGuard)의 *판정*은 **0줄 수정**. 인증은
+> 기본 `enabled=false`라 로컬 SIM 개발 워크플로([[asterion-dev-workflow]])는 무변경. A=`access/`+
+> ASGI 게이트+웹 로그인 UI. B=앱 하드닝(proxy-headers·TrustedHost·Tailscale 신원헤더)+[tools/
+> tailscale/](tools/tailscale/README.md). C=세션 데드맨(`session_watchdog.py`, DomeGuard/SolarWatchdog
+> 동형 행동 레이어)+보안 Alert. D=레이트리밋(`access/ratelimit.py`, /login·/agent/chat→429)+시크릿
+> 권한 점검+[tools/hardening/](tools/hardening/README.md) 운영/백업/탐지 문서. 검증: 전체 118 그린.
 
 > 맥락: 지금 플랫폼은 `127.0.0.1` 바인딩·무인증이라 "로컬에서만 안전"하다. 외부 원격 운영을
 > 하려면 명령자의 *자격(인증·인가)*과 *원격 단절 시 안전*을 별도 계층으로 세워야 한다.
@@ -177,9 +178,19 @@ Tunnel 택1. 외부 IdP는 Caddy `forward_auth`로 끼울 여지.
   핀, 설정 시)·`cookie_secure`·Tailscale 신원헤더 옵션(`trust_tailscale_identity`+`tailscale_users`,
   serve 뒤에서만). ✅ [tools/tailscale/](tools/tailscale/README.md) serve/ACL/Funnel금지/하드닝 가이드.
   ⬜ **tailnet 가입·`tailscale serve` 실행은 운영자 환경 작업**(문서대로).
-- [ ] **C1 — 세션 데드맨**: heartbeat 엔드포인트 + 워치독(수동 원격만) → 세이프-스테이트.
-- [ ] **C2 — 위험명령 확인 + 보안 Alert**: 2단계 확인 + 로그인실패/오버라이드 경보.
-- [ ] **D1 — 하드닝**: 레이트리밋·시크릿 권한·호스트/네트워크 가이드·백업.
+- [x] **C1 — 세션 데드맨**: `watchtower/session_watchdog.py`(safety_actuator 체인에 추가) +
+  `POST /api/session/heartbeat`(viewer)·`GET /api/session/deadman` + app.js 30s 하트비트 +
+  `[safety.session_deadman]`(기본 off). 수동 원격만(NightRunner 면제·미무장 시 무동작) → 추적정지·
+  돔닫힘·파킹. 테스트 8.
+- [~] **C2 — 보안 Alert**: ✅ `AlertManager.fire()` + 로그인 실패 임계 경보(브루트포스, AccessPolicy
+  카운터) + 기동 시 `allow_solar_slew` 오버라이드 가시화 경보 + 데드맨 발화 경보. 테스트 1.
+  ⬜ 위험명령 2단계 확인(park/돔/모드/override)은 D로 이월(선택).
+- [x] **D1 — 레이트리밋 + 하드닝**: `access/ratelimit.py`(슬라이딩 윈도, /login·/api/agent/chat만
+  →429, 인증 무관 최외곽, 기본 on) + `[server.ratelimit]` + 기동 시 `config.local.json` 권한 경고
+  (POSIX) + [tools/hardening/](tools/hardening/README.md)(디스크암호화·RDP/VNC·VLAN·시크릿 로테이션·
+  백업·탐지/감사 체크리스트). 테스트 8.
+- [~] **D2 — 위험명령 2단계 확인**(선택, C2서 이월): park·돔·dev/mode·allow_solar_slew 원격 확인
+  토큰. 프론트 확인 플로우 동반 필요 → 독립 변경으로 분리(미착수).
 
 ---
 
@@ -212,6 +223,21 @@ Tunnel 택1. 외부 IdP는 Caddy `forward_auth`로 끼울 여지.
 
 - `2026-06-21 설계확정 — 경계 후보 비교(메시VPN vs 리버스프록시+도메인). 주체=나+운영자 몇 명 →
   viewer/operator/admin 역할 + 사람별 신원감사. 전부 추가형, 안전계층 0줄, auth 기본 off.`
+- `2026-06-22 Phase D — 레이트리밋(access/ratelimit.py): 인증 무관 항상 동작하는 별도 ASGI
+  미들웨어를 최외곽에 배치(add_middleware 마지막 → AccessMiddleware보다 바깥, throttle가 인증보다
+  먼저). 지정 경로(/login·/api/agent/chat)만 슬라이딩 윈도, 나머지 무제한이라 대시보드 폴링 무영향.
+  클라이언트 IP는 proxy-headers로 복원된 scope['client']. 기본 on(한도 넉넉)이라 기존 흐름·테스트
+  무영향(기존 게이트 테스트는 RateLimit 미배선 미니앱). 시크릿 권한 경고는 POSIX에서만(Windows 무의미).
+  하드닝/백업/탐지는 tools/hardening 문서. 위험명령 2단계 확인은 프론트 동반이라 독립 변경으로 분리.
+  라이브: /login 13회 → 10×200 + 3×429, /api/status 무제한. 테스트: ratelimit 8, 전체 118 그린.`
+- `2026-06-22 Phase C — 세션 데드맨(원격 운영자 하트비트 끊김→세이프-스테이트). DomeGuard/
+  SolarWatchdog와 동형 '행동 레이어'로 추가: safety.evaluate(판정) 0줄 수정, sampler.safety_actuator
+  체인에 한 줄. 무장은 하트비트 1회 수신 후에만(로컬/헤드리스 보존), NightRunner 무인은 면제, 위험
+  (돔열림/추적/슬루/세션) 있을 때만 발화, 에피소드당 1회+하트비트 재개 시 재무장. heartbeat=viewer
+  권한(곁의 viewer도 '사람 있음'). 보안 Alert: AlertManager.fire()로 로그인실패 임계(AccessPolicy
+  윈도 카운터)·기동 시 allow_solar_slew 가시화·데드맨 발화. config [safety.session_deadman]는 하위
+  테이블이라 [safety] 평면 키 *뒤*에 배치(안 그러면 sun_avoidance_deg 등을 삼킴 — 검증으로 확인).
+  위험명령 2단계 확인은 D로 이월. 테스트: 데드맨 8 + 로그인실패 1, 전체 110 그린.`
 - `2026-06-22 A2 UI + Phase B 하드닝 — 웹 로그인 오버레이(index/style/app.js: 미인증 게이트·401
   재노출·사용자배지/로그아웃, auth off면 /api/session/me=authenticated라 무표시; 프리뷰로 기본부팅
   무영향 확인). Phase B 앱측: __main__ proxy_headers+forwarded_allow_ips, TrustedHostMiddleware

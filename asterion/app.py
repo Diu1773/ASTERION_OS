@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from . import __version__
 from .access.auth import AccessPolicy, build_auth_router
 from .access.middleware import AccessMiddleware
+from .access.ratelimit import RateLimiter, RateLimitMiddleware
 from .camera.capture import CaptureService
 from .camera.cooler import CoolerController
 from .config import Config
@@ -250,7 +251,8 @@ def create_app() -> FastAPI:
 
     runner = AutoFlatRunner(cfg, drivers, bus, db, events, twilight,
                             sun_alt_now, cfg.data_dir / "frames",
-                            preview_cb=publish_preview)
+                            preview_cb=publish_preview,
+                            safety_fn=lambda: sampler.current_safety())
     sampler.autoflat_status = runner.status_dict
     capture = CaptureService(
         cfg, drivers, bus, db, events, cfg.data_dir / "frames",
@@ -311,22 +313,43 @@ def create_app() -> FastAPI:
     # 뚫고 들어온 경우의 최후 방어선; 주간에만 동작해 야간 정상 슬루는 방해 안 함).
     from .watchtower.solar_watchdog import SolarWatchdog
     _solar_watchdog = SolarWatchdog(drivers, bus, events, cfg)
+    # 원격 운영자 데드맨(REMOTE_ACCESS_PLAN Phase C) — 수동 원격 세션 하트비트가 끊기면
+    # 세이프-스테이트(추적정지·돔닫힘·파킹). 무인 운영(NightRunner)은 면제. config로 끔(기본 off).
+    from .watchtower.session_watchdog import SessionWatchdog
+    _session_watchdog = SessionWatchdog(
+        drivers, bus, events, cfg,
+        alert_fn=lambda title, detail, rule_id="session_deadman": alert_mgr.fire(
+            rule_id, "critical", title, detail, cooldown_s=60.0))
 
     async def _safety_actuator(snap):
         await _dome_guard(snap)
         await _solar_watchdog(snap)
+        await _session_watchdog(snap)
     sampler.safety_actuator = _safety_actuator
 
     # 기상예보 — 스케줄러 게이팅·대시보드. config에 KMA 키 있으면 실예보, 없으면 Sim 폴백.
     from .watchtower.forecast import ForecastService
     forecast_svc = ForecastService(cfg)
 
+    # 강수 예보 조기경보 — 선제 '경고'만(물리행동 0). 예보는 확률이라 그걸로 닫지 않는다;
+    # 실제 닫기는 센서 감지(EMERGENCY_CLOSE)가 한다. 샘플러 alert 평가에 동반(예보는 정시
+    # 캐시라 무비용, fire 쿨다운이 스팸 차단). config [weather.forecast_alert]로 끔.
+    from .watchtower.forecast_watch import ForecastWatch
+    _forecast_watch = ForecastWatch(forecast_svc, alert_mgr, cfg)
+    _alert_eval = sampler.alert_fn
+    def _alerts_with_forecast(snap):
+        if _alert_eval is not None:
+            _alert_eval(snap)
+        _forecast_watch.check()
+    sampler.alert_fn = _alerts_with_forecast
+
     # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. ProviderHub가 named
     # provider(groq/openai/ollama/자체) 여러 개를 들고 active 하나를 LLM으로 노출 —
     # 공급자/모델을 런타임에 스왑. 도구는 인프로세스, 실행계는 ActionBus 안전게이트 통과.
     toolkit = ToolKit(cfg=cfg, snapshot_fn=lambda: sampler.snapshot, meridian=meridian,
                       orchestrator=orch, bus=bus, drivers=drivers, db=db, sentinel=sentinel,
-                      night_runner=night_runner, forecast=forecast_svc)
+                      night_runner=night_runner, forecast=forecast_svc,
+                      safety_fn=lambda: sampler.current_safety())
     agent = Agent(
         ProviderHub(cfg), toolkit,
         system_prompt=str(cfg.get("agent.system_prompt", "")))
@@ -407,6 +430,20 @@ def create_app() -> FastAPI:
                                     if retention is not None else None)
         events.log("system",
                    f"Asterion v{__version__} 가동 — 모드 {drivers['mode'].upper()}")
+        # 위험 오버라이드 가시화(Phase C2) — allow_solar_slew가 켜진 채 기동하면 경보로 알린다.
+        if bool(cfg.get("safety.allow_solar_slew", False)):
+            alert_mgr.fire("solar_override_active", "critical",
+                           "태양 회피 오버라이드 활성",
+                           "allow_solar_slew=true — OTA 태양 근접 슬루 허용(센서/광학 손상 위험)")
+        # 시크릿 파일 권한 점검(Phase D, POSIX) — config.local.json이 group/other 읽기 가능하면 경고.
+        try:
+            import os as _os
+            _p = cfg.overlay_path
+            if _os.name == "posix" and _p.exists() and (_p.stat().st_mode & 0o077):
+                events.log("system", f"⚠ 보안: {_p.name} 권한이 느슨합니다(group/other 접근 가능) "
+                           "— `chmod 600` 권장(시크릿 보호)", "warn")
+        except Exception:
+            pass
         yield
         if app.state.retention_task is not None:
             app.state.retention_task.cancel()
@@ -432,6 +469,9 @@ def create_app() -> FastAPI:
         from starlette.middleware.trustedhost import TrustedHostMiddleware
         app.add_middleware(TrustedHostMiddleware,
                            allowed_hosts=[str(h) for h in _allowed])
+    # 레이트리밋(Phase D) — 인증 무관 최외곽에서 /login(브루트포스)·/api/agent/chat(비용)만 제한.
+    # 마지막 add라 가장 바깥 → 인증 처리 전에 throttle. 지정 경로 외에는 무영향.
+    app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(cfg))
 
     @app.exception_handler(ActionError)
     async def _action_error(_, exc: ActionError):
@@ -491,6 +531,17 @@ def create_app() -> FastAPI:
             pass
         text = render_metrics(sampler.snapshot or {}, extra)
         return Response(text, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    @app.post("/api/session/heartbeat")
+    async def session_heartbeat():
+        """원격 운영자 생존 신호 — 데드맨 재무장(고빈도, ActionLog 미경유)."""
+        _session_watchdog.heartbeat()
+        return {"ok": True, "deadman": _session_watchdog.status()}
+
+    @app.get("/api/session/deadman")
+    async def session_deadman_status():
+        """원격 세션 데드맨 상태 — 활성/무장/하트비트 경과/타임아웃/발화 여부."""
+        return _session_watchdog.status()
 
     # Skygraph(Ph9) — 대상 중심 dossier. 한 대상의 관측요청·프레임·품질·가시성·추천 집계.
     _site_lat = float(cfg.get("site.latitude", 36.64))
@@ -1196,6 +1247,10 @@ def create_app() -> FastAPI:
     # AI 에이전트 라우트 (/api/agent/chat·status·models·model) — 대시보드 채팅 위젯이 호출.
     app.include_router(build_agent_router(agent, cfg))
     # 인증 라우트 (/login·/logout·/api/session/me) — 원격 접속 게이트(Phase A).
-    app.include_router(build_auth_router(access_policy))
+    # 로그인 실패 임계 초과는 보안 Alert로 발화(Phase C2, 브루트포스 탐지).
+    app.include_router(build_auth_router(
+        access_policy,
+        on_security_event=lambda title, detail: alert_mgr.fire(
+            "login_failures", "warn", title, detail, cooldown_s=300.0)))
 
     return app

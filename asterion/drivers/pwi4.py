@@ -74,6 +74,8 @@ class Pwi4Mount(MountDriver):
             az_degs=self._f(d, "mount.azimuth_degs"),
             slewing=self._b(d, "mount.is_slewing"),
             tracking=self._b(d, "mount.is_tracking"),
+            can_park=True,   # PWI4는 park/set-park/find-home 지원 — 아래 번역 구현됨(정직 보고)
+            can_home=True,
             detail="",   # 정상 detail은 비움 — 프로토콜/어댑터는 웹에 노출하지 않는다
             device_name="PlaneWave (PWI4)",
         )
@@ -95,6 +97,24 @@ class Pwi4Mount(MountDriver):
 
     def stop(self) -> None:
         self._get("/mount/stop")
+
+    # 파킹/홈 — PWI4 HTTP API 번역(PlaneWave pwi4_client.py 기준). 베이스의 NotImplementedError를
+    # 오버라이드해 표준 park 계약을 채운다 → 오케스트레이터 unpark·세션 데드맨 park·UI 버튼이
+    # 백엔드 무관하게 작동. 엔드포인트명은 설치된 PWI4 버전에서 확인할 것(파일 상단 주석).
+    def park(self) -> None:
+        self._get("/mount/park")
+
+    def unpark(self) -> None:
+        # PWI4엔 명시적 unpark가 없다 — 파킹은 축을 비활성화하므로, 두 축을 다시 enable해
+        # 슬루 가능 상태로 되돌린다(pwi4_client.mount_enable = /mount/enable?axis=N).
+        self._get("/mount/enable", axis=0)
+        self._get("/mount/enable", axis=1)
+
+    def find_home(self) -> None:
+        self._get("/mount/find_home")
+
+    def set_park(self) -> None:
+        self._get("/mount/set_park_here")   # 현재 위치를 파킹 위치로 저장
 
     def close(self) -> None:
         self._client.close()

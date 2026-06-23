@@ -29,14 +29,20 @@ def required_access(path: str, method: str, scheme: str) -> str | None:
     # Prometheus 스크레이프 — 기계 토큰(scope=metrics) 또는 로그인 사용자 누구나(아래 authorize).
     if path == "/metrics":
         return "metrics"
+    # 데드맨 하트비트 — 로그인 사용자 누구나(운영자 곁에 viewer가 있어도 '사람 있음'으로 인정).
+    if path == "/api/session/heartbeat":
+        return "viewer"
     if path in TOKEN_ENDPOINTS:
         return f"token:{TOKEN_ENDPOINTS[path]}"
+    # 시스템/개발 경로는 메서드 불문 admin — GET 분기보다 *앞*에 둬야 한다. 뒤에 두면 GET/HEAD/
+    # OPTIONS·websocket이 먼저 viewer로 새고 ADMIN_PREFIXES가 구조적으로 도달 불가가 된다(rank6
+    # secure-by-default 누수). /api/system·/api/dev은 상태조회(GET)도 민감하므로 admin 고정.
+    if path.startswith(ADMIN_PREFIXES):
+        return "admin"
     if scheme == "websocket":          # 이벤트 스트림 = 읽기
         return "viewer"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "viewer"
-    if path.startswith(ADMIN_PREFIXES):
-        return "admin"
     return "operator"                  # 그 외 모든 변경계열(기본 거부 → operator+)
 
 

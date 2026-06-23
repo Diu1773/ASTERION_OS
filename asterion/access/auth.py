@@ -113,7 +113,28 @@ class AccessPolicy:
         # ⚠ serve/신뢰 프록시 뒤에서만 켤 것 — 직접 노출 시 헤더 위조 가능(fail-safe: 기본 off).
         self.trust_ts = bool(cfg.get("server.auth.trust_tailscale_identity", False))
         self.ts_users = dict(cfg.get("server.auth.tailscale_users", {}) or {})
+        # 신원 헤더(Tailscale-*)는 *신뢰 프록시(=serve)*에서 온 요청에서만 신뢰한다(rank4). serve는
+        # 로컬 루프백에서 프록시하므로 기본 {127.0.0.1, ::1}. 직접 노출(LAN/0.0.0.0/serve 우회)로
+        # 앱에 닿은 요청은 client IP가 신뢰목록에 없어 헤더만으로 admin 위조 불가(fail-safe).
+        self.trusted_proxy_ips = set(
+            cfg.get("server.auth.trusted_proxy_ips", ["127.0.0.1", "::1"]) or [])
+        # 로그인 실패 추적(브루트포스 탐지, Phase C2) — 윈도 내 누적 실패 수.
+        self.login_fail_threshold = int(cfg.get("server.auth.login_fail_threshold", 5))
+        self.login_fail_window_s = float(cfg.get("server.auth.login_fail_window_s", 300.0))
+        self._login_fails: dict[str, list[float]] = {}
         self.secret = self._ensure_secret()
+
+    def record_login_failure(self, key: str) -> int:
+        """실패 1건 기록 후 윈도 내 누적 실패 수 반환(브루트포스 임계 판정용)."""
+        now = time.monotonic()
+        win = self._login_fails.setdefault(key, [])
+        win.append(now)
+        cutoff = now - self.login_fail_window_s
+        win[:] = [t for t in win if t >= cutoff]
+        return len(win)
+
+    def clear_login_failures(self, key: str) -> None:
+        self._login_fails.pop(key, None)
 
     def _ensure_secret(self) -> str:
         s = str(self.cfg.get("server.auth.session_secret", "") or "")
@@ -122,9 +143,26 @@ class AccessPolicy:
             s = secrets.token_hex(32)
             try:
                 self.cfg.set("server.auth.session_secret", s)
+                self._restrict_secret_file()
             except Exception:
                 pass
         return s or "dev-insecure-secret"
+
+    def _restrict_secret_file(self) -> None:
+        """시크릿을 쓴 config.local.json을 소유자 전용(0o600)으로 제한 — 유출 시 임의 역할(admin)
+        HMAC 쿠키 위조로 인증 전면 우회를 막는다(rank11). POSIX는 chmod로 group/other 읽기 차단;
+        Windows는 chmod가 ACL을 제한하지 못하므로 best-effort(기동 시 app.py 권한 경고가 보완)."""
+        import os
+        from pathlib import Path
+        path = getattr(self.cfg, "overlay_path", None)
+        if not path:
+            return
+        try:
+            p = Path(path)
+            if p.exists():
+                os.chmod(p, 0o600)
+        except OSError:
+            pass
 
     # --- 신원 확인 ---
 
@@ -137,15 +175,20 @@ class AccessPolicy:
                 return Principal(name=name, role=None, kind="token", scopes=scopes)
         return None
 
-    def principal_from_headers(self, headers) -> Principal:
-        """Bearer 토큰(기계) 우선, 없으면 세션 쿠키(사람). 둘 다 없으면 ANON."""
+    def principal_from_headers(self, headers, client_ip: str | None = None) -> Principal:
+        """Bearer 토큰(기계) 우선, 없으면 세션 쿠키(사람). 둘 다 없으면 ANON.
+
+        client_ip: 요청의 (프록시 직전) 소켓 IP. Tailscale 신원 헤더는 이 IP가 신뢰 프록시
+        목록에 있을 때만 신뢰한다 — 직접 노출 시 헤더 위조로 admin 획득하는 것을 차단(rank4).
+        """
         authz = headers.get("authorization", "") or ""
         if authz.lower().startswith("bearer "):
             p = self._token_principal(authz[7:].strip())
             if p:
                 return p
-        # Tailscale serve 신원(켜진 경우만) — serve가 검증해 주입한 헤더. 매핑된 사용자만.
-        if self.trust_ts:
+        # Tailscale serve 신원(켜진 경우만) — serve가 검증해 주입한 헤더. 단, 그 요청이 *신뢰
+        # 프록시(루프백)*에서 왔을 때만 신뢰(헤더 위조 차단). 매핑된 사용자만.
+        if self.trust_ts and client_ip is not None and client_ip in self.trusted_proxy_ips:
             login = (headers.get("tailscale-user-login", "") or "").strip()
             if login and login in self.ts_users:
                 return Principal(name=login,
@@ -196,7 +239,8 @@ class _LoginReq(BaseModel):
     password: str
 
 
-def build_auth_router(policy: AccessPolicy) -> APIRouter:
+def build_auth_router(policy: AccessPolicy, on_security_event=None) -> APIRouter:
+    """on_security_event(title, detail): 로그인 실패 임계 초과 시 호출(보안 Alert 발화용)."""
     router = APIRouter()
 
     @router.post("/login")
@@ -205,7 +249,17 @@ def build_auth_router(policy: AccessPolicy) -> APIRouter:
             return {"ok": True, "auth": "disabled"}
         p = policy.verify_user(req.username, req.password)
         if not p:
+            n = policy.record_login_failure(req.username or "?")
+            if on_security_event is not None and n >= policy.login_fail_threshold:
+                try:
+                    on_security_event(
+                        "로그인 실패 임계 초과",
+                        f"'{req.username}' {n}회 실패 "
+                        f"(최근 {int(policy.login_fail_window_s)}s)")
+                except Exception:
+                    pass
             raise HTTPException(401, "사용자명 또는 비밀번호가 올바르지 않습니다")
+        policy.clear_login_failures(req.username or "?")
         resp = JSONResponse({"ok": True, "user": p.name, "role": p.role})
         resp.set_cookie(policy.cookie_name, policy.session_cookie(p),
                         max_age=policy.ttl_s, httponly=True, samesite="lax",
@@ -222,7 +276,9 @@ def build_auth_router(policy: AccessPolicy) -> APIRouter:
     async def session_me(request: Request):
         if not policy.enabled:
             return {"authenticated": True, "auth": "disabled", "role": "admin"}
-        p = policy.principal_from_headers(request.headers)
+        p = policy.principal_from_headers(
+            request.headers,
+            client_ip=request.client.host if request.client else None)
         if p.kind == "anon":
             return {"authenticated": False}
         return {"authenticated": True, "user": p.name, "role": p.role,

@@ -31,7 +31,9 @@ class AccessMiddleware:
             await self.app(scope, receive, send)
             return
 
-        principal = self.policy.principal_from_headers(Headers(scope=scope))
+        client = scope.get("client")
+        principal = self.policy.principal_from_headers(
+            Headers(scope=scope), client_ip=client[0] if client else None)
         if not self.policy.authorize(principal, required):
             await self._deny(scope, receive, send, principal)
             return

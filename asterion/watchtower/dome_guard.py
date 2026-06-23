@@ -36,6 +36,7 @@ class DomeGuard:
         self._close_started: float | None = None   # EMERGENCY 닫기 시작 monotonic(수렴 데드라인)
         self._stuck_alarmed = False                # 닫기 수렴 실패 경보 디바운스(1회)
         self._slit_alarmed = False                 # 슬릿→태양 유입 경보 디바운스(1회)
+        self._slave_alarmed = False                # slaved인데 회전 불가 경보 디바운스(1회)
 
     def _cfg(self, key: str, default):
         try:
@@ -52,6 +53,7 @@ class DomeGuard:
         dome = snap.get("dome") or {}
         if not dome.get("connected"):
             self._slit_alarmed = False
+            self._slave_alarmed = False
             return
         saf = snap.get("safety") or {}
         state = saf.get("state")
@@ -106,24 +108,45 @@ class DomeGuard:
         # ③ 슬릿→태양 유입 방어 (날씨 EMERGENCY와 독립 — 주간 슬릿 개방이 태양 향함)
         await self._slit_solar_guard(snap, dome, shutter, not_closed)
 
-        # ② 슬레이빙
-        if (dome.get("slaved") and dome.get("can_slew_azimuth")
-                and not dome.get("moving")):
+        # ② 슬레이빙 + 저하 정직성 — slaved인데 회전 불가(모터/링크 고장 또는 미지원)면 슬릿이
+        # 마운트를 못 따라가는데 종전 조건(slaved and can_slew_azimuth)은 이를 조용히 스킵했다
+        # (can_command_shutter=False 수동 경보와 비대칭). 관측 중(추적/슬루)이면 운영자에게 정직히
+        # 경보한다. 회전 가능하면 종전대로 추종 슬루.
+        if dome.get("slaved"):
             mount = snap.get("mount") or {}
             cur = dome.get("azimuth")
-            if (mount.get("connected") and mount.get("alt") is not None
-                    and cur is not None):
-                target, _ = dome_geometry.target_dome_azimuth(
-                    mount["alt"], mount.get("az") or 0.0, **self.dome_cfg)
-                busy = (self._slew_task is not None
-                        and not self._slew_task.done())
-                if (not busy and abs(dome_geometry.azimuth_error(cur, target))
-                        > self.tol):
-                    self._slew_task = self._spawn(self.bus.run(
-                        "dome_slave_slew", actor="watchtower",
-                        params={"target_az": round(target, 2)},
-                        func=lambda t=target: asyncio.to_thread(
-                            self.drivers["dome"].slew_to_azimuth, t)))
+            mount_active = bool(mount.get("connected")
+                                and (mount.get("tracking") or mount.get("slewing")))
+            if dome.get("can_slew_azimuth"):
+                self._slave_alarmed = False                  # 회전 가능 → 재무장
+                if (not dome.get("moving") and mount.get("connected")
+                        and mount.get("alt") is not None and cur is not None):
+                    target, _ = dome_geometry.target_dome_azimuth(
+                        mount["alt"], mount.get("az") or 0.0, **self.dome_cfg)
+                    busy = (self._slew_task is not None
+                            and not self._slew_task.done())
+                    if (not busy and abs(dome_geometry.azimuth_error(cur, target))
+                            > self.tol):
+                        self._slew_task = self._spawn(self.bus.run(
+                            "dome_slave_slew", actor="watchtower",
+                            params={"target_az": round(target, 2)},
+                            func=lambda t=target: asyncio.to_thread(
+                                self.drivers["dome"].slew_to_azimuth, t)))
+            elif mount_active and not self._slave_alarmed:
+                # slaved 설정인데 회전 불가 + 관측 중 → 슬릿 추종 불가를 정직히 경보(1회).
+                self._slave_alarmed = True
+                off = ""
+                if cur is not None and mount.get("alt") is not None:
+                    target, _ = dome_geometry.target_dome_azimuth(
+                        mount["alt"], mount.get("az") or 0.0, **self.dome_cfg)
+                    off = (f" (목표 {target:.0f}° vs 현재 {cur:.0f}°, "
+                           f"오차 {abs(dome_geometry.azimuth_error(cur, target)):.0f}°)")
+                self.events.log(
+                    "watchtower",
+                    f"⚠ 돔이 slaved인데 회전 불가(can_slew_azimuth=False){off} — 슬릿이 마운트를 "
+                    "못 따라감, 수동 정렬/현장 확인 필요", "error")
+        else:
+            self._slave_alarmed = False                      # slaved 아님 → 경보 해제
 
     async def _slit_solar_guard(self, snap: dict, dome: dict, shutter, not_closed) -> None:
         """주간에 셔터가 닫힘 미확증인데 슬릿(돔 개구부=현재 dome.azimuth)이 태양 방위 제외각

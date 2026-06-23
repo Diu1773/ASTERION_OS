@@ -29,6 +29,29 @@ def _has_slit_log(ev):
     return bool([a for a in ev.logs if any("슬릿" in str(x) for x in a)])
 
 
+def _has_log(ev, needle):
+    return bool([a for a in ev.logs if any(needle in str(x) for x in a)])
+
+
+class SlaveDome:
+    def __init__(self):
+        self.slewed = []
+
+    def slew_to_azimuth(self, az):
+        self.slewed.append(az)
+
+
+def _slave_snap(*, dome_az, mount_az, can_rotate=True, slaved=True,
+                tracking=True, mount_alt=45.0):
+    # 야간(sun_alt -20) → ③ 슬릿가드 무동작, OBSERVING(비-EMERGENCY) → ② 슬레이빙 경로.
+    return {"dome": {"connected": True, "shutter": "open", "slaved": slaved,
+                     "can_slew_azimuth": can_rotate, "azimuth": dome_az, "moving": False},
+            "mount": {"connected": True, "alt": mount_alt, "az": mount_az,
+                      "tracking": tracking, "slewing": False},
+            "sun": {"alt": -20.0, "az": 0.0},
+            "safety": {"state": S.OBSERVING, "reasons": []}}
+
+
 class _Bus:
     def __init__(self):
         self.calls = []
@@ -203,6 +226,53 @@ class TestDomeGuard(unittest.TestCase):
         asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185)))
         self.assertEqual(bus.n("dome_slit_solar_close"), 0)
         self.assertFalse(_has_slit_log(ev))
+
+    # ---------- ② 슬레이빙 + 저하 정직성 (rank7) ----------
+
+    def test_slave_normal_follows(self):
+        # 회전 가능 + 정렬 어긋남(오프셋0 → target≈mount_az) → 추종 슬루(정상 슬레이빙 락).
+        dome = SlaveDome()
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": dome}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slave_snap(dome_az=100, mount_az=150)))
+        self.assertEqual(bus.n("dome_slave_slew"), 1)
+        self.assertTrue(dome.slewed)
+
+    def test_slave_aligned_no_slew(self):
+        dome = SlaveDome()
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": dome}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slave_snap(dome_az=150, mount_az=150)))   # 정렬됨
+        self.assertEqual(bus.n("dome_slave_slew"), 0)
+
+    def test_slave_cannot_rotate_alerts(self):
+        # rank7 — slaved인데 회전 불가(모터 고장) + 관측 중 → 정직 경보(슬릿 추종 불가), 슬루 없음.
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slave_snap(dome_az=100, mount_az=150, can_rotate=False)))
+        self.assertEqual(bus.n("dome_slave_slew"), 0)
+        self.assertTrue(_has_log(ev, "회전 불가"))
+
+    def test_slave_cannot_rotate_idle_no_alert(self):
+        # 관측 안 함(idle) → 슬릿 정렬 무관 → 경보 안 함(나이선스 방지).
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slave_snap(dome_az=100, mount_az=150,
+                                              can_rotate=False, tracking=False)))
+        self.assertFalse(_has_log(ev, "회전 불가"))
+
+    def test_not_slaved_no_alert(self):
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slave_snap(dome_az=100, mount_az=150,
+                                              can_rotate=False, slaved=False)))
+        self.assertFalse(_has_log(ev, "회전 불가"))
+        self.assertEqual(bus.n("dome_slave_slew"), 0)
 
     @staticmethod
     async def _tick(guard, snap):

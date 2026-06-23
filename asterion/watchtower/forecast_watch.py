@@ -65,3 +65,20 @@ class ForecastWatch:
             f"향후 {lead:.0f}h 내 강수확률 최대 {peak * 100:.0f}% (예보). "
             "닫기 준비·관측 마무리 권고 — 실제 닫기는 센서 감지 시 자동.",
             cooldown_s=cd)
+
+    def should_defer_exposure(self, exposure_s: float) -> bool:
+        """긴 노출을 *시작하기 전* 호출 — 그 노출이 도는 동안(now~now+exposure) 강수확률이
+        임계 이상이면 True(시작 보류). 짧은 노출(defer_min 미만)은 항상 False.
+
+        **물리행동이 아니다** — '되돌릴 수 있는' 선제 결정(노출을 시작하지 않음)일 뿐이다.
+        예보는 확률이라 돔을 닫지 않는다; 실제 닫기는 센서 감지(EMERGENCY_CLOSE)가 한다.
+        진행 중인 노출은 끝까지 가고, 다음 긴 노출만 안 시작해 시퀀스를 마무리한다."""
+        if not bool(self.cfg.get("weather.forecast_alert.defer_exposures", True)):
+            return False
+        min_s = float(self.cfg.get("weather.forecast_alert.defer_min_exposure_s", 60.0))
+        if exposure_s < min_s:
+            return False                       # 짧은 노출은 위험 낮음 — 그냥 진행
+        thr = float(self.cfg.get("weather.forecast_alert.precip_threshold", 0.5))
+        lead_h = max(exposure_s / 3600.0, 0.05)   # 노출 길이를 예보 창으로(최소 약간)
+        peak, _at = self.peak_risk(lead_h)
+        return peak >= thr

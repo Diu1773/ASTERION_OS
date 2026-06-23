@@ -233,6 +233,11 @@ enabled = true
 precip_threshold = 0.5          # 향후 lead_hours 내 강수확률 최대치가 이 값 이상이면 경보(0..1)
 lead_hours = 2.0                # 앞으로 보는 예보 창(시간)
 cooldown_seconds = 1800         # 같은 경보 재발화 억제(30분, 스팸 방지)
+# 예보→긴 노출 시작 보류 (되돌릴 수 있는 선제 결정, 물리행동 아님 — 실제 닫기는 센서가 함).
+# 노출이 도는 동안 강수확률이 precip_threshold 이상이면 새 긴 노출을 시작하지 않고 시퀀스를
+# 마무리한다(진행 중 노출은 끝까지). 짧은 노출은 위험 낮아 그냥 진행.
+defer_exposures = true
+defer_min_exposure_s = 60       # 이 길이 이상 노출만 보류 대상(초)
 
 [satellite]
 # 위성영상 프록시 — KMA 천리안2A(GK-2A) 최신 프레임을 서버가 받아 캐시하고

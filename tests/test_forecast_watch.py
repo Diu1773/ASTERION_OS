@@ -92,6 +92,29 @@ class TestForecastWatch(unittest.TestCase):
         self.assertFalse(hasattr(wd, "drivers"))
         self.assertFalse(hasattr(wd, "bus"))
 
+    # ---- should_defer_exposure (예보→긴 노출 보류, 되돌릴 수 있는 선제) ----
+
+    def test_defer_long_exposure_high_precip(self):
+        # 긴 노출(300s) + 노출 동안 강수확률 높음 → 시작 보류(True).
+        wd = self._make([(0.0, 0.8)])
+        self.assertTrue(wd.should_defer_exposure(300.0))
+
+    def test_no_defer_short_exposure(self):
+        # 짧은 노출(30s < defer_min 60)은 강수확률 높아도 그냥 진행(False) — 위험 낮음.
+        wd = self._make([(0.0, 0.9)])
+        self.assertFalse(wd.should_defer_exposure(30.0))
+
+    def test_no_defer_low_precip(self):
+        # 긴 노출이라도 강수확률 낮으면 진행(False).
+        wd = self._make([(0.0, 0.2)])
+        self.assertFalse(wd.should_defer_exposure(300.0))
+
+    def test_defer_disabled_never_defers(self):
+        # defer_exposures=False면 긴 노출+고강수여도 안 보류(False).
+        wd = self._make([(0.0, 0.9)],
+                        **{"weather.forecast_alert.defer_exposures": False})
+        self.assertFalse(wd.should_defer_exposure(300.0))
+
 
 if __name__ == "__main__":
     unittest.main()

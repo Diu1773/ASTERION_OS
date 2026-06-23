@@ -53,7 +53,8 @@ class ObservationOrchestrator:
                  platesolve_fn: Callable[[float, float], dict | None] | None = None,
                  autofocus_fn: Callable[[], dict | None] | None = None,
                  measure_fn: Callable[[Any, dict], tuple] | None = None,
-                 occupancy_fn: Callable[[], str | None] | None = None):
+                 occupancy_fn: Callable[[], str | None] | None = None,
+                 defer_fn: Callable[[float], bool] | None = None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -77,12 +78,17 @@ class ObservationOrchestrator:
         # 사유 문자열, 아니면 None. 카메라 단일점유 대칭(capture/autoflat이 orch를 막듯 orch도
         # 그들을 막는다 — 동시 노출 방지). 주입 안 하면 자기 자신만 막는다.
         self.occupancy_fn = occupancy_fn
+        # defer_fn(exposure_s)->bool: 예보상 그 노출 동안 강수 임박이면 True → 새 긴 노출을
+        # 시작하지 않고 시퀀스를 마무리한다(되돌릴 수 있는 선제 결정, 물리행동 아님). None=비활성.
+        # 안전 게이트와 별개 — 안전(센서)은 멈추고, defer(예보)는 '새로 시작 안 함'일 뿐.
+        self.defer_fn = defer_fn
         self.max_pause_s = float(
             max_pause_s if max_pause_s is not None
             else self.cfg.get("safety.observe_max_pause_seconds", 300.0))
         self._task: asyncio.Task | None = None
         self._launching = False   # start_plan 임계영역 가드(running()과 _task 생성 사이 경합 방지)
         self._stop = asyncio.Event()
+        self._deferred = False    # 예보로 새 긴 노출 보류해 시퀀스를 마무리했는지(상태 'deferred')
         self._state: dict[str, Any] = {"running": False, "phase": "idle",
                                        "plan_id": None, "paused": False}
 
@@ -235,6 +241,7 @@ class ObservationOrchestrator:
         saved = 0
         per_filter: dict[str, int] = {}
         status = "done"
+        self._deferred = False
         try:
             await self._action("mount_unpark", {},
                                lambda: asyncio.to_thread(self.drivers["mount"].unpark))
@@ -244,14 +251,16 @@ class ObservationOrchestrator:
             await self._plate_solve(name, ra_h, dec_d)
             await self._autofocus()
             for filt in filters:
-                if self._stop.is_set():
+                if self._stop.is_set() or self._deferred:
                     break
                 n = await self._do_filter(session.id, name, filt, exposure,
                                           count, dither)
                 per_filter[filt] = n
                 saved += n
                 self._set(saved=saved)
-            if self._stop.is_set():
+            if self._deferred:
+                status = "deferred"      # 예보로 새 긴 노출 보류 → 시퀀스 마무리(중단 아님·실패 아님)
+            elif self._stop.is_set():
                 status = "stopped"
         except ActionError as exc:
             status = "failed"
@@ -272,7 +281,7 @@ class ObservationOrchestrator:
                 row.summary_json = summary
             self.db.update(_close)
 
-            plan_status = {"done": M.DONE, "stopped": M.ABORTED,
+            plan_status = {"done": M.DONE, "stopped": M.ABORTED, "deferred": M.ABORTED,
                            "failed": M.FAILED, "error": M.FAILED}.get(status, M.FAILED)
             self.meridian.set_status(pid, plan_status)
             self.db.add(Decision(
@@ -373,6 +382,15 @@ class ObservationOrchestrator:
             if self._stop.is_set():
                 break
             await self._safety_gate(f"{filt} #{seq} 노출")
+            # 예보→긴 노출 보류(되돌릴 수 있는 선제, 물리행동 아님). 안전(센서)은 _safety_gate가
+            # 이미 처리; 여기선 '예보상 이 노출 동안 강수 임박'이면 새로 시작 안 하고 마무리한다.
+            if self.defer_fn is not None and self.defer_fn(exposure):
+                self._deferred = True
+                self.events.log("orchestrator",
+                                f"[{filt}] 예보 강수 임박 — 새 {exposure:.0f}s 노출 보류, "
+                                "시퀀스 마무리 (실제 닫기는 센서 감지가 함)", "warn")
+                self._set(phase="예보 보류 — 마무리")
+                break
             if dither > 0.0:
                 dra = random.uniform(-dither, dither)
                 ddec = random.uniform(-dither, dither)

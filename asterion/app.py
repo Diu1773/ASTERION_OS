@@ -344,6 +344,9 @@ def create_app() -> FastAPI:
             _alert_eval(snap)
         _forecast_watch.check()
     sampler.alert_fn = _alerts_with_forecast
+    # 예보→긴 노출 보류(되돌릴 수 있는 선제 결정, 물리행동 아님; 실제 닫기는 센서가 함).
+    # orch는 measure_fn처럼 post-hoc 주입(생성순서 무관). 안전 게이트와 별개 계층.
+    orch.defer_fn = _forecast_watch.should_defer_exposure
 
     # AI 에이전트 (§12 입구) — 대시보드 임베디드 대화 제어. ProviderHub가 named
     # provider(groq/openai/ollama/자체) 여러 개를 들고 active 하나를 LLM으로 노출 —

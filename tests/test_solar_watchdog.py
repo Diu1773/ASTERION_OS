@@ -1,7 +1,8 @@
-"""SolarWatchdog — 태양 폐루프 자동정지(진입 가드 최후 방어선).
+"""SolarWatchdog — 태양 폐루프 자동정지/경보(진입 가드 최후 방어선).
 
-핵심: 슬루/추적 중 OTA가 태양 제외각 안 + 주간이면 긴급 정지. 정지 안 함 조건:
-멈춰 있음 / 태양에서 멈 / 야간(태양 지평 아래) / 책임자 override.
+핵심: 보호 불변식은 *지향*이다 — 주간에 OTA가 태양 제외각 안을 지향하면, 구동 중이면 긴급
+정지, 정지(idle)해 있어도 dwell로 보고 추적off+정지+경보(태양 드리프트/슬루 종료/park 불가 대비).
+정지 안 함 조건: 태양에서 멀리 / 야간(태양 지평 아래) / 책임자 override.
 """
 
 import asyncio
@@ -79,9 +80,18 @@ class TestSolarWatchdog(unittest.TestCase):
         asyncio.run(_tick(wd, _snap(m_alt=20, m_az=90, sun_alt=20, sun_az=95, tracking=True)))
         self.assertEqual(self.bus.n("solar_emergency_stop"), 1)
 
-    def test_not_moving_no_stop(self):
+    def test_idle_near_sun_daytime_stops(self):
+        # rank1 — 정지(idle)해 있어도 주간에 태양 근처를 지향하면 dwell 위험(슬루가 태양 근처서
+        # 끝남 / 태양 ~15°/h 드리프트 진입 / park 탈출 불가 개방형·PWI4). 추적off+정지 발행+경보.
         wd = self._make()
         asyncio.run(_tick(wd, _snap(m_alt=30, m_az=180, sun_alt=30, sun_az=180)))
+        self.assertEqual(self.bus.n("solar_emergency_stop"), 1)
+        self.assertEqual(self.mount.tracking_off, 1)
+
+    def test_idle_far_from_sun_no_stop(self):
+        # 정지 + 태양에서 멀면(정상 파킹) 발화 안 함 — 평상 idle 주차를 방해하지 않는다.
+        wd = self._make()
+        asyncio.run(_tick(wd, _snap(m_alt=85, m_az=0, sun_alt=20, sun_az=180)))
         self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
 
     def test_far_from_sun_no_stop(self):
@@ -118,11 +128,12 @@ class TestSolarWatchdog(unittest.TestCase):
         self.assertEqual(self.mount.stopped, 1)
         self.assertEqual(self.mount.tracking_off, 1)
 
-    def test_daytime_idle_unknown_position_no_stop(self):
-        # 좌표 불명이어도 구동(슬루/추적) 안 하면 태양으로 박을 위험 없음 → 정지 안 함.
+    def test_daytime_idle_unknown_position_stops(self):
+        # rank1 + fail-closed — 정지해 있어도 주간에 좌표 결측이면 태양 근처 dwell일 수 있어
+        # 안전으로 보지 않고 발화(결측=위험). 야간 결측은 test_night_unknown_position_no_stop로 보호.
         wd = self._make()
         asyncio.run(_tick(wd, _snap(m_alt=None, m_az=None, sun_alt=30, sun_az=180)))
-        self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
+        self.assertEqual(self.bus.n("solar_emergency_stop"), 1)
 
     def test_night_unknown_position_no_stop(self):
         # 야간(태양 지평 아래)이면 좌표 결측이어도 위험 없음 — 정상 슬루 오정지 금지.

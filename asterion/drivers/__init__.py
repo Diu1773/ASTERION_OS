@@ -151,9 +151,11 @@ def _davis_weather(ctx: DriverContext):
 
 def _davis_serial_weather(ctx: DriverContext):
     from .davis_serial import DavisSerialWeather
+    dome_port = str(ctx.cfg.get("drivers.dome.serial_port", "") or "")
     return DavisSerialWeather(
-        port=str(ctx.cfg.get("drivers.davis_serial.port", "")),
-        baud=int(ctx.cfg.get("drivers.davis_serial.baud", 19200)))
+        port=str(ctx.cfg.get("drivers.davis_serial.port", "auto")),
+        baud=int(ctx.cfg.get("drivers.davis_serial.baud", 19200)),
+        exclude_ports=(dome_port,))   # 시리얼 돔 포트엔 LOOP 안 보냄(자동감지 시 제외)
 
 
 def _sim_dome(ctx: DriverContext):
@@ -257,7 +259,7 @@ BACKEND_CONFIG: dict[str, str] = {
     "ascom": "progid",
     "pwi4": "url",
     "davis": "url",
-    "davis_serial": "none",   # Davis 콘솔 직결 시리얼 — 포트/보드는 config(drivers.davis_serial.*)로
+    "davis_serial": "auto",   # Davis 콘솔 직결 — 포트 자동감지(LOOP 응답 probe). 필요시 config로 지정
     "zwo": "auto",
     "serial": "url",   # 시리얼 돔 — 포트(COM3 등)를 url 텍스트 필드로 입력
 }

@@ -105,8 +105,9 @@ base_url = "http://127.0.0.1"
 [drivers.davis_serial]
 # Davis Vantage 콘솔 USB/RS-232 직결(WeatherLink 게이트웨이 없이). real 모드 +
 # drivers.weather="davis_serial"일 때 사용. LOOP 패킷을 직접 받아 신선도(reading_age_s)도
-# 직접 산출 → frozen 센서 fail-closed. UI 설정 필드는 아직 없음(여기서 포트 지정).
-port = ""             # 예: "COM8" (Windows) / "/dev/ttyUSB0" (Linux). 비우면 연결 거부
+# 직접 산출 → frozen 센서 fail-closed.
+port = "auto"         # "auto"=LOOP 응답 포트 자동감지(권장; COM 번호 불안정 대응). 직접 지정도
+                      #   가능: "COM8"(Windows) / "/dev/ttyUSB0"(Linux). 시리얼 돔 포트는 자동 제외.
 baud = 19200          # Davis 콘솔 기본 19200
 
 [drivers.ascom]

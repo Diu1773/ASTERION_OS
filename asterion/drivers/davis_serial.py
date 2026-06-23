@@ -4,6 +4,10 @@
 게이트웨이 제품)와 달리 raw 패킷을 직접 파싱하므로 신선도(reading_age_s)도 직접 산출한다 —
 이게 frozen 센서(connected=True인데 고착값) 탐지의 핵심이다.
 
+포트는 기본 "auto" — 가용 시리얼 포트를 훑어 LOOP에 응답하는 포트를 Davis로 자동채택한다(COM
+번호는 USB 포트/재설치로 바뀌어 불안정하므로 하드코딩보다 견고). 다른 시리얼 장치(돔 등)는
+exclude로 제외해 LOOP를 보내지 않는다. 필요하면 drivers.davis_serial.port에 포트를 직접 지정.
+
 LOOP 패킷 오프셋(Vantage Pro2, 리틀엔디안):
   barometer u16@7 (0.001 inHg) · inside temp s16@9 (0.1°F) · inside hum u8@11 ·
   outside temp s16@12 (0.1°F) · wind u8@14 (mph) · wind dir u16@16 (deg, 0=결측) ·
@@ -79,21 +83,78 @@ def parse_loop(pkt: bytes | None) -> dict | None:
 
 
 class DavisSerialWeather(WeatherDriver):
-    def __init__(self, port: str = "", baud: int = 19200):
-        self._port = str(port)
+    def __init__(self, port: str = "auto", baud: int = 19200, exclude_ports=()):
+        # port="auto"(또는 "") → 가용 포트를 훑어 LOOP에 응답하는 포트를 Davis로 자동채택.
+        # COM 번호는 USB 포트/재설치로 바뀌므로(충돌은 아니나 불안정) 하드코딩 대신 자동감지가 견고.
+        self._port = str(port).strip()
         self._baud = int(baud)
+        self._exclude = tuple(p for p in (exclude_ports or ()) if p)  # 다른 시리얼 장치(돔 등) 제외
         self._ser = None
+        self._resolved_port = ""
         self._name = "Davis Vantage (serial)"
         self._last_raw: bytes | None = None        # 직전 LOOP 바이트(변화 감지)
         self._last_change_mono: float | None = None  # 패킷이 마지막으로 바뀐 monotonic
 
+    # ---------- 포트 자동감지 (probe) ----------
+
+    def _list_ports(self) -> list[str]:           # 테스트에서 주입 가능
+        from serial.tools import list_ports
+        return [p.device for p in list_ports.comports()]
+
+    def _open(self, dev: str):                    # 테스트에서 주입 가능
+        import serial
+        return serial.Serial(
+            dev, baudrate=self._baud, bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2.0)
+
+    @staticmethod
+    def _responds_loop(ser) -> bool:
+        """포트가 Davis LOOP에 응답하면 True(자동감지 판별). Davis가 아니면 무응답/형식불일치."""
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+        ser.write(b"\n")
+        ser.read(2)                               # 깨우기 ACK(\n\r) 소비
+        ser.write(b"LOOP 1\n")
+        buf = ser.read(256) or b""
+        i = buf.find(b"LOO")
+        return i != -1 and len(buf[i:i + _LOOP_LEN]) >= _LOOP_LEN
+
+    def _autodetect(self) -> str | None:
+        """exclude를 뺀 가용 포트를 훑어 LOOP에 응답하는 첫 포트를 반환(없으면 None).
+        제외 포트(돔 등 다른 시리얼 장치)엔 LOOP를 보내지 않는다."""
+        for dev in self._list_ports():
+            if dev in self._exclude:
+                continue
+            ser = None
+            try:
+                ser = self._open(dev)
+                if self._responds_loop(ser):
+                    return dev
+            except Exception:
+                continue
+            finally:
+                try:
+                    if ser is not None:
+                        ser.close()
+                except Exception:
+                    pass
+        return None
+
     def connect(self) -> None:
-        if not self._port:
-            raise RuntimeError("시리얼 포트 미설정 — drivers.davis_serial.port (예: COM8)")
+        port = self._port
+        if port in ("", "auto"):
+            port = self._autodetect()
+            if not port:
+                raise RuntimeError(
+                    "Davis 시리얼 포트 자동감지 실패 — LOOP에 응답하는 포트 없음 "
+                    "(연결·전원 확인, 또는 drivers.davis_serial.port에 직접 지정)")
         import serial   # real 모드에서만 import(테스트/sim 무의존)
         self._ser = serial.Serial(
-            self._port, baudrate=self._baud, bytesize=serial.EIGHTBITS,
+            port, baudrate=self._baud, bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2.5)
+        self._resolved_port = port
         try:                                  # 콘솔 깨우기(best-effort)
             self._ser.write(b"\n")
             self._ser.read(2)

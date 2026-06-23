@@ -102,5 +102,46 @@ class TestSerialWeatherFreshness(unittest.TestCase):
         self.assertLess(s_fresh.reading_age_s, 1.0)
 
 
+class _FakeSer:
+    """probe용 가짜 시리얼 — responds=True면 LOOP 응답, 아니면 NAK."""
+
+    def __init__(self, responds):
+        self._responds = responds
+        self.closed = False
+
+    def reset_input_buffer(self):
+        pass
+
+    def write(self, b):
+        pass
+
+    def read(self, n=1):
+        return (b"\x06" + _loop()) if self._responds else (b"\x15" * 8)
+
+    def close(self):
+        self.closed = True
+
+
+class TestAutodetect(unittest.TestCase):
+    def test_picks_responding_port_and_excludes(self):
+        # 가용 포트 중 LOOP에 응답하는 포트를 채택, 제외 포트(돔)엔 LOOP 안 보냄.
+        d = DavisSerialWeather(port="auto", exclude_ports=("COM3",))
+        d._list_ports = lambda: ["COM3", "COM5", "COM8"]
+        opened = []
+
+        def fake_open(dev):
+            opened.append(dev)
+            return _FakeSer(responds=(dev == "COM8"))
+        d._open = fake_open
+        self.assertEqual(d._autodetect(), "COM8")
+        self.assertNotIn("COM3", opened)          # 제외 포트는 열지도(probe하지도) 않음
+
+    def test_returns_none_when_no_davis(self):
+        d = DavisSerialWeather(port="auto")
+        d._list_ports = lambda: ["COM5", "COM6"]
+        d._open = lambda dev: _FakeSer(responds=False)
+        self.assertIsNone(d._autodetect())
+
+
 if __name__ == "__main__":
     unittest.main()

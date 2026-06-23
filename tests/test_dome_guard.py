@@ -10,8 +10,23 @@ import unittest
 from asterion.watchtower import safety as S
 from asterion.watchtower.dome_guard import DomeGuard
 
+from ._helpers import Cfg
+
 DOME_CFG = {"dome_radius_m": 2.0, "mount_offset_e_m": 0.0, "mount_offset_n_m": 0.0,
             "mount_offset_up_m": 0.0, "gem_dec_offset_m": 0.0}
+
+
+def _slit_snap(*, dome_az, sun_alt=30.0, sun_az=185.0, shutter="open",
+               can_cmd=True, estimated=False):
+    # 비-EMERGENCY(SAFE_CLOSED=주간) — ③ 슬릿 가드 경로를 탄다.
+    return {"dome": {"connected": True, "shutter": shutter, "can_command_shutter": can_cmd,
+                     "azimuth": dome_az, "azimuth_estimated": estimated},
+            "sun": {"alt": sun_alt, "az": sun_az},
+            "safety": {"state": S.SAFE_CLOSED, "reasons": ["daytime"]}}
+
+
+def _has_slit_log(ev):
+    return bool([a for a in ev.logs if any("슬릿" in str(x) for x in a)])
 
 
 class _Bus:
@@ -127,6 +142,67 @@ class TestDomeGuard(unittest.TestCase):
         self.assertIsNone(g._close_started)
         self.assertFalse(g._stuck_alarmed)
         self.assertEqual([a for a in ev.logs if any("수렴 실패" in str(x) for x in a)], [])
+
+    # ---------- ③ 슬릿→태양 유입 방어 (rank3) ----------
+
+    def test_slit_faces_sun_motorized_closes_and_alerts(self):
+        # 주간 슬릿 개방이 태양 방위 제외각 안(sep 5°<15°) → 전동 닫기 + 경보.
+        closed = {"n": 0}
+
+        class Dome:
+            def close_shutter(self_inner):
+                closed["n"] += 1
+
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": Dome()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185)))
+        self.assertTrue(_has_slit_log(ev))
+        self.assertEqual(bus.n("dome_slit_solar_close"), 1)
+        self.assertEqual(closed["n"], 1)
+
+    def test_slit_far_from_sun_no_action(self):
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=10)))   # sep 170°
+        self.assertEqual(bus.n("dome_slit_solar_close"), 0)
+        self.assertFalse(_has_slit_log(ev))
+
+    def test_slit_sun_night_no_action(self):
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185, sun_alt=-20)))
+        self.assertEqual(bus.n("dome_slit_solar_close"), 0)
+
+    def test_slit_sun_shutter_closed_no_action(self):
+        # 정상 주간 = 셔터 닫힘 → not_closed False → 무동작(오발 없음).
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185, shutter="closed")))
+        self.assertEqual(bus.n("dome_slit_solar_close"), 0)
+        self.assertFalse(_has_slit_log(ev))
+
+    def test_slit_sun_manual_alerts_no_close(self):
+        # 수동(can_command False) — 닫기 명령 없이 운영자 경보만.
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185, can_cmd=False)))
+        self.assertEqual(bus.n("dome_slit_solar_close"), 0)
+        self.assertTrue(_has_slit_log(ev))
+
+    def test_slit_sun_override_disabled(self):
+        # allow_solar_slew(책임자) → 슬릿 가드 비활성.
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": object()}, bus, ev, dome_cfg=DOME_CFG,
+                      cfg=Cfg(**{"safety.allow_solar_slew": True}))
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185)))
+        self.assertEqual(bus.n("dome_slit_solar_close"), 0)
+        self.assertFalse(_has_slit_log(ev))
 
     @staticmethod
     async def _tick(guard, snap):

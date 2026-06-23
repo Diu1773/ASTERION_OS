@@ -309,7 +309,8 @@ def create_app() -> FastAPI:
             "gem_dec_offset_m": float(cfg.get("dome.gem_dec_offset_m", 0.0)),
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)),
-        shutter_close_timeout_s=float(cfg.get("dome.shutter_close_timeout_s", 90.0)))
+        shutter_close_timeout_s=float(cfg.get("dome.shutter_close_timeout_s", 90.0)),
+        cfg=cfg)
     # 태양 폐루프 감시 — 슬루/추적 중 OTA가 태양 제외각 안으로 들어오면 긴급 정지(진입 가드를
     # 뚫고 들어온 경우의 최후 방어선; 주간에만 동작해 야간 정상 슬루는 방해 안 함).
     from .watchtower.solar_watchdog import SolarWatchdog

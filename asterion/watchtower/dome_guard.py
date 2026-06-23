@@ -22,18 +22,26 @@ from ..core import dome_geometry
 class DomeGuard:
     def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, *,
                  dome_cfg: dict, az_tolerance_deg: float = 4.0,
-                 shutter_close_timeout_s: float = 90.0):
+                 shutter_close_timeout_s: float = 90.0, cfg: Any = None):
         self.drivers = drivers
         self.bus = bus
         self.events = events
         self.dome_cfg = dict(dome_cfg)
         self.tol = float(az_tolerance_deg)
         self._close_timeout = float(shutter_close_timeout_s)   # 닫기 수렴 데드라인(초)
+        self.cfg = cfg                          # 런타임 cfg(sun_avoidance_deg·allow_solar_slew 라이브 조회)
         self._emergency: str | None = None     # 수동 셔터 경보 디바운스(스팸 방지)
         self._close_task: asyncio.Task | None = None   # 진행 중 비상 닫기(중복 명령 방지)
         self._slew_task: asyncio.Task | None = None
         self._close_started: float | None = None   # EMERGENCY 닫기 시작 monotonic(수렴 데드라인)
         self._stuck_alarmed = False                # 닫기 수렴 실패 경보 디바운스(1회)
+        self._slit_alarmed = False                 # 슬릿→태양 유입 경보 디바운스(1회)
+
+    def _cfg(self, key: str, default):
+        try:
+            return self.cfg.get(key, default) if self.cfg is not None else default
+        except Exception:
+            return default
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
@@ -43,6 +51,7 @@ class DomeGuard:
     async def __call__(self, snap: dict) -> None:
         dome = snap.get("dome") or {}
         if not dome.get("connected"):
+            self._slit_alarmed = False
             return
         saf = snap.get("safety") or {}
         state = saf.get("state")
@@ -94,6 +103,9 @@ class DomeGuard:
         if state != safety.EMERGENCY_CLOSE:
             self._emergency = None                          # 회복 → 수동 경보 디바운스 해제
 
+        # ③ 슬릿→태양 유입 방어 (날씨 EMERGENCY와 독립 — 주간 슬릿 개방이 태양 향함)
+        await self._slit_solar_guard(snap, dome, shutter, not_closed)
+
         # ② 슬레이빙
         if (dome.get("slaved") and dome.get("can_slew_azimuth")
                 and not dome.get("moving")):
@@ -112,3 +124,42 @@ class DomeGuard:
                         params={"target_az": round(target, 2)},
                         func=lambda t=target: asyncio.to_thread(
                             self.drivers["dome"].slew_to_azimuth, t)))
+
+    async def _slit_solar_guard(self, snap: dict, dome: dict, shutter, not_closed) -> None:
+        """주간에 셔터가 닫힘 미확증인데 슬릿(돔 개구부=현재 dome.azimuth)이 태양 방위 제외각
+        안을 향하면 — OTA가 태양에서 멀어도 슬릿으로 태양이 들어와 광학을 태운다 — 전동이면 닫고
+        수동/회전불가면 운영자 경보. 정상 주간은 셔터가 닫혀(not_closed False) 무동작. 책임자
+        override(allow_solar_slew)면 비활성. 슬릿은 폭넓은 고도를 덮으므로 방위 기준만으로 보수적
+        판정(고도 정밀화는 추후). 추측항법(azimuth_estimated) 돔은 belief 기반이라 부정확 가능."""
+        if self._cfg("safety.allow_solar_slew", False) or not not_closed:
+            self._slit_alarmed = False
+            return
+        sun = snap.get("sun") or {}
+        sun_alt, sun_az = sun.get("alt"), sun.get("az")
+        if sun_alt is None or sun_az is None or sun_alt <= -0.5:   # 야간/태양 위치 불명 → 무동작
+            self._slit_alarmed = False
+            return
+        dome_az = dome.get("azimuth")
+        if dome_az is None:                     # 슬릿 방위 불명 → 슬레이빙 추종실패 경보가 별도 담당
+            return
+        excl = float(self._cfg("safety.sun_avoidance_deg", 15.0))
+        sep = abs(dome_geometry.azimuth_error(dome_az, sun_az))
+        if sep >= excl:
+            self._slit_alarmed = False          # 슬릿이 태양에서 멀어짐 → 재무장
+            return
+        # 슬릿이 태양 방위 제외각 안 + 주간 + 셔터 미확증닫힘 → 태양 유입 위험.
+        can_cmd = bool(dome.get("can_command_shutter"))
+        if not self._slit_alarmed:
+            self._slit_alarmed = True
+            est = " (추측항법 — 방위 belief 기반, 부정확 가능)" if dome.get("azimuth_estimated") else ""
+            self.events.log(
+                "watchtower",
+                f"⚠ 슬릿이 태양 방위 {sep:.0f}° 이내 + 주간 + 셔터 미확증닫힘{est} — 태양 유입 "
+                f"위험: {'전동 닫기 시도' if can_cmd else '즉시 수동 닫기 필요'}", "error")
+        if can_cmd:
+            prev = self._close_task
+            if not (prev is not None and not prev.done()):
+                self._close_task = self._spawn(self.bus.run(
+                    "dome_slit_solar_close", actor="watchtower",
+                    params={"slit_sun_sep_deg": round(sep, 1), "shutter": shutter},
+                    func=lambda: asyncio.to_thread(self.drivers["dome"].close_shutter)))

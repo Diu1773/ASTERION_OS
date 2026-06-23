@@ -20,12 +20,18 @@ from ..drivers import REGISTRY, ConnectionManager
 
 class ConnectionWatchdog:
     def __init__(self, cfg: Config, conn: ConnectionManager, sampler: Any,
-                 events: EventHub):
+                 events: EventHub, *, alert_fn: Any = None):
         self.conn = conn
         self.sampler = sampler          # snapshot 제공 (StatusSampler)
         self.events = events
+        self._alert = alert_fn          # 샘플러 스톨 시 보안 Alert(rank8) — 없으면 로그만
         self.enabled = bool(cfg.get("drivers.auto_reconnect", True))
         self.interval = float(cfg.get("drivers.watchdog_interval_s", 5.0))
+        # 샘플러 루프 생존 감시(rank8) — 스냅샷이 이 시간 이상 갱신 없으면 루프 정지로 보고 경보.
+        # 폐루프 안전(돔/태양/데드맨)이 샘플러 루프에 얹혀 있어, 루프가 죽으면 함께 죽는 SPOF를
+        # *독립 루프*인 이 워치독이 가시화한다. 1Hz 샘플러 기준 넉넉히(기본 15s).
+        self._stall_threshold = float(cfg.get("drivers.sampler_stall_seconds", 15.0))
+        self._stall_alarmed = False
         self.base = float(cfg.get("drivers.reconnect_base_s", 5.0))
         self.cap = float(cfg.get("drivers.reconnect_max_s", 60.0))
         # 연결 직후 유예 — 방금 (재)연결한 장비는 이 시간 동안 재연결하지 않는다.
@@ -101,10 +107,32 @@ class ConnectionWatchdog:
         self._next[key] = 0.0
         return recovered
 
+    def _check_sampler_stall(self, snap: dict) -> None:
+        """샘플러 루프 생존 감시 — 스냅샷 ts_mono가 _stall_threshold 이상 안 갱신되면 루프 정지로
+        보고 1회 경보(폐루프 안전이 샘플러 루프에 종속된 SPOF를 독립 루프에서 가시화)."""
+        ts = snap.get("ts_mono")
+        if ts is None:
+            return
+        age = time.monotonic() - ts
+        if age > self._stall_threshold:
+            if not self._stall_alarmed:
+                self._stall_alarmed = True
+                msg = (f"⚠ 상태 샘플러 루프 정지 의심 — 스냅샷 {age:.0f}s 갱신 없음. 폐루프 안전"
+                       "(돔 비상닫힘·태양·세션 데드맨)이 함께 멈췄을 수 있음 — 즉시 점검 필요")
+                self.events.log("watchdog", msg, "error")
+                if self._alert is not None:
+                    try:
+                        self._alert("샘플러 루프 정지 의심", msg)
+                    except Exception:
+                        pass
+        else:
+            self._stall_alarmed = False
+
     async def _tick(self) -> None:
         snap = self.sampler.snapshot or {}
         if not snap:
             return
+        self._check_sampler_stall(snap)        # 샘플러 루프 생존 감시(rank8)
         now = time.time()
         self._update_fail_counts(snap)        # 디바운스 카운터 갱신
         # 회복된 장비 백오프 리셋 + 회복 로그

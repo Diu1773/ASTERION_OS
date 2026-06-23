@@ -8,6 +8,7 @@ named system들(watchtower 환경·안전, skyflat 오토플랫, capture 수동
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import os
 import re
 import urllib.parse
@@ -218,7 +219,10 @@ def create_app() -> FastAPI:
     alert_mgr = AlertManager(db, events)
     sampler.alert_fn = alert_mgr.evaluate
     # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
-    watchdog = ConnectionWatchdog(cfg, conn, sampler, events)
+    watchdog = ConnectionWatchdog(
+        cfg, conn, sampler, events,
+        alert_fn=lambda title, detail: alert_mgr.fire(
+            "sampler_stall", "critical", title, detail, cooldown_s=60.0))
     bus = ActionBus(db, events, lambda: sampler.snapshot)
     # 프레임 미리보기 홀더 (캡처/플랫 직후 스트레치 PNG)
     frame_preview = {"png": b"", "token": 0, "meta": {}}
@@ -301,6 +305,11 @@ def create_app() -> FastAPI:
     sampler.forge_status = forge.status_dict
     # 시계열 품질: 캡처 시 Forge로 보정→측정→QualityMetric 영속(lazy 주입 — forge가 orch보다 뒤 생성).
     orch.measure_fn = forge.measure_calibrated
+    # 안전 액추에이터 전용 스레드풀(rank8) — 돔 비상닫힘·태양 긴급정지·데드맨 세이프스테이트가
+    # 상태 폴링·_recover_stuck이 점유하는 기본 to_thread 풀과 같은 워커를 두고 경쟁하면, 다장비
+    # COM hang 시 비상 명령이 워커를 못 잡는 단일점이 된다. 전용 풀로 격리해 비상 집행을 보장.
+    _safety_pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="safety-act")
     # 돔 가드 — 안전 '판정'(safety)과 분리된 '행동'(비상 자동닫힘 + 슬레이빙). 샘플러가
     # 매 스냅샷마다 호출. 장비 키 비의존 — 돔이 REGISTRY에 있으면 자동 동작.
     _dome_guard = DomeGuard(
@@ -314,18 +323,19 @@ def create_app() -> FastAPI:
         },
         az_tolerance_deg=float(cfg.get("dome.az_tolerance_deg", 4.0)),
         shutter_close_timeout_s=float(cfg.get("dome.shutter_close_timeout_s", 90.0)),
-        cfg=cfg)
+        cfg=cfg, safety_pool=_safety_pool)
     # 태양 폐루프 감시 — 슬루/추적 중 OTA가 태양 제외각 안으로 들어오면 긴급 정지(진입 가드를
     # 뚫고 들어온 경우의 최후 방어선; 주간에만 동작해 야간 정상 슬루는 방해 안 함).
     from .watchtower.solar_watchdog import SolarWatchdog
-    _solar_watchdog = SolarWatchdog(drivers, bus, events, cfg)
+    _solar_watchdog = SolarWatchdog(drivers, bus, events, cfg, safety_pool=_safety_pool)
     # 원격 운영자 데드맨(REMOTE_ACCESS_PLAN Phase C) — 수동 원격 세션 하트비트가 끊기면
     # 세이프-스테이트(추적정지·돔닫힘·파킹). 무인 운영(NightRunner)은 면제. config로 끔(기본 off).
     from .watchtower.session_watchdog import SessionWatchdog
     _session_watchdog = SessionWatchdog(
         drivers, bus, events, cfg,
         alert_fn=lambda title, detail, rule_id="session_deadman": alert_mgr.fire(
-            rule_id, "critical", title, detail, cooldown_s=60.0))
+            rule_id, "critical", title, detail, cooldown_s=60.0),
+        safety_pool=_safety_pool)
 
     async def _safety_actuator(snap):
         await _dome_guard(snap)

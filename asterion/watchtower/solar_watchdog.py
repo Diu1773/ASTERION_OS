@@ -28,11 +28,13 @@ from ..core import ephemeris
 
 
 class SolarWatchdog:
-    def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, cfg: Any):
+    def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, cfg: Any,
+                 *, safety_pool: Any = None):
         self.drivers = drivers
         self.bus = bus
         self.events = events
         self.cfg = cfg
+        self._pool = safety_pool              # 전용 안전 액추에이터 풀(rank8) — 없으면 to_thread
         self._stopped = False                 # 에피소드당 1회 발화 디바운스
         self._task: asyncio.Task | None = None
 
@@ -40,6 +42,13 @@ class SolarWatchdog:
         t = asyncio.create_task(coro)
         t.add_done_callback(lambda x: x.cancelled() or x.exception())
         return t
+
+    def _exec(self, fn):
+        """블로킹 드라이버 호출 실행 — 전용 안전 풀이 주입됐으면 거기서(상태 폴링·_recover_stuck이
+        점유하는 기본 to_thread 풀과 격리: 다장비 COM hang에도 긴급 정지가 워커를 잡게). 없으면 to_thread."""
+        if self._pool is not None:
+            return asyncio.get_running_loop().run_in_executor(self._pool, fn)
+        return asyncio.to_thread(fn)
 
     async def __call__(self, snap: dict) -> None:
         if bool(self.cfg.get("safety.allow_solar_slew", False)):
@@ -114,4 +123,4 @@ class SolarWatchdog:
         await self.bus.run("solar_emergency_stop", actor="watchtower",
                            params={"sun_sep_deg": round(sep, 1) if sep is not None else None,
                                    "moving": moving},
-                           func=lambda: asyncio.to_thread(_halt))
+                           func=lambda: self._exec(_halt))

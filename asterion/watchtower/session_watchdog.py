@@ -25,15 +25,22 @@ from typing import Any, Callable
 
 class SessionWatchdog:
     def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, cfg: Any,
-                 *, alert_fn: Callable[..., Any] | None = None):
+                 *, alert_fn: Callable[..., Any] | None = None, safety_pool: Any = None):
         self.drivers = drivers
         self.bus = bus
         self.events = events
         self.cfg = cfg
         self._alert = alert_fn
+        self._pool = safety_pool               # 전용 안전 액추에이터 풀(rank8) — 없으면 to_thread
         self._last_hb: float | None = None     # 마지막 하트비트 monotonic (None=미무장)
         self._fired = False                    # 에피소드당 1회 발화 디바운스
         self._task: asyncio.Task | None = None
+
+    def _exec(self, fn):
+        """세이프-스테이트 블로킹 호출 — 전용 안전 풀이 있으면 거기서(상태 폴링 풀과 격리). 없으면 to_thread."""
+        if self._pool is not None:
+            return asyncio.get_running_loop().run_in_executor(self._pool, fn)
+        return asyncio.to_thread(fn)
 
     # ---------- 하트비트 (엔드포인트가 호출 — 고빈도, 감사 안 함) ----------
 
@@ -138,7 +145,7 @@ class SessionWatchdog:
         await self.bus.run("session_deadman_safe_state", actor="watchtower",
                            params={"heartbeat_age_s": round(age, 1),
                                    "shutter_stuck_open": shutter_stuck},
-                           func=lambda: asyncio.to_thread(_act))
+                           func=lambda: self._exec(_act))
         # 정직 로깅 — 실제 수행분만 반영(phantom-park 금지).
         no_park = not outcome["parked"] and not outcome["stowed"]
         if outcome["stowed"]:

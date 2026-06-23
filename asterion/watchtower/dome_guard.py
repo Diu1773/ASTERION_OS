@@ -22,7 +22,8 @@ from ..core import dome_geometry
 class DomeGuard:
     def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, *,
                  dome_cfg: dict, az_tolerance_deg: float = 4.0,
-                 shutter_close_timeout_s: float = 90.0, cfg: Any = None):
+                 shutter_close_timeout_s: float = 90.0, cfg: Any = None,
+                 safety_pool: Any = None):
         self.drivers = drivers
         self.bus = bus
         self.events = events
@@ -30,6 +31,7 @@ class DomeGuard:
         self.tol = float(az_tolerance_deg)
         self._close_timeout = float(shutter_close_timeout_s)   # 닫기 수렴 데드라인(초)
         self.cfg = cfg                          # 런타임 cfg(sun_avoidance_deg·allow_solar_slew 라이브 조회)
+        self._pool = safety_pool                # 전용 안전 액추에이터 풀(rank8) — 없으면 to_thread
         self._emergency: str | None = None     # 수동 셔터 경보 디바운스(스팸 방지)
         self._close_task: asyncio.Task | None = None   # 진행 중 비상 닫기(중복 명령 방지)
         self._slew_task: asyncio.Task | None = None
@@ -48,6 +50,13 @@ class DomeGuard:
         t = asyncio.create_task(coro)
         t.add_done_callback(lambda x: x.cancelled() or x.exception())
         return t
+
+    def _exec(self, fn):
+        """돔 액추에이션 블로킹 호출 — 전용 안전 풀이 있으면 거기서(상태 폴링·_recover_stuck이
+        점유하는 기본 to_thread 풀과 격리: 다장비 COM hang에도 비상 닫기가 워커를 잡게). 없으면 to_thread."""
+        if self._pool is not None:
+            return asyncio.get_running_loop().run_in_executor(self._pool, fn)
+        return asyncio.to_thread(fn)
 
     async def __call__(self, snap: dict) -> None:
         dome = snap.get("dome") or {}
@@ -81,7 +90,7 @@ class DomeGuard:
                     self._close_task = self._spawn(self.bus.run(
                         "dome_emergency_close", actor="watchtower",
                         params={"reason": saf.get("reasons"), "shutter": shutter},
-                        func=lambda: asyncio.to_thread(
+                        func=lambda: self._exec(
                             self.drivers["dome"].close_shutter)))
                 # 수렴 검증 — 예외 유무가 아니라 *결과 상태*로 판정한다. 모터 데드/ShutterStatus
                 # 고착처럼 CloseShutter()가 예외 없이 반환하되 물리적으로 안 닫히면 위 재시도 로그
@@ -130,8 +139,8 @@ class DomeGuard:
                         self._slew_task = self._spawn(self.bus.run(
                             "dome_slave_slew", actor="watchtower",
                             params={"target_az": round(target, 2)},
-                            func=lambda t=target: asyncio.to_thread(
-                                self.drivers["dome"].slew_to_azimuth, t)))
+                            func=lambda t=target: self._exec(
+                                lambda: self.drivers["dome"].slew_to_azimuth(t))))
             elif mount_active and not self._slave_alarmed:
                 # slaved 설정인데 회전 불가 + 관측 중 → 슬릿 추종 불가를 정직히 경보(1회).
                 self._slave_alarmed = True
@@ -185,4 +194,4 @@ class DomeGuard:
                 self._close_task = self._spawn(self.bus.run(
                     "dome_slit_solar_close", actor="watchtower",
                     params={"slit_sun_sep_deg": round(sep, 1), "shutter": shutter},
-                    func=lambda: asyncio.to_thread(self.drivers["dome"].close_shutter)))
+                    func=lambda: self._exec(self.drivers["dome"].close_shutter)))

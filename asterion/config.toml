@@ -80,6 +80,7 @@ weather = "sim"         # 기상 장비 연결 전까지 sim
 # 자동 재연결 워치독 — 끊긴 장비를 백오프로 다시 붙인다 (운영자가 끈 건 제외)
 auto_reconnect = true
 watchdog_interval_s = 5      # 워치독 점검 주기
+sampler_stall_seconds = 15   # 상태 스냅샷이 이 시간 이상 갱신 없으면 샘플러 루프 정지로 보고 경보(rank8)
 reconnect_grace_s = 30       # 연결 직후 유예 — 호밍/캘리브레이션(ZWO EFW 등) 끝낼 시간. 그 안엔 재연결 안 함
 reconnect_base_s = 5         # 첫 재시도 간격 (이후 2배씩 증가)
 reconnect_max_s = 60         # 재시도 간격 상한

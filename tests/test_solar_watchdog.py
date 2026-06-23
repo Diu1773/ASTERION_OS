@@ -143,5 +143,36 @@ class TestSolarWatchdog(unittest.TestCase):
         self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
 
 
+class TestSafetyPoolExec(unittest.TestCase):
+    """rank8 — 안전 액추에이터 _exec: 전용 풀 주입 시 거기서, 없으면 to_thread. 둘 다 fn 실행."""
+
+    def _wd(self):
+        from asterion.watchtower.solar_watchdog import SolarWatchdog
+        from ._helpers import new_bus
+        return SolarWatchdog({"mount": FakeMount()}, new_bus(), _Ev(), Cfg())
+
+    def test_exec_uses_pool(self):
+        import concurrent.futures
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        wd = self._wd()
+        wd._pool = pool
+        ran = []
+
+        async def go():
+            await wd._exec(lambda: ran.append("pool"))   # run_in_executor future
+        asyncio.run(go())
+        pool.shutdown()
+        self.assertEqual(ran, ["pool"])
+
+    def test_exec_without_pool_uses_to_thread(self):
+        wd = self._wd()                                   # pool=None
+        ran = []
+
+        async def go():
+            await wd._exec(lambda: ran.append("thread"))  # to_thread coroutine
+        asyncio.run(go())
+        self.assertEqual(ran, ["thread"])
+
+
 if __name__ == "__main__":
     unittest.main()

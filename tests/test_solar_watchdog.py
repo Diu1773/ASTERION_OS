@@ -108,6 +108,29 @@ class TestSolarWatchdog(unittest.TestCase):
         asyncio.run(_tick(wd, snap))   # 같은 위험 상태 지속 → 재발화 안 함
         self.assertEqual(self.bus.n("solar_emergency_stop"), 1)
 
+    def test_daytime_moving_unknown_position_stops(self):
+        # 주간 + 구동 중인데 마운트 좌표 결측(슬루 중 ASCOM이 alt/az를 떨굼) → 분리각 계산
+        # 불가. fail-closed: 결측을 안전으로 보지 않고 긴급 정지(최후 방어선 무장해제 방지).
+        wd = self._make()
+        asyncio.run(_tick(wd, _snap(m_alt=None, m_az=None,
+                                    sun_alt=30, sun_az=180, slewing=True)))
+        self.assertEqual(self.bus.n("solar_emergency_stop"), 1)
+        self.assertEqual(self.mount.stopped, 1)
+        self.assertEqual(self.mount.tracking_off, 1)
+
+    def test_daytime_idle_unknown_position_no_stop(self):
+        # 좌표 불명이어도 구동(슬루/추적) 안 하면 태양으로 박을 위험 없음 → 정지 안 함.
+        wd = self._make()
+        asyncio.run(_tick(wd, _snap(m_alt=None, m_az=None, sun_alt=30, sun_az=180)))
+        self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
+
+    def test_night_unknown_position_no_stop(self):
+        # 야간(태양 지평 아래)이면 좌표 결측이어도 위험 없음 — 정상 슬루 오정지 금지.
+        wd = self._make()
+        asyncio.run(_tick(wd, _snap(m_alt=None, m_az=None,
+                                    sun_alt=-20, sun_az=180, slewing=True)))
+        self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

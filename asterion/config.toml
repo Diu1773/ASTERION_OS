@@ -182,6 +182,11 @@ dome_shutter_auto = true
 # 기상값을 신뢰하지 않는다. 데이터를 한 번도 못 받아도 unsafe로 닫는다.
 weather_warn_seconds = 30      # 이 이상 지연 → 경고 표시 (운영 계속)
 weather_unsafe_seconds = 120   # 이 이상 지연(또는 데이터 없음) → WEATHER_HOLD
+# 분산 다중소스(§7): 최근 보고하던 소스가 침묵(dropout)하면 그 소스가 위험을 보던 것일 수
+# 있어 위험이 마스킹된다 → 기본 fail-closed(HOLD). window 내에 보고한 적 있는 소스만 대상
+# (오래 침묵=폐기로 무시, 영구 HOLD 방지). holds=false면 가시성(stale_sources)만, HOLD 안 함.
+weather_dropout_window_seconds = 600   # 이 안에 보고한 적 있는 소스가 stale면 dropout으로 간주
+weather_dropout_holds = true           # dropout 시 WEATHER_HOLD (false=경보/가시성만)
 
 # 태양 회피(solar exclusion) — OTA가 태양/근방을 향하는 슬루를 막는다(센서/광학 일소 손상 방지).
 # 모든 슬루 경로(수동 goto/jog/move_axis, AI, Orchestrator, 오토플랫)에 적용. 야간엔 태양이

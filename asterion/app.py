@@ -208,7 +208,11 @@ def create_app() -> FastAPI:
     if bool(cfg.get("weather.ingest_fallback", True)):
         from .watchtower.ingest import current_weather
         _wx_max_age = float(cfg.get("safety.weather_unsafe_seconds", 120.0))
-        sampler.weather_ingest_fn = lambda: current_weather(db, _wx_max_age)
+        # rank6 — 최근 보고하던 소스가 침묵(dropout)하면 위험 마스킹 방지 위해 fail-closed(기본 on).
+        _wx_drop_win = float(cfg.get("safety.weather_dropout_window_seconds", 600.0))
+        _wx_drop_holds = bool(cfg.get("safety.weather_dropout_holds", True))
+        sampler.weather_ingest_fn = lambda: current_weather(
+            db, _wx_max_age, dropout_window_s=_wx_drop_win, dropout_holds=_wx_drop_holds)
     # 위험 알림(무인 운영 안전 루프) — 안전 스냅샷을 룰로 평가해 Alert 발화(추가형, 읽기만).
     from .watchtower.alert import AlertManager
     alert_mgr = AlertManager(db, events)

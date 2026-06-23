@@ -78,7 +78,9 @@ def ingest_records(db: Db, payload: Any) -> dict[str, Any]:
             "rejected": rejected, "sources": sorted({m["source_id"] for m in mapped})}
 
 
-def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
+def current_weather(db: Db, max_age_s: float = 120.0,
+                    dropout_window_s: float = 600.0,
+                    dropout_holds: bool = True) -> dict[str, Any] | None:
     """신선한(max_age_s 내) *모든* 원격 소스의 **worst-case 합성** 기상 dict(+age_s)를 반환,
     신선한 소스가 하나도 없으면 None. 샘플러가 로컬 기상 장치 없을 때 폴백으로 호출(분산 §7).
 
@@ -91,7 +93,15 @@ def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
     신선도는 *소스별 최신 관측시각(utc)* 기준(rank19): 소스별 max(utc)를 SQL로 골라 id 윈도에
     의존하지 않으므로, 엣지 store-and-forward 에이전트의 대량 backfill(옛 record가 더 큰 id로
     유입)에도 진짜 신선한 record가 윈도 밖으로 밀려 false-stale 되지 않는다. age<0(원격 시계
-    앞섬)은 신선으로 인정하지 않는다(미래 신선도로 stale 우회 방지)."""
+    앞섬)은 신선으로 인정하지 않는다(미래 신선도로 stale 우회 방지).
+
+    소스 dropout fail-closed(rank6): worst-case 합성은 *신선한* 소스만 본다. 그래서 위험을
+    보고하던 소스(pc02=강수)가 침묵(stale)하면 fresh 집합에서 빠져 위험이 합성에서 소실되고,
+    남은 맑은 소스만으로 '신선+맑음'이 돼 위험이 마스킹된다(rank2 worst-case도 못 막는 구멍).
+    그래서 *최근(dropout_window_s 내) 보고하던 소스가 지금 stale*이면 — 그 소스가 위험을 보던
+    것일 수 있으므로 — dropout_holds(기본 True)면 None을 반환해 fail-closed로 닫는다. 오래(>
+    dropout_window_s) 침묵한 소스는 '폐기'로 보아 무시(영구 HOLD 방지). dropout_window_s<=
+    max_age_s면 이 기능은 사실상 비활성."""
     from datetime import datetime, timezone
 
     def _q(s):
@@ -114,6 +124,7 @@ def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
 
     now = datetime.now(timezone.utc)
     fresh: list[tuple[float, dict]] = []
+    dropped: list[str] = []              # 최근 활동했으나 지금 stale인 소스(드롭아웃)
     for rec in rows:
         try:
             ts = datetime.fromisoformat(rec["utc"])
@@ -124,7 +135,13 @@ def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
         age = (now - ts).total_seconds()
         if 0 <= age <= max_age_s:        # 미래(age<0)·stale 제외
             fresh.append((age, rec))
+        elif max_age_s < age <= dropout_window_s:   # 최근 보고하다 침묵 → 드롭아웃 후보
+            dropped.append(rec["source_id"])
     if not fresh:
+        return None
+    # rank6 — 최근 보고하던 소스가 침묵(dropout)하면 그 소스가 위험을 보던 것일 수 있다. 신선한
+    # 소스만으로 worst-case를 내면 그 위험이 마스킹되므로, 기본 fail-closed(HOLD)로 닫는다.
+    if dropped and dropout_holds:
         return None
 
     fresh.sort(key=lambda x: x[0])       # 신선한 순(작은 age 먼저)
@@ -145,6 +162,7 @@ def current_weather(db: Db, max_age_s: float = 120.0) -> dict[str, Any] | None:
         "cloud_score": _maxv("cloud_score"),                  # 최악(최대) 운량
         "age_s": freshest_age,
         "sources": sorted({r["source_id"] for _, r in fresh}),
+        "stale_sources": sorted(set(dropped)),                # 드롭아웃(holds=False일 때 가시성)
     }
 
 

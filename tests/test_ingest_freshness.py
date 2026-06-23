@@ -115,5 +115,51 @@ class TestWorstCaseAggregate(unittest.TestCase):
         self.assertLess(rec["age_s"], 10)
 
 
+class TestSourceDropout(unittest.TestCase):
+    """rank6 — 최근 보고하던 소스가 침묵(dropout)하면 위험 마스킹 방지 위해 기본 fail-closed."""
+
+    def setUp(self):
+        self.db = Db(Path(tempfile.mkdtemp()) / "t.db")
+        self.now = datetime.now(timezone.utc)
+
+    def test_dropout_holds_fail_closed(self):
+        # pc1=신선·맑음, pc2=300s 전(최근 보고 후 침묵, max_age 120<300<=window 600) → dropout.
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(
+            source_id="pc2", utc=_iso(self.now - timedelta(seconds=300)), rain=False))
+        self.assertIsNone(current_weather(self.db, max_age_s=120))   # 기본 holds → None(HOLD)
+
+    def test_dropout_disabled_returns_composite_with_stale_list(self):
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(
+            source_id="pc2", utc=_iso(self.now - timedelta(seconds=300)), rain=False))
+        rec = current_weather(self.db, max_age_s=120, dropout_holds=False)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["sources"], ["pc1"])
+        self.assertEqual(rec["stale_sources"], ["pc2"])
+
+    def test_decommissioned_source_ignored(self):
+        # pc2가 window(600s) 너머로 오래 침묵 → '폐기'로 보아 무시(영구 HOLD 방지).
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(
+            source_id="pc2", utc=_iso(self.now - timedelta(hours=2)), rain=True))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertIsNotNone(rec)              # dropout 아님 → 합성 반환
+        self.assertEqual(rec["sources"], ["pc1"])
+        self.assertFalse(rec["rain"])          # 폐기 pc2의 강수는 무시(신선 pc1만)
+
+    def test_all_fresh_no_dropout(self):
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.db.add(WeatherRecord(source_id="pc2", utc=_iso(self.now), rain=False))
+        rec = current_weather(self.db, max_age_s=120)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["stale_sources"], [])
+
+    def test_single_source_unaffected(self):
+        # 단일 소스는 dropout 개념 없음 — 신선하면 그대로(기존 거동 보존).
+        self.db.add(WeatherRecord(source_id="pc1", utc=_iso(self.now), rain=False))
+        self.assertIsNotNone(current_weather(self.db, max_age_s=120))
+
+
 if __name__ == "__main__":
     unittest.main()

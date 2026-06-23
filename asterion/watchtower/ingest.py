@@ -22,13 +22,28 @@ _FIELD_MAP = {
 }
 
 
+def _canonical_utc(ts: str) -> str:
+    """ISO 타임스탬프를 *정규 UTC* 문자열로(파싱 가능하면). 그래야 utc 컬럼의 사전식 비교/MAX가
+    실제 시간순과 일치하고(rank3) 같은 순간의 오프셋 표현이 한 키로 합쳐진다(rank8 dedup). naive는
+    UTC로 간주. 파싱 불가면 원본 유지(하류 age 파싱도 실패→fresh 제외=fail-safe)."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return ts
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
+
 def _to_record(rec: dict) -> dict | None:
-    """§7 dict → WeatherRecord 필드 dict. source_id·timestamp 필수, 없으면 None(거부)."""
+    """§7 dict → WeatherRecord 필드 dict. source_id·timestamp 필수, 없으면 None(거부).
+    timestamp는 정규 UTC로 변환 저장 — 사전식 utc 비교/dedup이 시간순과 일치하게(rank3/8)."""
     src = str(rec.get("source_id") or "").strip()
     ts = str(rec.get("timestamp") or "").strip()
     if not src or not ts:
         return None
-    out: dict[str, Any] = {"source_id": src, "utc": ts}
+    out: dict[str, Any] = {"source_id": src, "utc": _canonical_utc(ts)}
     for k, attr in _FIELD_MAP.items():
         if rec.get(k) is not None:
             try:

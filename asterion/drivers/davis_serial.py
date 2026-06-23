@@ -27,7 +27,9 @@ ISS만 죽고 콘솔이 살아 outside 필드를 dash하면 그 필드는 sentin
 
 from __future__ import annotations
 
+import dataclasses
 import struct
+import threading
 import time
 
 from .base import WeatherDriver, WeatherStatus
@@ -94,6 +96,8 @@ class DavisSerialWeather(WeatherDriver):
         self._name = "Davis Vantage (serial)"
         self._last_raw: bytes | None = None        # 직전 LOOP 바이트(변화 감지)
         self._last_change_mono: float | None = None  # 패킷이 마지막으로 바뀐 monotonic
+        self._last_status: WeatherStatus | None = None  # 직전 정상 상태(동시 read 시 캐시 반환용)
+        self._lock = threading.Lock()              # 시리얼 트랜잭션+신선도 갱신 직렬화(rank9)
 
     # ---------- 포트 자동감지 (probe) ----------
 
@@ -175,12 +179,29 @@ class DavisSerialWeather(WeatherDriver):
     def read(self) -> WeatherStatus:
         if self._ser is None:
             return WeatherStatus(connected=False, detail="미연결", device_name=self._name)
+        # rank9 — 동일 인스턴스에 동시 read(샘플러 + 포트 고착 후 recover probe)가 같은 pyserial
+        # 포트에 write/read하면 프레이밍이 깨진다. 진행 중이면 새 트랜잭션을 시작하지 않고 직전
+        # 캐시 상태를 반환한다(non-blocking — 고착 read에 두 번째가 매달리지 않음).
+        if not self._lock.acquire(blocking=False):
+            return self._cached_status()
         try:
             pkt = self._request_loop()
+            return self._status_from_packet(pkt)
         except Exception as exc:
             return WeatherStatus(connected=False, detail=f"시리얼 오류: {exc}",
                                  device_name=self._name)
-        return self._status_from_packet(pkt)
+        finally:
+            self._lock.release()
+
+    def _cached_status(self) -> WeatherStatus:
+        """다른 read 진행 중 — 직전 정상 상태에 갱신된 age를 얹어 반환(신선도가 계속 늙어 stale
+        게이트에 반영). 직전 상태가 없으면 connected=True만(아직 신선도 판단 불가)."""
+        if self._last_status is None:
+            return WeatherStatus(connected=True, detail="read 진행 중", device_name=self._name)
+        age = (None if self._last_change_mono is None
+               else round(time.monotonic() - self._last_change_mono, 1))
+        return dataclasses.replace(self._last_status, reading_age_s=age,
+                                   detail="read 진행 중 — 직전값 유지")
 
     def _status_from_packet(self, pkt: bytes | None) -> WeatherStatus:
         """LOOP 패킷 → WeatherStatus(+신선도). 시리얼 없이 단위테스트 가능."""
@@ -195,13 +216,15 @@ class DavisSerialWeather(WeatherDriver):
             self._last_raw = pkt
             self._last_change_mono = now
         age = 0.0 if self._last_change_mono is None else round(now - self._last_change_mono, 1)
-        return WeatherStatus(
+        st = WeatherStatus(
             connected=True,
             temp_c=vals["temp_c"], humidity=vals["humidity"],
             dew_point_c=_dew_point_c(vals["temp_c"], vals["humidity"]),
             wind_ms=vals["wind_ms"], wind_dir_deg=vals["wind_dir_deg"],
             cloud_score=None, rain=vals["rain"],
             reading_age_s=age, detail="Davis LOOP(serial)", device_name=self._name)
+        self._last_status = st                      # 동시 read 시 캐시 반환용(rank9)
+        return st
 
     def close(self) -> None:
         try:

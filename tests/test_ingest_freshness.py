@@ -115,6 +115,30 @@ class TestWorstCaseAggregate(unittest.TestCase):
         self.assertLess(rec["age_s"], 10)
 
 
+class TestCanonicalUtc(unittest.TestCase):
+    """rank3/8 — timestamp를 정규 UTC로 저장해 사전식 utc 비교/MAX·dedup이 시간순과 일치."""
+
+    def test_offsets_normalize_to_same_utc(self):
+        from asterion.watchtower.ingest import _canonical_utc
+        a = _canonical_utc("2026-06-24T10:00:00+09:00")   # = 01:00Z
+        b = _canonical_utc("2026-06-24T01:00:00+00:00")
+        self.assertEqual(a, b)                            # 같은 순간 → 같은 문자열(dedup 합쳐짐)
+
+    def test_naive_treated_as_utc(self):
+        from asterion.watchtower.ingest import _canonical_utc
+        self.assertEqual(_canonical_utc("2026-06-24T01:00:00"),
+                         _canonical_utc("2026-06-24T01:00:00+00:00"))
+
+    def test_unparseable_kept_raw(self):
+        from asterion.watchtower.ingest import _canonical_utc
+        self.assertEqual(_canonical_utc("garbage"), "garbage")
+
+    def test_to_record_stores_canonical(self):
+        from asterion.watchtower.ingest import _to_record
+        r = _to_record({"source_id": "pc1", "timestamp": "2026-06-24T10:00:00+09:00"})
+        self.assertTrue(r["utc"].endswith("+00:00"))      # UTC로 변환 저장
+
+
 class TestSourceDropout(unittest.TestCase):
     """rank6 — 최근 보고하던 소스가 침묵(dropout)하면 위험 마스킹 방지 위해 기본 fail-closed."""
 

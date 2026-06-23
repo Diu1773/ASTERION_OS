@@ -274,6 +274,37 @@ class TestDomeGuard(unittest.TestCase):
         self.assertFalse(_has_log(ev, "회전 불가"))
         self.assertEqual(bus.n("dome_slave_slew"), 0)
 
+    def test_slave_slew_suppressed_toward_sun_daytime(self):
+        # rank1 — 주간+개방 중 목표 슬릿 방위가 태양 제외각 안이면 슬레이빙 슬루 억제(태양 회전 방지).
+        dome = SlaveDome()
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": dome}, bus, ev, dome_cfg=DOME_CFG)
+        snap = {"dome": {"connected": True, "shutter": "open", "slaved": True,
+                         "can_slew_azimuth": True, "azimuth": 100, "moving": False},
+                "mount": {"connected": True, "alt": 45, "az": 185,
+                          "tracking": True, "slewing": False},
+                "sun": {"alt": 30, "az": 188},      # 태양 188°, 목표(=mount_az 185°)와 3°<15°
+                "safety": {"state": S.SAFE_CLOSED, "reasons": []}}
+        asyncio.run(self._tick(g, snap))
+        self.assertEqual(bus.n("dome_slave_slew"), 0)   # 억제됨
+        self.assertEqual(dome.slewed, [])
+
+    def test_slit_close_stuck_escalates(self):
+        # rank6 — 슬릿→태양 닫기가 예외 없이 안 닫히면 수렴 데드라인 초과 시 CRITICAL 격상.
+        class StuckDome:
+            def close_shutter(self_inner):
+                pass
+
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": StuckDome()}, bus, ev, dome_cfg=DOME_CFG,
+                      shutter_close_timeout_s=0.0)
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185)))   # tick1: 시작
+        asyncio.run(self._tick(g, _slit_snap(dome_az=180, sun_az=185)))   # tick2: elapsed>0→격상
+        stuck = [a for a in ev.logs if any("수렴 실패" in str(x) for x in a)]
+        self.assertEqual(len(stuck), 1)
+
     @staticmethod
     async def _tick(guard, snap):
         await guard(snap)

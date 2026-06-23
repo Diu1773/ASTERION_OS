@@ -38,6 +38,8 @@ class DomeGuard:
         self._close_started: float | None = None   # EMERGENCY 닫기 시작 monotonic(수렴 데드라인)
         self._stuck_alarmed = False                # 닫기 수렴 실패 경보 디바운스(1회)
         self._slit_alarmed = False                 # 슬릿→태양 유입 경보 디바운스(1회)
+        self._slit_close_started: float | None = None  # 슬릿→태양 닫기 시작(수렴 데드라인, rank6)
+        self._slit_stuck_alarmed = False           # 슬릿 닫기 수렴 실패 경보 디바운스(1회)
         self._slave_alarmed = False                # slaved인데 회전 불가 경보 디바운스(1회)
 
     def _cfg(self, key: str, default):
@@ -132,10 +134,20 @@ class DomeGuard:
                         and mount.get("alt") is not None and cur is not None):
                     target, _ = dome_geometry.target_dome_azimuth(
                         mount["alt"], mount.get("az") or 0.0, **self.dome_cfg)
+                    # rank1 — 주간+개방(미확증닫힘) 중 슬릿(목표 방위)이 태양 제외각 안으로 가는
+                    # 슬루는 억제하고 ③ 슬릿→태양 닫기에 양보한다(개방 슬릿을 능동적으로 태양으로
+                    # 회전시켜 광학 유입시키는 안전 깨짐 방지). 책임자 override(allow_solar_slew)면 종전.
+                    _sun = snap.get("sun") or {}
+                    _salt, _saz = _sun.get("alt"), _sun.get("az")
+                    _excl = float(self._cfg("safety.sun_avoidance_deg", 15.0))
+                    toward_sun = (not_closed and _salt is not None and _salt > -0.5
+                                  and _saz is not None
+                                  and not self._cfg("safety.allow_solar_slew", False)
+                                  and abs(dome_geometry.azimuth_error(target, _saz)) < _excl)
                     busy = (self._slew_task is not None
                             and not self._slew_task.done())
-                    if (not busy and abs(dome_geometry.azimuth_error(cur, target))
-                            > self.tol):
+                    if (not toward_sun and not busy
+                            and abs(dome_geometry.azimuth_error(cur, target)) > self.tol):
                         self._slew_task = self._spawn(self.bus.run(
                             "dome_slave_slew", actor="watchtower",
                             params={"target_az": round(target, 2)},
@@ -163,21 +175,26 @@ class DomeGuard:
         수동/회전불가면 운영자 경보. 정상 주간은 셔터가 닫혀(not_closed False) 무동작. 책임자
         override(allow_solar_slew)면 비활성. 슬릿은 폭넓은 고도를 덮으므로 방위 기준만으로 보수적
         판정(고도 정밀화는 추후). 추측항법(azimuth_estimated) 돔은 belief 기반이라 부정확 가능."""
-        if self._cfg("safety.allow_solar_slew", False) or not not_closed:
+        def _disarm():                          # 위험 해소 → 경보·수렴추적 리셋(rank19: 방위 불명도 포함)
             self._slit_alarmed = False
+            self._slit_close_started = None
+            self._slit_stuck_alarmed = False
+        if self._cfg("safety.allow_solar_slew", False) or not not_closed:
+            _disarm()
             return
         sun = snap.get("sun") or {}
         sun_alt, sun_az = sun.get("alt"), sun.get("az")
         if sun_alt is None or sun_az is None or sun_alt <= -0.5:   # 야간/태양 위치 불명 → 무동작
-            self._slit_alarmed = False
+            _disarm()
             return
         dome_az = dome.get("azimuth")
         if dome_az is None:                     # 슬릿 방위 불명 → 슬레이빙 추종실패 경보가 별도 담당
+            _disarm()
             return
         excl = float(self._cfg("safety.sun_avoidance_deg", 15.0))
         sep = abs(dome_geometry.azimuth_error(dome_az, sun_az))
         if sep >= excl:
-            self._slit_alarmed = False          # 슬릿이 태양에서 멀어짐 → 재무장
+            _disarm()                           # 슬릿이 태양에서 멀어짐 → 재무장
             return
         # 슬릿이 태양 방위 제외각 안 + 주간 + 셔터 미확증닫힘 → 태양 유입 위험.
         can_cmd = bool(dome.get("can_command_shutter"))
@@ -189,9 +206,19 @@ class DomeGuard:
                 f"⚠ 슬릿이 태양 방위 {sep:.0f}° 이내 + 주간 + 셔터 미확증닫힘{est} — 태양 유입 "
                 f"위험: {'전동 닫기 시도' if can_cmd else '즉시 수동 닫기 필요'}", "error")
         if can_cmd:
+            if self._slit_close_started is None:
+                self._slit_close_started = time.monotonic()   # 수렴 데드라인 시작(rank6)
             prev = self._close_task
             if not (prev is not None and not prev.done()):
                 self._close_task = self._spawn(self.bus.run(
                     "dome_slit_solar_close", actor="watchtower",
                     params={"slit_sun_sep_deg": round(sep, 1), "shutter": shutter},
                     func=lambda: self._exec(self.drivers["dome"].close_shutter)))
+            # rank6 — close()가 예외 없이 반환하되 물리적으로 안 닫히면 무음. 데드라인 초과 시 CRITICAL.
+            elapsed = time.monotonic() - self._slit_close_started
+            if elapsed > self._close_timeout and not self._slit_stuck_alarmed:
+                self._slit_stuck_alarmed = True
+                self.events.log(
+                    "watchtower",
+                    f"⚠ 슬릿→태양 닫기 {elapsed:.0f}s 수렴 실패(셔터={shutter}) — 모터/링크 "
+                    "고장 의심, 즉시 수동 닫기 필요!", "error")

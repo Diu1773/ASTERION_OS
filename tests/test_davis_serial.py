@@ -84,6 +84,23 @@ class TestSerialWeatherFreshness(unittest.TestCase):
         self.assertFalse(d._status_from_packet(None).connected)
         self.assertFalse(d._status_from_packet(b"XXX").connected)
 
+    def test_concurrent_read_returns_cache(self):
+        # rank9 — read 진행 중(lock 보유)이면 새 시리얼 트랜잭션을 시작하지 않고 직전 캐시 반환.
+        d = DavisSerialWeather(port="")
+        d._ser = object()                              # 미연결 아님
+        d._request_loop = lambda: _loop(out_t=752)     # 정상 read
+        s1 = d.read()
+        self.assertTrue(s1.connected)
+        d._lock.acquire()                              # 다른 read '진행 중' 흉내
+        try:
+            d._request_loop = lambda: (_ for _ in ()).throw(
+                AssertionError("진행 중인데 새 트랜잭션 시작"))
+            s2 = d.read()
+        finally:
+            d._lock.release()
+        self.assertTrue(s2.connected)                  # 캐시 기반(connected 유지)
+        self.assertIn("진행 중", s2.detail)
+
     def test_freshness_tracks_packet_change(self):
         # 동일 패킷 반복 → age 누적(frozen 감지), 다른 패킷 → age 리셋(fresh).
         import time

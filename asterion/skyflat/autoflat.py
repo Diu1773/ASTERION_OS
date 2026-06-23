@@ -222,8 +222,11 @@ class AutoFlatRunner:
             if self._stop.is_set():
                 status = "stopped"
         except ActionError as exc:
-            status = "failed"
-            self.events.log("autoflat", f"세션 중단: {exc}", "error")
+            # 안전 대기 중 정지 요청도 ActionError로 오므로 _stop이면 'stopped'로 분류(rank17).
+            stopping = self._stop.is_set()
+            status = "stopped" if stopping else "failed"
+            self.events.log("autoflat", f"세션 {'정지' if stopping else '중단'}: {exc}",
+                            "warn" if stopping else "error")
         except Exception:
             status = "error"
             self.events.log("autoflat",
@@ -268,8 +271,9 @@ class AutoFlatRunner:
             target_az = (_sun_az + 180.0) % 360.0
         await self._safety_gate("플랫 위치 슬루")
         self._set(phase="플랫 위치로 슬루")
+        alt_str = f"{st.alt_degs:.1f}°" if st.alt_degs is not None else "미보고"
         self.events.log("autoflat",
-                        f"고도 {st.alt_degs:.1f}° < {p.min_alt_deg}° — "
+                        f"고도 {alt_str} < {p.min_alt_deg}° — "
                         f"플랫 위치(고도 {p.flat_alt_deg}°, 방위 {target_az:.0f}°)로 이동")
         await self.bus.run(
             "mount_goto_flat_field", actor="autoflat",
@@ -337,6 +341,9 @@ class AutoFlatRunner:
             if self._stop.is_set():
                 break
             # 3) 촬영
+            # rank16 — 디더·안정화(최대 60s+settle) 동안 EMERGENCY/WEATHER_HOLD로 떨어질 수 있어
+            # 노출 직전에 안전을 한 번 더 확인(게이트~노출 TOCTOU 창 축소).
+            await self._safety_gate(f"{filt} #{seq} 노출 직전")
             self._set(phase=f"{filt} 노출 {exposure:.2f}s", exposure=round(exposure, 2))
             img = await self.bus.run(
                 "expose_flat", actor="autoflat",

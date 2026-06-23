@@ -111,6 +111,32 @@ class TestSolarWatchdog(unittest.TestCase):
         asyncio.run(_tick(wd, _snap(m_alt=30, m_az=180, sun_alt=30, sun_az=180, slewing=True)))
         self.assertEqual(self.bus.n("solar_emergency_stop"), 0)
 
+    def test_failed_stop_refires(self):
+        # rank7 — 첫 긴급정지가 실패(bus 예외)하면 _stopped latch에도 불구하고 다음 틱에 재발화.
+        from asterion.watchtower.solar_watchdog import SolarWatchdog
+
+        class _FailOnceBus(_Bus):
+            def __init__(self):
+                super().__init__()
+                self._fail_next = True
+
+            async def run(self, action, actor=None, params=None, func=None, preconditions=None):
+                self.calls.append(action)
+                if self._fail_next:
+                    self._fail_next = False
+                    raise RuntimeError("bus fail")
+                if func is not None:
+                    r = func()
+                    if asyncio.iscoroutine(r):
+                        await r
+
+        bus = _FailOnceBus()
+        wd = SolarWatchdog({"mount": FakeMount()}, bus, _Ev(), Cfg())
+        snap = _snap(m_alt=30, m_az=180, sun_alt=30, sun_az=180, slewing=True)
+        asyncio.run(_tick(wd, snap))      # fire1 → bus 예외 → task 실패
+        asyncio.run(_tick(wd, snap))      # 직전 실패 감지 → 재발화(이번엔 성공)
+        self.assertEqual(bus.n("solar_emergency_stop"), 2)
+
     def test_debounce_fires_once(self):
         wd = self._make()
         snap = _snap(m_alt=30, m_az=180, sun_alt=30, sun_az=180, slewing=True)

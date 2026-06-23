@@ -32,6 +32,7 @@ class ConnectionWatchdog:
         # *독립 루프*인 이 워치독이 가시화한다. 1Hz 샘플러 기준 넉넉히(기본 15s).
         self._stall_threshold = float(cfg.get("drivers.sampler_stall_seconds", 15.0))
         self._stall_alarmed = False
+        self._started_mono: float | None = None   # 워치독 시작 시각(첫 스냅샷 미발행 감지용, rank14)
         self.base = float(cfg.get("drivers.reconnect_base_s", 5.0))
         self.cap = float(cfg.get("drivers.reconnect_max_s", 60.0))
         # 연결 직후 유예 — 방금 (재)연결한 장비는 이 시간 동안 재연결하지 않는다.
@@ -49,8 +50,10 @@ class ConnectionWatchdog:
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
-        if self.enabled:
-            self._task = asyncio.create_task(self._loop(), name="conn-watchdog")
+        # 샘플러 스톨 감시(안전 기능)는 재연결 정책(auto_reconnect)과 무관하게 항상 돈다(rank4) —
+        # 재연결 *행동*만 _tick 내부에서 self.enabled로 게이트. 시작 시각 기록(첫 스냅 미발행 감지).
+        self._started_mono = time.monotonic()
+        self._task = asyncio.create_task(self._loop(), name="conn-watchdog")
 
     async def stop(self) -> None:
         if self._task:
@@ -107,32 +110,41 @@ class ConnectionWatchdog:
         self._next[key] = 0.0
         return recovered
 
+    def _fire_stall(self, age: float) -> None:
+        if self._stall_alarmed:
+            return                              # 1회 발화 디바운스
+        self._stall_alarmed = True
+        msg = (f"⚠ 상태 샘플러 루프 정지 의심 — 스냅샷 {age:.0f}s 갱신 없음. 폐루프 안전"
+               "(돔 비상닫힘·태양·세션 데드맨)이 함께 멈췄을 수 있음 — 즉시 점검 필요")
+        self.events.log("watchdog", msg, "error")
+        if self._alert is not None:
+            try:
+                self._alert("샘플러 루프 정지 의심", msg)
+            except Exception:
+                pass
+
     def _check_sampler_stall(self, snap: dict) -> None:
         """샘플러 루프 생존 감시 — 스냅샷 ts_mono가 _stall_threshold 이상 안 갱신되면 루프 정지로
-        보고 1회 경보(폐루프 안전이 샘플러 루프에 종속된 SPOF를 독립 루프에서 가시화)."""
-        ts = snap.get("ts_mono")
+        보고 경보(폐루프 안전이 샘플러 루프에 종속된 SPOF를 독립 루프에서 가시화). 첫 스냅샷이
+        시작 후 임계 내 한 번도 발행 안 되면(샘플러가 첫 샘플 전 사망, rank14)도 동일 경보."""
+        now_m = time.monotonic()
+        ts = snap.get("ts_mono") if snap else None
         if ts is None:
+            if (self._started_mono is not None
+                    and now_m - self._started_mono > self._stall_threshold):
+                self._fire_stall(now_m - self._started_mono)   # 첫 스냅샷 미발행
             return
-        age = time.monotonic() - ts
+        age = now_m - ts
         if age > self._stall_threshold:
-            if not self._stall_alarmed:
-                self._stall_alarmed = True
-                msg = (f"⚠ 상태 샘플러 루프 정지 의심 — 스냅샷 {age:.0f}s 갱신 없음. 폐루프 안전"
-                       "(돔 비상닫힘·태양·세션 데드맨)이 함께 멈췄을 수 있음 — 즉시 점검 필요")
-                self.events.log("watchdog", msg, "error")
-                if self._alert is not None:
-                    try:
-                        self._alert("샘플러 루프 정지 의심", msg)
-                    except Exception:
-                        pass
+            self._fire_stall(age)
         else:
-            self._stall_alarmed = False
+            self._stall_alarmed = False        # 갱신 정상 → 재무장
 
     async def _tick(self) -> None:
         snap = self.sampler.snapshot or {}
-        if not snap:
-            return
-        self._check_sampler_stall(snap)        # 샘플러 루프 생존 감시(rank8)
+        self._check_sampler_stall(snap)        # 샘플러 루프 생존 감시(rank8) — 항상(빈 스냅·재연결 off 무관)
+        if not snap or not self.enabled:
+            return                             # 재연결 행동은 스냅샷 있고 auto_reconnect on일 때만(rank4)
         now = time.time()
         self._update_fail_counts(snap)        # 디바운스 카운터 갱신
         # 회복된 장비 백오프 리셋 + 회복 로그

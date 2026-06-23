@@ -82,9 +82,17 @@ class SolarWatchdog:
         excl = float(self.cfg.get("safety.sun_avoidance_deg", 15.0))
         moving = bool(mount.get("slewing") or mount.get("tracking"))
         if sep is None or sep < excl:
-            if not self._stopped:
-                busy = self._task is not None and not self._task.done()
-                if not busy:
+            prev = self._task
+            busy = prev is not None and not prev.done()
+            if not busy:
+                # 직전 긴급정지가 실패(예외)했으면 _stopped latch에도 불구하고 재발화(rank7) — idle
+                # dwell/좌표결측은 sep<excl이 계속 참인데 정지가 한 번도 성공 못 했는데 침묵하지 않게.
+                failed = (prev is not None and not prev.cancelled()
+                          and prev.exception() is not None)
+                if not self._stopped or failed:
+                    if failed:
+                        self.events.log("watchtower",
+                                        f"⚠ 태양 긴급정지 실패 — 재시도 ({prev.exception()})", "error")
                     self._stopped = True
                     self._task = self._spawn(self._emergency_stop(sep, moving))
         else:
@@ -96,9 +104,10 @@ class SolarWatchdog:
             self.events.log("watchtower",
                             f"⚠ OTA가 {where}에서 이동 중 — 긴급 정지", "error")
         else:
-            # 정지해 있는데 태양 근처를 지향(dwell). 능동 회피 슬루는 또 다른 태양통과를 유발할
-            # 수 있어 시스템이 자동 해소하지 않는다 — 추적만 끄고(드리프트 차단) 운영자에게 즉시
-            # 경보한다. 개방형/수동돔은 돔 가림이 없어 즉시 수동 회피가 필요하다.
+            # 정지해 있는데 태양 근처를 지향(dwell). _halt는 정지·제로레이트·추적off를 모두 발행하나
+            # idle 마운트엔 이동을 유발 안 해 무해하다(능동 회피 슬루는 또 다른 태양통과 위험이라
+            # 하지 않음). 시스템이 자동 해소 못 하므로 운영자에게 즉시 경보 — 개방형/수동돔은 돔
+            # 가림이 없어 즉시 수동 회피 필요.
             self.events.log("watchtower",
                             f"⚠ OTA가 {where}에 정지 지향 중 — 능동 회피 불가, 수동 개입 필요 "
                             f"(인클로저 없으면 광학 직사 위험)", "error")

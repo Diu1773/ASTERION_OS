@@ -473,6 +473,7 @@ def create_app() -> FastAPI:
         await watchdog.stop()
         await sampler.stop()
         await conn.close_all()
+        _safety_pool.shutdown(wait=False, cancel_futures=True)   # rank21 — 안전 풀 정리(스레드 누수 방지)
 
     app = FastAPI(title="Asterion", version=__version__, lifespan=lifespan)
 

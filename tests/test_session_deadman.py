@@ -71,6 +71,24 @@ class NoParkMount:
         self.goto.append((alt, az))
 
 
+class FailParkMount:
+    """park()가 *전이적* 실패(타임아웃/통신)로 일반 예외를 던지는 마운트(미지원=NotImplementedError 아님)."""
+
+    def __init__(self):
+        self.tracking_off = 0
+        self.stopped = 0
+
+    def set_tracking(self, on):
+        if not on:
+            self.tracking_off += 1
+
+    def stop(self):
+        self.stopped += 1
+
+    def park(self):
+        raise RuntimeError("PWI4 /mount/park HTTP timeout")
+
+
 class FakeDome:
     def __init__(self):
         self.closed = 0
@@ -199,6 +217,16 @@ class TestSessionDeadman(unittest.TestCase):
         self.assertEqual(m.tracking_off, 1)
         self.assertEqual(m.goto, [])                        # 폴백 goto 없음(정지만)
         self.assertEqual(self.alerts[0][2], "session_deadman_no_park")
+
+    def test_transient_park_failure_not_no_park(self):
+        # rank5 — park()의 전이적 실패는 '미지원(no_park)'이 아니라 park_failed로 구분 경보.
+        m = FailParkMount()
+        wd = self._make_with_mount(m, **self._on0())
+        wd.heartbeat()
+        asyncio.run(_tick(wd, _snap(tracking=True, shutter="open")))
+        self.assertEqual(self.bus.n("session_deadman_safe_state"), 1)
+        self.assertEqual(m.tracking_off, 1)            # 정지는 수행
+        self.assertEqual(self.alerts[0][2], "session_deadman_park_failed")
 
     def test_debounce_then_rearm(self):
         wd = self._make(**self._on0())

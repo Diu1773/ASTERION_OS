@@ -88,5 +88,31 @@ class TestAscomCameraExposureStatus(unittest.TestCase):
         self.assertEqual(cam._state, "idle")            # 종료 후 복구
 
 
+    def test_exposure_ends_resumes_com_poll(self):
+        # rank24 — 노출 종료(_state=idle) 후 status()가 다시 COM 폴로 정상화(캐시 마스킹 해소).
+        cam = _cam(_FakeDev(temp=-12.0))
+        cam.status()                              # idle → COM 폴 + 캐시
+        cam._state = "exposing"
+        cam._call = _boom                         # 노출 중 COM 호출 금지
+        self.assertEqual(cam.status().state, "exposing")
+        cam._state = "idle"                       # 노출 종료(finally)
+        called = []
+        cam._call = lambda fn: (called.append(1) or fn())
+        st = cam.status()
+        self.assertTrue(called)                   # idle 복귀 → COM 폴 재개
+        self.assertEqual(st.state, "idle")
+
+    def test_expose_exception_restores_idle(self):
+        # rank24 — expose가 COM 예외로 실패해도 _state='idle'로 복구(마스킹 창 고착 방지).
+        cam = _cam(_FakeDev())
+
+        def boom_call(fn):
+            raise RuntimeError("COM fail")
+        cam._call = boom_call
+        with self.assertRaises(RuntimeError):
+            cam.expose(0.01)
+        self.assertEqual(cam._state, "idle")
+
+
 if __name__ == "__main__":
     unittest.main()

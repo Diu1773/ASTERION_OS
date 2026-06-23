@@ -109,11 +109,13 @@ class SessionWatchdog:
             "(추적·슬루 정지 → 돔 닫기 → 파킹/stow)", "error")
         mount = self.drivers.get("mount")
         dome = self.drivers.get("dome")
-        # park 미지원 마운트(PWI4 등)는 park()가 NotImplementedError를 던진다 — 조용히 삼켜
-        # '파킹 완료'로 단언하지 않고(phantom-park), 설정된 안전 stow 위치(safety.stow_altaz=
-        # [alt,az])로 goto 폴백한다. park도 stow도 없으면 정지만 하고 정직하게 격상(no_park).
+        # park()의 *구조적 미지원*(NotImplementedError, PWI4처럼 park 자체가 없음)과 *전이적
+        # 실패*(타임아웃/통신 오류)를 구분한다(rank5). 미지원이면 안전 stow(safety.stow_altaz)로
+        # goto 폴백, 둘 다 없으면 no_park 격상. 전이적 실패는 '미지원'으로 오보하지 않고 별도 경보.
+        # (커밋 444ec89로 PWI4도 park 구현 — 폴백은 park-less 마운트·일시 실패 대비로 유효.)
         stow = self.cfg.get("safety.stow_altaz", None)
-        outcome = {"parked": False, "stowed": False}
+        outcome = {"parked": False, "stowed": False,
+                   "unsupported": False, "park_failed": False}
 
         def _act():
             # best-effort, 각각 가드(하나 실패해도 나머지 시도). 정지 → 돔닫힘 → 파킹/stow 순.
@@ -133,21 +135,22 @@ class SessionWatchdog:
                     mount.park()
                     outcome["parked"] = True
                 except NotImplementedError:
-                    if stow and len(stow) == 2:    # park 미지원 → 안전 stow 위치로 goto 폴백
+                    outcome["unsupported"] = True   # 구조적 미지원(park 없음)
+                    if stow and len(stow) == 2:      # → 안전 stow 위치로 goto 폴백
                         try:
                             mount.goto_altaz(float(stow[0]), float(stow[1]))
                             outcome["stowed"] = True
                         except Exception:
                             pass
                 except Exception:
-                    pass
+                    outcome["park_failed"] = True    # 전이적 실패(타임아웃/통신) — '미지원' 아님
 
         await self.bus.run("session_deadman_safe_state", actor="watchtower",
                            params={"heartbeat_age_s": round(age, 1),
                                    "shutter_stuck_open": shutter_stuck},
                            func=lambda: self._exec(_act))
-        # 정직 로깅 — 실제 수행분만 반영(phantom-park 금지).
-        no_park = not outcome["parked"] and not outcome["stowed"]
+        # 정직 로깅 — 실제 수행분만 반영(phantom 금지). 구조적 미지원/전이적 실패/정상 구분(rank5).
+        no_park = outcome["unsupported"] and not outcome["stowed"]
         if outcome["stowed"]:
             self.events.log("watchtower",
                             f"가대 파킹 미지원 — 안전 stow(alt {float(stow[0]):.0f}, "
@@ -156,6 +159,10 @@ class SessionWatchdog:
             self.events.log("watchtower",
                             "⚠ 가대 파킹 미지원 + 안전 stow 미설정 — 정지만 수행, 가대가 하늘 "
                             "좌표에 잔류(추적off). 현장 확인 필요", "error")
+        elif outcome["park_failed"]:
+            self.events.log("watchtower",
+                            "⚠ 파킹 명령 실패(전이적 — 타임아웃/통신 오류) — 정지만 수행, 가대 "
+                            "잔류 가능. 재확인 필요", "error")
         if self._alert is not None:
             try:
                 if shutter_stuck:
@@ -170,6 +177,12 @@ class SessionWatchdog:
                         f"운영자 하트비트 {age:.0f}s 끊김 — 가대 파킹 미지원(드라이버)·안전 stow "
                         "미설정으로 정지만 수행. 가대가 하늘 좌표에 잔류 — 현장 확인 필요",
                         rule_id="session_deadman_no_park")
+                elif outcome["park_failed"]:
+                    self._alert(
+                        "⚠ 원격 데드맨 — 파킹 명령 실패",
+                        f"운영자 하트비트 {age:.0f}s 끊김 + 파킹 명령이 전이적으로 실패"
+                        "(타임아웃/통신) — 정지만 수행, 가대 잔류 가능. 재확인 필요",
+                        rule_id="session_deadman_park_failed")
                 else:
                     self._alert(
                         "원격 세션 데드맨 발화",

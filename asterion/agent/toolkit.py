@@ -184,8 +184,12 @@ class ToolKit:
         없으면(state=None) SAFE_TO_OBSERVE에 없으므로 거부된다(fail-closed)."""
         # 신선도 게이트된 current_safety()를 우선(메타 fail-closed: 샘플러 스톨 시 ts_mono>30s→
         # FAULT). 미주입이면 raw 스냅샷 safety로 폴백(하위호환). AI도 사람과 동일 게이트 통과.
-        saf = (self.safety_fn() if self.safety_fn
-               else (self.snapshot() or {}).get("safety")) or {}
+        # safety_fn/snapshot 예외는 fail-closed로(state=None→SAFE_TO_OBSERVE 밖→거부; orchestrator 대칭, rank22).
+        try:
+            saf = (self.safety_fn() if self.safety_fn
+                   else (self.snapshot() or {}).get("safety")) or {}
+        except Exception:
+            saf = {}
         state = saf.get("state")
         return [("safety_ok", state in SAFE_TO_OBSERVE,
                  f"안전 상태 불가({state}) — {what} 거부")]

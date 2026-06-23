@@ -149,6 +149,13 @@ def _davis_weather(ctx: DriverContext):
     return DavisWeather(str(ctx.cfg.get("drivers.davis.base_url", "http://127.0.0.1")))
 
 
+def _davis_serial_weather(ctx: DriverContext):
+    from .davis_serial import DavisSerialWeather
+    return DavisSerialWeather(
+        port=str(ctx.cfg.get("drivers.davis_serial.port", "")),
+        baud=int(ctx.cfg.get("drivers.davis_serial.baud", 19200)))
+
+
 def _sim_dome(ctx: DriverContext):
     return SimDome(
         feedback=bool(ctx.cfg.get("sim.dome_feedback", True)),
@@ -222,7 +229,8 @@ REGISTRY: dict[str, DeviceSpec] = {
         offline_factory=lambda: FocuserStatus(connected=False, detail=_OFFLINE_DETAIL)),
     "weather": DeviceSpec(
         "weather", "기상", "read", _sim_weather,
-        {"ascom": _ascom_weather, "davis": _davis_weather},
+        {"ascom": _ascom_weather, "davis": _davis_weather,
+         "davis_serial": _davis_serial_weather},
         ascom_type="ObservingConditions",
         progid_key="drivers.ascom.weather_progid",
         url_key="drivers.davis.base_url",
@@ -249,6 +257,7 @@ BACKEND_CONFIG: dict[str, str] = {
     "ascom": "progid",
     "pwi4": "url",
     "davis": "url",
+    "davis_serial": "none",   # Davis 콘솔 직결 시리얼 — 포트/보드는 config(drivers.davis_serial.*)로
     "zwo": "auto",
     "serial": "url",   # 시리얼 돔 — 포트(COM3 등)를 url 텍스트 필드로 입력
 }

@@ -12,6 +12,7 @@ StatusSampler가 매 스냅샷마다 호출한다. 두 가지를 한다:
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from . import safety
@@ -20,15 +21,19 @@ from ..core import dome_geometry
 
 class DomeGuard:
     def __init__(self, drivers: dict[str, Any], bus: Any, events: Any, *,
-                 dome_cfg: dict, az_tolerance_deg: float = 4.0):
+                 dome_cfg: dict, az_tolerance_deg: float = 4.0,
+                 shutter_close_timeout_s: float = 90.0):
         self.drivers = drivers
         self.bus = bus
         self.events = events
         self.dome_cfg = dict(dome_cfg)
         self.tol = float(az_tolerance_deg)
+        self._close_timeout = float(shutter_close_timeout_s)   # 닫기 수렴 데드라인(초)
         self._emergency: str | None = None     # 수동 셔터 경보 디바운스(스팸 방지)
         self._close_task: asyncio.Task | None = None   # 진행 중 비상 닫기(중복 명령 방지)
         self._slew_task: asyncio.Task | None = None
+        self._close_started: float | None = None   # EMERGENCY 닫기 시작 monotonic(수렴 데드라인)
+        self._stuck_alarmed = False                # 닫기 수렴 실패 경보 디바운스(1회)
 
     def _spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
@@ -50,6 +55,8 @@ class DomeGuard:
         # ① 비상 자동닫힘 — EMERGENCY_CLOSE이고 닫힘이 확증되지 않았으면 닫는다.
         if state == safety.EMERGENCY_CLOSE and not_closed:
             if dome.get("can_command_shutter"):
+                if self._close_started is None:
+                    self._close_started = time.monotonic()   # 닫기 수렴 데드라인 시작
                 # 진행 중 닫기 명령이 없을 때만 (재)발행한다. 닫기가 실패(COM 타임아웃/예외)해
                 # 셔터가 여전히 안 닫혀 있으면 다음 틱에 재시도 — '성공해 closed/closing이 될
                 # 때까지' 수렴한다(단발 fire-and-forget로 미수렴되던 결함 수정). in-flight 1개만.
@@ -65,11 +72,25 @@ class DomeGuard:
                         params={"reason": saf.get("reasons"), "shutter": shutter},
                         func=lambda: asyncio.to_thread(
                             self.drivers["dome"].close_shutter)))
+                # 수렴 검증 — 예외 유무가 아니라 *결과 상태*로 판정한다. 모터 데드/ShutterStatus
+                # 고착처럼 CloseShutter()가 예외 없이 반환하되 물리적으로 안 닫히면 위 재시도 로그
+                # 조차 무음이다. 닫기 시작 후 _close_timeout이 지나도 not_closed면 닫는 능력이
+                # 사실상 0으로 저하된 것 — CRITICAL로 1회 격상해 운영자 수동 개입을 부른다.
+                elapsed = time.monotonic() - self._close_started
+                if elapsed > self._close_timeout and not self._stuck_alarmed:
+                    self._stuck_alarmed = True
+                    self.events.log(
+                        "watchtower",
+                        f"⚠ 전동 셔터 닫기 {elapsed:.0f}s 수렴 실패(셔터={shutter}) — 모터/링크 "
+                        f"고장 의심, 즉시 수동 닫기 필요! ({saf.get('reasons')})", "error")
             elif self._emergency != "manual":
                 self._emergency = "manual"
                 self.events.log("watchtower", "⚠ EMERGENCY_CLOSE인데 셔터 수동 — "
                                 f"운영자 즉시 닫기 필요! ({saf.get('reasons')})", "error")
             return
+        # 여기 도달 = 닫힘 확증(not_closed False) 또는 EMERGENCY 해제 → 닫기 수렴 추적·경보 리셋.
+        self._close_started = None
+        self._stuck_alarmed = False
         if state != safety.EMERGENCY_CLOSE:
             self._emergency = None                          # 회복 → 수동 경보 디바운스 해제
 

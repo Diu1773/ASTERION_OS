@@ -93,6 +93,41 @@ class TestDomeGuard(unittest.TestCase):
         self.assertEqual(bus.n("dome_emergency_close"), 0)
         self.assertTrue(ev.logs)   # 경보 로그가 남음
 
+    def test_motorized_close_stuck_escalates_once(self):
+        # rank2 — 전동셔터가 예외 없이도 영영 안 닫히면(모터 데드/ShutterStatus 고착) 수렴
+        # 데드라인 초과 시 CRITICAL 1회 격상. 짧은 timeout으로 검증.
+        class StuckDome:
+            def close_shutter(self_inner):
+                pass   # 예외 없이 반환하되 셔터는 계속 'open'(물리적으로 안 닫힘)
+
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": StuckDome()}, bus, ev, dome_cfg=DOME_CFG,
+                      shutter_close_timeout_s=0.0)
+        asyncio.run(self._tick(g, _emergency_snap("open")))   # tick1: _close_started 기록
+        asyncio.run(self._tick(g, _emergency_snap("open")))   # tick2: elapsed>0 → 격상
+        asyncio.run(self._tick(g, _emergency_snap("open")))   # tick3: 디바운스 — 재격상 안 함
+        stuck = [a for a in ev.logs if any("수렴 실패" in str(x) for x in a)]
+        self.assertEqual(len(stuck), 1)
+        # 격상해도 닫기 재시도는 계속 수렴 시도(영구 포기 금지)
+        self.assertGreaterEqual(bus.n("dome_emergency_close"), 2)
+
+    def test_close_confirmed_resets_stuck_tracking(self):
+        # 닫힘 확증(closing)되면 수렴 추적·경보 디바운스 리셋 → 다음 비상 때 재무장.
+        class Dome:
+            def close_shutter(self_inner):
+                pass
+
+        bus = _Bus()
+        ev = _Ev()
+        g = DomeGuard({"dome": Dome()}, bus, ev, dome_cfg=DOME_CFG,
+                      shutter_close_timeout_s=0.0)
+        asyncio.run(self._tick(g, _emergency_snap("open")))      # 타이머 시작
+        asyncio.run(self._tick(g, _emergency_snap("closing")))   # 닫힘 확증 → 리셋
+        self.assertIsNone(g._close_started)
+        self.assertFalse(g._stuck_alarmed)
+        self.assertEqual([a for a in ev.logs if any("수렴 실패" in str(x) for x in a)], [])
+
     @staticmethod
     async def _tick(guard, snap):
         await guard(snap)

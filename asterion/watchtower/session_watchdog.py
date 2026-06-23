@@ -1,7 +1,8 @@
 """SessionWatchdog — 원격 운영자 데드맨 (REMOTE_ACCESS_PLAN Phase C).
 
 원격 *수동* 운영 중 운영자 UI의 하트비트가 끊기면(브라우저 종료·네트워크 단절·세션 만료)
-관측소를 세이프-스테이트로 떨어뜨린다: 추적 정지 → 슬루 정지 → (전동)돔 닫힘 → 파킹.
+관측소를 세이프-스테이트로 떨어뜨린다: 추적 정지 → 슬루 정지 → (전동)돔 닫힘 → 파킹(드라이버가
+park 미지원=PWI4 등이면 안전 stow 위치 goto 폴백, 둘 다 없으면 정지만 하고 정직하게 격상).
 곁에서 물리 E-stop을 누를 사람이 없는 원격 운영의 최후 안전장치.
 
 설계 원칙(자율 설계 존중 + 기존 흐름 불가침):
@@ -98,12 +99,17 @@ class SessionWatchdog:
         self.events.log(
             "watchtower",
             f"⚠ 원격 운영자 하트비트 {age:.0f}s 끊김 — 세이프-스테이트 전환 "
-            "(추적정지·슬루정지·돔닫힘·파킹)", "error")
+            "(추적·슬루 정지 → 돔 닫기 → 파킹/stow)", "error")
         mount = self.drivers.get("mount")
         dome = self.drivers.get("dome")
+        # park 미지원 마운트(PWI4 등)는 park()가 NotImplementedError를 던진다 — 조용히 삼켜
+        # '파킹 완료'로 단언하지 않고(phantom-park), 설정된 안전 stow 위치(safety.stow_altaz=
+        # [alt,az])로 goto 폴백한다. park도 stow도 없으면 정지만 하고 정직하게 격상(no_park).
+        stow = self.cfg.get("safety.stow_altaz", None)
+        outcome = {"parked": False, "stowed": False}
 
         def _act():
-            # best-effort, 각각 가드(하나 실패해도 나머지 시도). 정지 → 돔닫힘 → 파킹 순.
+            # best-effort, 각각 가드(하나 실패해도 나머지 시도). 정지 → 돔닫힘 → 파킹/stow 순.
             if mount is not None:
                 for fn in (lambda: mount.set_tracking(False), mount.stop):
                     try:
@@ -118,6 +124,14 @@ class SessionWatchdog:
             if mount is not None:
                 try:
                     mount.park()
+                    outcome["parked"] = True
+                except NotImplementedError:
+                    if stow and len(stow) == 2:    # park 미지원 → 안전 stow 위치로 goto 폴백
+                        try:
+                            mount.goto_altaz(float(stow[0]), float(stow[1]))
+                            outcome["stowed"] = True
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -125,6 +139,16 @@ class SessionWatchdog:
                            params={"heartbeat_age_s": round(age, 1),
                                    "shutter_stuck_open": shutter_stuck},
                            func=lambda: asyncio.to_thread(_act))
+        # 정직 로깅 — 실제 수행분만 반영(phantom-park 금지).
+        no_park = not outcome["parked"] and not outcome["stowed"]
+        if outcome["stowed"]:
+            self.events.log("watchtower",
+                            f"가대 파킹 미지원 — 안전 stow(alt {float(stow[0]):.0f}, "
+                            f"az {float(stow[1]):.0f})로 이동 완료", "warn")
+        elif no_park:
+            self.events.log("watchtower",
+                            "⚠ 가대 파킹 미지원 + 안전 stow 미설정 — 정지만 수행, 가대가 하늘 "
+                            "좌표에 잔류(추적off). 현장 확인 필요", "error")
         if self._alert is not None:
             try:
                 if shutter_stuck:
@@ -133,6 +157,12 @@ class SessionWatchdog:
                         f"운영자 하트비트 {age:.0f}s 끊김 + 돔 셔터 열림(수동) — "
                         "자동으로 못 닫음, 즉시 현장 조치 필요",
                         rule_id="session_deadman_shutter_stuck")
+                elif no_park:
+                    self._alert(
+                        "⚠ 원격 데드맨 — 파킹 미지원",
+                        f"운영자 하트비트 {age:.0f}s 끊김 — 가대 파킹 미지원(드라이버)·안전 stow "
+                        "미설정으로 정지만 수행. 가대가 하늘 좌표에 잔류 — 현장 확인 필요",
+                        rule_id="session_deadman_no_park")
                 else:
                     self._alert(
                         "원격 세션 데드맨 발화",

@@ -49,6 +49,28 @@ class FakeMount:
         self.parked += 1
 
 
+class NoParkMount:
+    """PWI4류 — park/find_home/set_park 미구현(NotImplementedError), goto_altaz만 있음."""
+
+    def __init__(self):
+        self.tracking_off = 0
+        self.stopped = 0
+        self.goto = []
+
+    def set_tracking(self, on):
+        if not on:
+            self.tracking_off += 1
+
+    def stop(self):
+        self.stopped += 1
+
+    def park(self):
+        raise NotImplementedError("이 마운트는 파킹을 지원하지 않습니다")
+
+    def goto_altaz(self, alt, az):
+        self.goto.append((alt, az))
+
+
 class FakeDome:
     def __init__(self):
         self.closed = 0
@@ -86,6 +108,15 @@ class TestSessionDeadman(unittest.TestCase):
             Cfg(**cfg),
             alert_fn=lambda t, d, rule_id=None: self.alerts.append((t, d, rule_id)))
         return wd
+
+    def _make_with_mount(self, mount, **cfg):
+        self.bus = _Bus()
+        self.mount = mount
+        self.dome = FakeDome()
+        self.alerts = []
+        return SessionWatchdog(
+            {"mount": mount, "dome": self.dome}, self.bus, _Ev(), Cfg(**cfg),
+            alert_fn=lambda t, d, rule_id=None: self.alerts.append((t, d, rule_id)))
 
     def _on0(self):  # enabled + 즉시 stale(timeout 0)
         return {"safety.session_deadman.enabled": True,
@@ -144,6 +175,30 @@ class TestSessionDeadman(unittest.TestCase):
         # 닫을 수 없는 열린 슬릿 → 격상된 별도 rule_id(즉시 현장 조치 경보)
         self.assertEqual(len(self.alerts), 1)
         self.assertEqual(self.alerts[0][2], "session_deadman_shutter_stuck")
+
+    def test_no_park_mount_with_stow_goes_to_stow(self):
+        # rank4 — park 미지원 마운트 + safety.stow_altaz 설정 → 안전 stow로 goto 폴백(정지+이동).
+        m = NoParkMount()
+        cfg = self._on0()
+        cfg["safety.stow_altaz"] = [10.0, 0.0]
+        wd = self._make_with_mount(m, **cfg)
+        wd.heartbeat()
+        asyncio.run(_tick(wd, _snap(tracking=True, shutter="open")))
+        self.assertEqual(self.bus.n("session_deadman_safe_state"), 1)
+        self.assertEqual(m.tracking_off, 1)
+        self.assertEqual(m.goto, [(10.0, 0.0)])             # 안전 stow로 이동(phantom-park 아님)
+        self.assertEqual(self.alerts[0][2], "session_deadman")   # stow됨 → 안전 상태
+
+    def test_no_park_mount_no_stow_escalates(self):
+        # rank4 — park 미지원 + stow 미설정 → 정지만, '파킹 완료' 거짓단언 대신 격상.
+        m = NoParkMount()
+        wd = self._make_with_mount(m, **self._on0())        # stow 미설정
+        wd.heartbeat()
+        asyncio.run(_tick(wd, _snap(tracking=True, shutter="open")))
+        self.assertEqual(self.bus.n("session_deadman_safe_state"), 1)
+        self.assertEqual(m.tracking_off, 1)
+        self.assertEqual(m.goto, [])                        # 폴백 goto 없음(정지만)
+        self.assertEqual(self.alerts[0][2], "session_deadman_no_park")
 
     def test_debounce_then_rearm(self):
         wd = self._make(**self._on0())

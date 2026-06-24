@@ -120,20 +120,25 @@ class TestSerialWeatherFreshness(unittest.TestCase):
 
 
 class _FakeSer:
-    """probe용 가짜 시리얼 — responds=True면 LOOP 응답, 아니면 NAK."""
+    """probe용 가짜 시리얼 — responds=True면 깨우기 ACK 후 LOOP 응답, 아니면 ACK 없음(Davis 아님)."""
 
     def __init__(self, responds):
         self._responds = responds
+        self._n = 0
+        self.writes = []
         self.closed = False
 
     def reset_input_buffer(self):
         pass
 
     def write(self, b):
-        pass
+        self.writes.append(b)
 
     def read(self, n=1):
-        return (b"\x06" + _loop()) if self._responds else (b"\x15" * 8)
+        self._n += 1
+        if not self._responds:
+            return b""                          # 깨우기 ACK 없음 → Davis 아님
+        return b"\n\r" if self._n == 1 else (b"\x06" + _loop())
 
     def close(self):
         self.closed = True
@@ -158,6 +163,20 @@ class TestAutodetect(unittest.TestCase):
         d._list_ports = lambda: ["COM5", "COM6"]
         d._open = lambda dev: _FakeSer(responds=False)
         self.assertIsNone(d._autodetect())
+
+    def test_non_davis_gets_only_wake_no_loop(self):
+        # rank11 — 비-Davis 포트엔 깨우기 '\n'만 보내고 LOOP 명령은 보내지 않는다(교란 최소화).
+        d = DavisSerialWeather(port="auto")
+        sers = {}
+
+        def fake_open(dev):
+            sers[dev] = _FakeSer(responds=False)
+            return sers[dev]
+        d._list_ports = lambda: ["COM5"]
+        d._open = fake_open
+        self.assertIsNone(d._autodetect())
+        self.assertIn(b"\n", sers["COM5"].writes)            # 깨우기는 보냄(무해)
+        self.assertNotIn(b"LOOP 1\n", sers["COM5"].writes)   # LOOP은 안 보냄
 
 
 if __name__ == "__main__":

@@ -113,13 +113,18 @@ class DavisSerialWeather(WeatherDriver):
 
     @staticmethod
     def _responds_loop(ser) -> bool:
-        """포트가 Davis LOOP에 응답하면 True(자동감지 판별). Davis가 아니면 무응답/형식불일치."""
+        """포트가 Davis인지 *조심스럽게* 판별(rank11). 먼저 깨우기 '\\n' 한 글자만 보내 Davis 깨우기
+        ACK('\\n\\r')을 확인하고, ACK가 와야만 LOOP를 요청한다 — 다른 시리얼 장치(포커서/마운트 등)엔
+        무해한 개행 하나만 가고 LOOP 명령은 보내지 않아 교란을 최소화한다. (이미 연결된 포트는 open
+        시 OS busy 예외로 자동 제외되고, 설정된 다른 시리얼 드라이버 포트는 exclude로 제외된다.)"""
         try:
             ser.reset_input_buffer()
         except Exception:
             pass
         ser.write(b"\n")
-        ser.read(2)                               # 깨우기 ACK(\n\r) 소비
+        ack = ser.read(2) or b""
+        if b"\n" not in ack and b"\r" not in ack:
+            return False                          # Davis 깨우기 ACK 아님 → LOOP 생략(다른 장치 보호)
         ser.write(b"LOOP 1\n")
         buf = ser.read(256) or b""
         i = buf.find(b"LOO")

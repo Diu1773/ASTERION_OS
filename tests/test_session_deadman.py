@@ -218,6 +218,19 @@ class TestSessionDeadman(unittest.TestCase):
         self.assertEqual(m.goto, [])                        # 폴백 goto 없음(정지만)
         self.assertEqual(self.alerts[0][2], "session_deadman_no_park")
 
+    def test_stow_near_sun_daytime_blocked(self):
+        # rank10 — 주간 + stow가 태양 근처(5°<15°)면 goto 안 하고 정지만(개방형 돔 광학 보호).
+        m = NoParkMount()
+        cfg = self._on0()
+        cfg["safety.stow_altaz"] = [25.0, 180.0]
+        wd = self._make_with_mount(m, **cfg)
+        wd.heartbeat()
+        snap = _snap(tracking=True, shutter="open")
+        snap["sun"] = {"alt": 30.0, "az": 180.0}      # 주간, stow와 5°
+        asyncio.run(_tick(wd, snap))
+        self.assertEqual(m.goto, [])                  # stow goto 거부
+        self.assertEqual(self.alerts[0][2], "session_deadman_no_park")
+
     def test_transient_park_failure_not_no_park(self):
         # rank5 — park()의 전이적 실패는 '미지원(no_park)'이 아니라 park_failed로 구분 경보.
         m = FailParkMount()

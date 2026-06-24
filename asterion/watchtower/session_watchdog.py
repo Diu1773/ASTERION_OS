@@ -114,6 +114,20 @@ class SessionWatchdog:
         # goto 폴백, 둘 다 없으면 no_park 격상. 전이적 실패는 '미지원'으로 오보하지 않고 별도 경보.
         # (커밋 444ec89로 PWI4도 park 구현 — 폴백은 park-less 마운트·일시 실패 대비로 유효.)
         stow = self.cfg.get("safety.stow_altaz", None)
+        # rank10 — stow goto 폴백이 주간에 태양 근처를 향하면(개방형 돔=광학 직사 위험) 슬루하지
+        # 않는다. 돔에 가려진 경우엔 무해하나, 안전 기본값으로 주간 태양 근접 stow는 거부(정지만).
+        stow_ok = bool(stow and len(stow) == 2)
+        stow_solar_blocked = False
+        if stow_ok:
+            sun = snap.get("sun") or {}
+            sa, sz = sun.get("alt"), sun.get("az")
+            if sa is not None and sa > -0.5 and sz is not None:
+                from ..core import ephemeris
+                excl = float(self.cfg.get("safety.sun_avoidance_deg", 15.0))
+                if ephemeris.angular_separation_altaz(
+                        float(stow[0]), float(stow[1]), sa, sz) < excl:
+                    stow_ok = False
+                    stow_solar_blocked = True
         outcome = {"parked": False, "stowed": False,
                    "unsupported": False, "park_failed": False}
 
@@ -136,7 +150,7 @@ class SessionWatchdog:
                     outcome["parked"] = True
                 except NotImplementedError:
                     outcome["unsupported"] = True   # 구조적 미지원(park 없음)
-                    if stow and len(stow) == 2:      # → 안전 stow 위치로 goto 폴백
+                    if stow_ok:                      # → 안전 stow 위치로 goto 폴백(주간 태양 근접이면 제외)
                         try:
                             mount.goto_altaz(float(stow[0]), float(stow[1]))
                             outcome["stowed"] = True
@@ -156,8 +170,10 @@ class SessionWatchdog:
                             f"가대 파킹 미지원 — 안전 stow(alt {float(stow[0]):.0f}, "
                             f"az {float(stow[1]):.0f})로 이동 완료", "warn")
         elif no_park:
+            _reason = ("안전 stow가 주간 태양 근처라 거부(rank10)" if stow_solar_blocked
+                       else "안전 stow 미설정")
             self.events.log("watchtower",
-                            "⚠ 가대 파킹 미지원 + 안전 stow 미설정 — 정지만 수행, 가대가 하늘 "
+                            f"⚠ 가대 파킹 미지원 + {_reason} — 정지만 수행, 가대가 하늘 "
                             "좌표에 잔류(추적off). 현장 확인 필요", "error")
         elif outcome["park_failed"]:
             self.events.log("watchtower",

@@ -163,6 +163,24 @@ max_exposure = 60.0
 flat_sun_alt_high = -1.0         # 태양이 이보다 높으면 너무 밝음 (시작 전)
 flat_sun_alt_low = -12.0         # 태양이 이보다 낮으면 너무 어두움 (종료)
 
+[focus_model]
+# 온도·고도 기반 포커스 자동 보정(PWI3식 temperature/altitude compensation).
+# 과거 오토포커스(FocusRun: 위치+환경)로 position = c0 + c_temp·T (+ c_alt·alt)를 적합하고,
+# 촬영 중 환경 변화에 맞춰 포커서를 예측 위치로 미세 이동 → 매 프레임 풀 오토포커스 없이 FWHM 유지.
+enabled = false                  # 기본 비활성 — 켜면 _do_filter가 필터 진입 시·주기적으로 보정
+mode = "auto"                    # "auto"(이력 최소제곱) | "manual"(아래 계수 직접 입력)
+temp_source = "focuser"          # 모델 온도 소스: "focuser"(OTA 근접) | "ambient"(외기) | "primary"(주경, 센서 있을 때)
+use_altitude = true              # 고도 항(미러 플렉서) 포함 — 데이터에 고도 변화(≥5°)가 있을 때만 실제 적합
+min_points = 4                   # auto 적합 최소 데이터점(FocusRun 수)
+min_temp_span_c = 2.0            # 온도 변화폭이 이 미만이면 적합 거부(온도 계수 신뢰 불가, fail-safe)
+deadband_steps = 10              # 예측-현재 차가 이 미만이면 이동 생략(불필요한 미동 방지)
+max_step_steps = 0               # 1회 보정 최대 이동(steps), 0=무제한. 센서/모델 이상 시 폭주 방지용
+recompute_every_frames = 5       # 시퀀스 중 N프레임마다 재보정(0=필터 진입 시 1회만)
+# mode="manual" 또는 auto 적합 실패 시 폴백 — 알려진 온도계수(steps/°C)를 직접 입력. 최근
+# 오토포커스 위치를 앵커로 c0를 유도한다(그 지점을 지나는 직선). 모르면 비워둔다.
+# c_temp_steps_per_c = -15.0
+# c_alt_steps_per_deg = 0.0
+
 [camera]
 saturation_adu = 65535
 image_width = 4944               # ZWO ASI071 MC Pro (IMX071, APS-C)

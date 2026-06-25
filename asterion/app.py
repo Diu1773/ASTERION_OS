@@ -33,6 +33,7 @@ from .core import ephemeris, skygraph
 from .core.actions import ActionBus, ActionError
 from .core.events import EventHub
 from .core.focus_offset import apply_filter_focus_offset
+from .core.focus_model import FocusModelService
 from .archive import ArchiveRecovery
 from .core.ontology import (
     ActionLog, Alert, Db, Frame, ObservationSession, WeatherRecord,
@@ -278,11 +279,15 @@ def create_app() -> FastAPI:
     # Orchestrator — 승인된 ObservationPlan을 표준 과학 시퀀스로 실행(Ph7). 안전 게이트는
     # State Store의 safety 스냅샷을 소비하고, plate-solve/autofocus는 SIM 후크를 주입한다.
     # (real 모드용 실제 솔버/AF로 교체 전까지 SIM 후크는 즉시성공 — PLAN 결정 로그 참조.)
+    # 포커스 모델 — 온도/고도→포커스 위치(FocusRun 이력 최소제곱 적합). 촬영 중 orch가 환경
+    # 변화에 맞춰 포커서를 미세 보정(PWI3식 자동 내삽). 기본 비활성(focus_model.enabled).
+    focus_model = FocusModelService(cfg, db)
     orch = ObservationOrchestrator(
         cfg, drivers, bus, db, events, meridian, cfg.data_dir / "frames",
         preview_cb=publish_preview,
         safety_fn=lambda: sampler.current_safety(),
         platesolve_fn=sim_platesolve, autofocus_fn=sim_autofocus,
+        focus_model=focus_model,
         occupancy_fn=lambda: ("수동 캡처 실행 중 — 관측 시작 거부" if capture.active()
                               else "오토플랫 실행 중 — 관측 시작 거부" if runner.running()
                               else None))
@@ -922,6 +927,29 @@ def create_app() -> FastAPI:
         except Exception:
             pass
         return {"ok": True, "focus_offset": applied}
+
+    @app.get("/api/focus/model")
+    async def focus_model_status():
+        """포커스 모델 상태 — 계수·표본수·온도소스·deadband(이력 적합 후)."""
+        await asyncio.to_thread(focus_model.refit)
+        return focus_model.status_dict()
+
+    @app.post("/api/focus/model/refit")
+    async def focus_model_refit():
+        """FocusRun 이력으로 모델 재적합(수동 트리거)."""
+        m = await asyncio.to_thread(focus_model.refit)
+        return {"ok": bool(m.get("ok")), "model": m, "meta": focus_model.meta}
+
+    @app.get("/api/focus/model/predict")
+    async def focus_model_predict(temp: float, alt: float | None = None,
+                                  filt: str = ""):
+        """현재 온도/고도(·필터)에서 모델이 예측하는 최적 포커스 위치(steps)."""
+        if not focus_model.model.get("ok"):
+            await asyncio.to_thread(focus_model.refit)
+        pos = focus_model.predict(temp, alt, filt)
+        return {"ok": pos is not None,
+                "predicted_position": (None if pos is None else round(pos)),
+                "temp_c": temp, "alt_deg": alt, "filter": filt}
 
     @app.post("/api/actions/camera/cooler")
     async def camera_cooler(req: CoolerReq):

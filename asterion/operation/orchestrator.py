@@ -30,6 +30,7 @@ from ..core import ephemeris, fitsio
 from ..core.actions import ActionBus, ActionError
 from ..core.events import EventHub
 from ..core.focus_offset import apply_filter_focus_offset
+from ..core.focus_model import apply_focus_model, capture_focus_env
 from ..core.ontology import (
     Db, Decision, FocusRun, Frame, ObservationSession, QualityMetric,
     TelescopeState, row_to_dict,
@@ -54,7 +55,8 @@ class ObservationOrchestrator:
                  autofocus_fn: Callable[[], dict | None] | None = None,
                  measure_fn: Callable[[Any, dict], tuple] | None = None,
                  occupancy_fn: Callable[[], str | None] | None = None,
-                 defer_fn: Callable[[float], bool] | None = None):
+                 defer_fn: Callable[[float], bool] | None = None,
+                 focus_model: Any | None = None):
         self.cfg = cfg
         self.drivers = drivers
         self.bus = bus
@@ -82,6 +84,9 @@ class ObservationOrchestrator:
         # 시작하지 않고 시퀀스를 마무리한다(되돌릴 수 있는 선제 결정, 물리행동 아님). None=비활성.
         # 안전 게이트와 별개 — 안전(센서)은 멈추고, defer(예보)는 '새로 시작 안 함'일 뿐.
         self.defer_fn = defer_fn
+        # focus_model: FocusModelService — 온도/고도→포커스 위치 모델. None이면 보정 비활성.
+        # 촬영 중 _do_filter가 필터 진입 시 + 주기적으로 예측 위치로 포커서를 미세 보정한다.
+        self.focus_model = focus_model
         self.max_pause_s = float(
             max_pause_s if max_pause_s is not None
             else self.cfg.get("safety.observe_max_pause_seconds", 300.0))
@@ -345,15 +350,40 @@ class ObservationOrchestrator:
         result = await self._action("autofocus", {},
                                     lambda: asyncio.to_thread(self.autofocus_fn))
         if result:
+            # 온도/고도 스냅샷을 함께 적재 → 포커스 모델이 이 데이터점으로 적합한다.
+            env = await asyncio.to_thread(capture_focus_env, self.drivers)
+            for k, v in result.items():        # 오토포커스 결과도 환경 json에 보존
+                env.setdefault(k, v)
             self.db.add(FocusRun(
                 filter_name=filt,
                 focuser_position=result.get("best_position"),
                 best_fwhm=result.get("best_fwhm"),
                 confidence=result.get("confidence"),
-                environment_json=json.dumps(result, ensure_ascii=False)))
+                environment_json=json.dumps(env, ensure_ascii=False)))
             self.events.log("orchestrator",
                             f"autofocus 완료 — pos={result.get('best_position')} "
                             f"FWHM={result.get('best_fwhm')}")
+            if self.focus_model is not None and self.focus_model.enabled:
+                await asyncio.to_thread(self.focus_model.refit)   # 새 데이터점 반영
+
+    async def _apply_focus_model(self, filt: str) -> None:
+        """현재 온도/고도로 포커스 모델 보정을 적용(best-effort). 비활성/미적합이면 no-op."""
+        if self.focus_model is None or not self.focus_model.enabled:
+            return
+        try:
+            res = await apply_focus_model(self.cfg, self.drivers, self._action,
+                                          self.focus_model, filter_name=filt)
+        except Exception:
+            self.events.log("orchestrator", "포커스 모델 보정 실패 — 건너뜀", "warn")
+            return
+        if res and res.get("applied"):
+            alt = res.get("alt_deg")
+            self.events.log(
+                "orchestrator",
+                f"포커스 모델 보정 {res['delta']:+d}steps → {res['target']} "
+                f"(T={res['temp_c']:.1f}°C"
+                + (f", alt={alt:.0f}°" if alt is not None else "")
+                + (", 한계클램프" if res.get("clamped") else "") + ")")
 
     async def _do_filter(self, session_id: int, target_name: str, filt: str,
                          exposure: float, count: int, dither: float) -> int:
@@ -375,6 +405,11 @@ class ObservationOrchestrator:
         except Exception:
             self.events.log("orchestrator", "포커스 오프셋 적용 실패 — 건너뜀", "warn")
 
+        # 온도/고도 포커스 모델 — 필터 진입 시 재적합 후 1회 보정(필터 오프셋 위에 환경 보정).
+        if self.focus_model is not None and self.focus_model.enabled:
+            await asyncio.to_thread(self.focus_model.refit)
+            await self._apply_focus_model(filt)
+
         mount = self.drivers["mount"]
         cam = self.drivers["camera"]
         n_ok = 0
@@ -382,6 +417,10 @@ class ObservationOrchestrator:
             if self._stop.is_set():
                 break
             await self._safety_gate(f"{filt} #{seq} 노출")
+            # 시퀀스 중 온도/고도 드리프트 보정 (N프레임마다, deadband 미만이면 no-op)
+            every = int(self.cfg.get("focus_model.recompute_every_frames", 5) or 0)
+            if every > 0 and seq > 1 and (seq - 1) % every == 0:
+                await self._apply_focus_model(filt)
             # 예보→긴 노출 보류(되돌릴 수 있는 선제, 물리행동 아님). 안전(센서)은 _safety_gate가
             # 이미 처리; 여기선 '예보상 이 노출 동안 강수 임박'이면 새로 시작 안 하고 마무리한다.
             if self.defer_fn is not None and self.defer_fn(exposure):

@@ -15,8 +15,8 @@ from typing import Any, Callable
 from ..core import ephemeris
 from ..core.dso_catalog import DSO, TYPE_KO, match_type
 from ..core.ontology import (
-    ActionLog, CalibrationProduct, Decision, Frame, FocusRun,
-    ObservationSession, TelemetrySample, WeatherRecord,
+    ActionLog, Alert, CalibrationProduct, Decision, Frame, FocusRun,
+    ObservationSession, TelemetrySample, WeatherRecord, row_to_dict,
 )
 from ..operation.orchestrator import SAFE_TO_OBSERVE
 
@@ -90,6 +90,14 @@ class ToolKit:
                "텔레메트리 채널 추세(min/mean/max·최신·표본수). 채널 비우면 사용 가능 채널 목록.",
                {"channel": {"type": "string", "description": "예: temperature, humidity(선택)"},
                 "hours": {"type": "number", "description": "되돌아볼 시간(기본 12)"}}),
+            fn("search_events",
+               "운영 이력 자유 검색 — 액션로그(성공/실패)·경보(Alert)·판단(Decision)에서 시간창 내 "
+               "키워드로 찾는다. '지난주 돔 안 닫힌 적 있어?'·'어젯밤 왜 멈췄어?'·'최근 실패한 슬루' "
+               "류 자유질의에(night_report가 고정 요약이라면 이건 검색). 읽기전용.",
+               {"query": {"type": "string",
+                          "description": "찾을 키워드(공백=AND 모두 포함). 예: '돔 닫기', 'weather', '실패'"},
+                "hours": {"type": "number", "description": "되돌아볼 시간(기본 72)"},
+                "kind": {"type": "string", "description": "action/alert/decision/all(기본 all)"}}),
             fn("plan_night",
                "오늘 밤 관측 시간표를 짜준다 — 관측 가능 대상을 고도·관측창·달이격으로 점수내 "
                "고르고, 자오선 근처에 비겹침 시간 슬롯으로 배분해 ObservationPlan(초안) 생성. "
@@ -366,6 +374,73 @@ class ToolKit:
                          for d in self.db.recent(Decision, 8)]
         return {"subsystem": sub or "전체", "current_state": state,
                 "recent_failures": failures, "recent_decisions": decisions}
+
+    @staticmethod
+    def search_events(db, query: str = "", hours: float = 72.0,
+                      kind: str = "all", limit: int = 30) -> list[dict]:
+        """운영 이력 자유 검색(두꺼운 도구) — ActionLog·Alert·Decision을 시간창 + 자유텍스트
+        (공백=AND 토큰) + 종류로 걸러 시간역순 정규화 목록으로 돌려준다. 모델은 자연어를
+        (query,hours,kind)로 라우팅만 하고 검색은 코드가 한다. 읽기전용 — ActionBus 불경유.
+
+        시간창은 SQL(utc>=cutoff)로 거른다 — 'newest N행'이 아니라 *요청한 기간 전체*를 본다
+        (한 밤에 액션이 수백이어도 지난주 매칭을 놓치지 않음). 텍스트는 당겨온 뒤 AND 매칭."""
+        if db is None:
+            return []
+        cutoff_iso = (datetime.now(timezone.utc)
+                      - timedelta(hours=float(hours or 72.0))).isoformat()
+        terms = [t for t in str(query or "").lower().split() if t]
+        kind = (kind or "all").lower()
+        if kind not in ("action", "alert", "decision", "all"):
+            kind = "all"                       # 잘못된 종류 → 전체(조용한 빈결과 방지)
+
+        def _match(text: str) -> bool:
+            low = text.lower()
+            return all(term in low for term in terms)   # 빈 terms → 전부 통과
+
+        cap = max(int(limit) * 10, 300)        # 시간창 내 안전 상한(창이 좁으면 자연히 적음)
+
+        def _rows(model) -> list[dict]:
+            # 시간창을 SQL로 — utc는 UTC ISO라 사전순=시간순(>= cutoff). 창 내 최신 cap행.
+            def _q(s):
+                return [row_to_dict(r) for r in
+                        s.query(model).filter(model.utc >= cutoff_iso)
+                        .order_by(model.id.desc()).limit(cap).all()]
+            return db.query(_q)
+
+        out: list[dict] = []
+        if kind in ("all", "action"):
+            for r in _rows(ActionLog):
+                if _match(" ".join(str(r.get(k, "")) for k in
+                                   ("action_type", "actor", "message"))):
+                    out.append({"kind": "action", "utc": r.get("utc"),
+                                "action": r.get("action_type"), "actor": r.get("actor"),
+                                "ok": bool(r.get("success")), "message": r.get("message")})
+        if kind in ("all", "alert"):
+            for r in _rows(Alert):
+                if _match(" ".join(str(r.get(k, "")) for k in
+                                   ("rule_id", "level", "title", "detail", "state"))):
+                    out.append({"kind": "alert", "utc": r.get("utc"),
+                                "level": r.get("level"), "title": r.get("title"),
+                                "detail": r.get("detail"), "rule": r.get("rule_id")})
+        if kind in ("all", "decision"):
+            for r in _rows(Decision):
+                if _match(" ".join(str(r.get(k, "")) for k in
+                                   ("source", "recommendation", "outcome", "approved_by"))):
+                    out.append({"kind": "decision", "utc": r.get("utc"),
+                                "source": r.get("source"),
+                                "recommendation": r.get("recommendation"),
+                                "outcome": r.get("outcome")})
+        out.sort(key=lambda e: str(e.get("utc") or ""), reverse=True)   # 시간 역순(ISO=사전순)
+        return out[:int(limit)]
+
+    async def _t_search_events(self, a: dict) -> dict:
+        if self.db is None:
+            return {"error": "DB 미연결"}
+        hours = float(a.get("hours") or 72.0)
+        kind = a.get("kind") or "all"
+        events = self.search_events(self.db, a.get("query", ""), hours, kind)
+        return {"query": a.get("query", ""), "hours": hours, "kind": kind,
+                "count": len(events), "events": events}
 
     async def _t_telemetry_summary(self, a: dict) -> dict:
         if self.db is None:

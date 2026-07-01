@@ -219,6 +219,11 @@ def create_app() -> FastAPI:
     from .watchtower.alert import AlertManager
     alert_mgr = AlertManager(db, events)
     sampler.alert_fn = alert_mgr.evaluate
+    # 능동 내레이션 — 발화 경보를 '관측+권고' 한 줄로 먼저 띄운다(규칙 기반, 사건 시에만).
+    # EventHub.alert()가 모든 경보의 중앙 통로라 훅 하나로 evaluate/fire 전부 포착. config로 끔.
+    if bool(cfg.get("agent.narration_enabled", True)):
+        from .agent.narrator import Narrator
+        events.narrator = Narrator.narrate
     # 끊긴 장비를 자동으로 다시 붙이는 워치독 (자율형 복구)
     watchdog = ConnectionWatchdog(
         cfg, conn, sampler, events,

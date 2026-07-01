@@ -14,6 +14,7 @@ class EventHub:
         self.clients: set[Any] = set()
         self.log_buffer: deque[dict] = deque(maxlen=300)
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.narrator: Any = None   # 능동 내레이션 훅(alert dict→한 줄). app.py가 설정, None=무동작.
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -71,3 +72,18 @@ class EventHub:
             "msg": "⚠ " + str(alert_dict.get("title", "")),
         })
         self.emit({"type": "alert", "alert": alert_dict})
+        # 능동 내레이션 — 경보를 '관측+권고' 한 줄로 먼저 띄운다(설정 시). 로그독에 advisor로도
+        # 남겨 즉시 보이고, narration 이벤트로 챗 버블(프론트)에 쓴다. 실패는 무시(경보 흐름 불가침).
+        if self.narrator is not None:
+            try:
+                line = self.narrator(alert_dict)
+            except Exception:
+                line = None
+            if line:
+                ts = time.strftime("%H:%M:%S")
+                lvl = "error" if alert_dict.get("level") == "critical" else "warn"
+                self.log_buffer.append({"type": "log", "ts": ts, "source": "advisor",
+                                        "level": lvl, "msg": "💬 " + line})
+                self.emit({"type": "narration", "narration": {
+                    "text": line, "level": alert_dict.get("level", "warn"),
+                    "rule": alert_dict.get("rule_id", ""), "ts": ts}})

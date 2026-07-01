@@ -16,7 +16,7 @@ from ..core import ephemeris
 from ..core.dso_catalog import DSO, TYPE_KO, match_type
 from ..core.ontology import (
     ActionLog, Alert, CalibrationProduct, Decision, Frame, FocusRun,
-    ObservationSession, TelemetrySample, WeatherRecord, row_to_dict,
+    ObservationSession, QualityMetric, TelemetrySample, WeatherRecord, row_to_dict,
 )
 from ..operation.orchestrator import SAFE_TO_OBSERVE
 
@@ -306,14 +306,23 @@ class ToolKit:
 
         quality = {"accepted": 0, "warning": 0, "rejected": 0}
         examples: list = []
-        if self.sentinel is not None:
-            for f in frames[:200]:   # 상한 — 200장까지 판정(나머지는 표본)
-                v = self.sentinel.evaluate(f["id"])
-                if not v:
-                    continue
-                quality[v["verdict"]] = quality.get(v["verdict"], 0) + 1
-                if v["verdict"] == "rejected" and len(examples) < 5:
-                    examples.append({"frame_id": f["id"], "reason": v["reason"]})
+        if self.sentinel is not None and frames:
+            # 저장된 지표(median+saturation_frac)로 배치 판정 — 판정은 이 둘만 쓰므로 FITS 0,
+            # 프레임당 evaluate() 대신 sat_frac을 IN 1번으로 당겨 window 전체를 상한 없이 센다
+            # (구 200장 표본 상한 제거 — 대량 밤도 즉시·정확). median은 이미 frames에 있음.
+            fids = [f["id"] for f in frames]
+
+            def _satmap(s):
+                rows = (s.query(QualityMetric.frame_id, QualityMetric.saturation_frac)
+                        .filter(QualityMetric.frame_id.in_(fids)).all())
+                return {fid: sf for fid, sf in rows}
+            satmap = self.db.query(_satmap)
+            for f in frames:
+                verdict, reason = self.sentinel.judge_stored(
+                    f.get("median_adu"), satmap.get(f["id"]))
+                quality[verdict] = quality.get(verdict, 0) + 1
+                if verdict == "rejected" and len(examples) < 5:
+                    examples.append({"frame_id": f["id"], "reason": reason})
 
         wx = list(reversed(win(self.db.recent(WeatherRecord, 3000), "utc")))  # 시간순
         unsafe_from = None

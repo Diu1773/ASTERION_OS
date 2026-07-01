@@ -61,6 +61,14 @@ class Sentinel:
             return (WARNING, f"과포화 경고 {sat * 100:.1f}%", "노출 단축 검토")
         return ACCEPTED, "기본 지표 정상 범위", ""
 
+    def judge_stored(self, median: float | None,
+                     sat_frac: float | None) -> tuple[str, str]:
+        """저장된 지표(median_adu·saturation_frac)만으로 판정 — FITS/재계산 없이 (verdict, reason).
+        판정 규칙(_judge)은 이 둘만 쓰므로, night_report 등이 대량 프레임을 상한 없이 배치
+        집계할 때 프레임당 evaluate() 대신 이걸 쓴다(FITS 0·프레임당 쿼리 0)."""
+        verdict, reason, _ = self._judge(median, sat_frac)
+        return verdict, reason
+
     def evaluate(self, frame_id: int) -> dict[str, Any] | None:
         """프레임 1장 품질 평가. 프레임이 없으면 None."""
         frame = self.db.get(Frame, frame_id)
